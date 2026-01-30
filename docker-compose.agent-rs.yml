@@ -10,19 +10,36 @@
 #     - TIKHUB_API_KEY: TikHub API key
 #     - AGENT_API_KEY: AI service API key
 #   Optional (have defaults):
-#     - REDIS_URL: Redis connection (default: redis://host.docker.internal:6379/0)
+#     - REDIS_URL: Redis connection (overridden to use internal redis service)
 #     - TIKHUB_BASE_URL: TikHub API base URL
 #     - AGENT_BASE_URL: AI service base URL
 #     - RUST_LOG: Log level
 
 services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   agent-rs:
     build:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
     env_file:
       - .env
+    environment:
+      # Override REDIS_URL to use internal docker redis service
+      - REDIS_URL=redis://redis:6379/0
     deploy:
       replicas: 1
       resources:
@@ -32,3 +49,6 @@ services:
           memory: 256M
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+volumes:
+  redis_data:
