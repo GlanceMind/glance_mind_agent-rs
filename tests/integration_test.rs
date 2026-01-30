@@ -46,8 +46,6 @@ fn create_test_orchestrator(
         .config(OrchestratorConfig {
             max_videos_per_keyword: 5,
             max_comments_per_video: 10,
-            skip_existing_content: false,
-            skip_existing_comments: false,
             ai_batch_size: 5,
             continue_on_error: true,
         })

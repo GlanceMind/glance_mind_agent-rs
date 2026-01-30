@@ -363,16 +363,17 @@ impl ContentRepository for PostgresAdapter {
         });
         
         // Use ON CONFLICT to atomically handle duplicate comments
-        // This ensures concurrent inserts don't cause unique constraint violations
+        // Unique constraint: (campaign_id, comment_id) - same comment in same campaign is upserted
         let id: i32 = diesel::sql_query(
             r#"
             INSERT INTO gm_agent_comments (
-                video_db_id, comment_id, user_nickname, user_unique_id,
+                campaign_id, comment_id, video_db_id, user_nickname, user_unique_id,
                 content, create_time, reason, suggested_reply,
-                suggested_dm, suggested_reply_post, campaign_id, status
+                suggested_dm, suggested_reply_post, status
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0)
-            ON CONFLICT (video_db_id, comment_id) DO UPDATE SET
+            ON CONFLICT (campaign_id, comment_id) DO UPDATE SET
+                video_db_id = EXCLUDED.video_db_id,
                 reason = EXCLUDED.reason,
                 suggested_reply = EXCLUDED.suggested_reply,
                 suggested_dm = EXCLUDED.suggested_dm,
@@ -382,8 +383,9 @@ impl ContentRepository for PostgresAdapter {
             RETURNING id
             "#
         )
-        .bind::<Integer, _>(content_db_id)
+        .bind::<Integer, _>(campaign_id)
         .bind::<Text, _>(&comment.comment_id)
+        .bind::<Integer, _>(content_db_id)
         .bind::<diesel::sql_types::Nullable<Text>, _>(comment.author_name.as_ref())
         .bind::<diesel::sql_types::Nullable<Text>, _>(Some(&comment.author))
         .bind::<diesel::sql_types::Nullable<Text>, _>(Some(&comment.text))
@@ -392,7 +394,6 @@ impl ContentRepository for PostgresAdapter {
         .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.reply_text.as_ref())
         .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.dm_text.as_ref())
         .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.post_reply_text.as_ref())
-        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(campaign_id))
         .get_result::<CommentInsertResult>(&mut conn)
         .map_err(DbError::from)?
         .id;
@@ -704,7 +705,7 @@ impl ProgressTracker for PostgresAdapter {
 
         let status_str = match status {
             TaskStatus::Pending => "pending",
-            TaskStatus::Running => "running",
+            TaskStatus::Running => "processing",  // Must match fn_update_task_progress check: ('pending', 'processing')
             TaskStatus::Completed => "completed",
             TaskStatus::Failed => "failed",
         };

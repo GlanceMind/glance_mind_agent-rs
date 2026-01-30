@@ -245,12 +245,12 @@ CREATE TABLE IF NOT EXISTS gm_agent_comments (
     suggested_dm TEXT,
     suggested_reply_post TEXT,
     create_time TIMESTAMP,
-    campaign_id INTEGER REFERENCES gm_campaigns(id) ON DELETE CASCADE,
+    campaign_id INTEGER NOT NULL REFERENCES gm_campaigns(id) ON DELETE CASCADE,
     status SMALLINT DEFAULT 0 NOT NULL,
     created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
     updated_at TIMESTAMPTZ,
-    -- Unique constraint to prevent duplicate comments during parallel video processing
-    UNIQUE (video_db_id, comment_id)
+    -- Unique constraint: same comment in same campaign is upserted
+    UNIQUE (campaign_id, comment_id)
 );
 
 -- Wallet transactions

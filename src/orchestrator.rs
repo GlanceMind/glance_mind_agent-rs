@@ -93,12 +93,6 @@ pub struct OrchestratorConfig {
     /// Default max comments per video
     pub max_comments_per_video: u32,
     
-    /// Whether to skip already-processed content
-    pub skip_existing_content: bool,
-    
-    /// Whether to skip already-processed comments
-    pub skip_existing_comments: bool,
-    
     /// Batch size for AI analysis
     pub ai_batch_size: usize,
     
@@ -111,8 +105,6 @@ impl Default for OrchestratorConfig {
         Self {
             max_videos_per_keyword: 10,
             max_comments_per_video: 50,
-            skip_existing_content: true,
-            skip_existing_comments: true,
             // Matching Python agent: MAX_COMMENTS_PER_BATCH = 150
             ai_batch_size: 150,
             continue_on_error: true,
@@ -560,31 +552,9 @@ impl WorkflowOrchestrator {
         content: &Content,
         analysis_context: &AnalysisContext,
     ) -> WorkflowResult<(bool, i32, i32)> {
-        let platform = strategy.name();
-        
-        // ========== Pre-check: Skip if video already exists (matching Python agent) ==========
-        // Python agent: "if await self.db_service.check_video_exists(aweme_id): continue"
-        // This optimization skips entire processing flow (comments fetch, AI analysis) for existing videos
-        if self.config.skip_existing_content {
-            let exists = self.content_repo
-                .content_exists(platform, &content.content_id)
-                .await
-                .map_err(WorkflowError::Database)?;
-            
-            if exists {
-                debug!(
-                    task_id,
-                    content_id = %content.content_id,
-                    "Video already exists in database, skipping entire processing flow"
-                );
-                // Return is_new=false, no comments or analyses processed
-                return Ok((false, 0, 0));
-            }
-        }
-        
-        // ========== Step 1: Save video metadata and update count ==========
-        // Save content with ON CONFLICT (matching Python agent's atomic upsert)
-        // This returns is_new flag to determine if we should update progress
+        // ========== Step 1: Save video metadata ==========
+        // Save content with ON CONFLICT - database unique constraint (task_id, video_id) handles duplicates
+        // Returns is_new flag based on whether INSERT or UPDATE occurred
         let save_result = self.content_repo
             .save_content(content, Some(config.campaign_id), Some(task_id as i32))
             .await
@@ -601,14 +571,13 @@ impl WorkflowOrchestrator {
                 "Saved new video"
             );
         } else {
-            // This case should rarely happen due to pre-check, but handle it gracefully
+            // Video already exists (ON CONFLICT triggered UPDATE), skip comments and AI processing
             debug!(
                 task_id,
                 content_id = %content.content_id,
                 db_id = content_db_id,
-                "Video already exists (race condition), updated stats only"
+                "Video already exists, skipping comments and AI processing"
             );
-            // Skip comments and AI processing for existing videos
             return Ok((false, 0, 0));
         }
 
@@ -753,7 +722,7 @@ mod tests {
         let config = OrchestratorConfig::default();
         assert_eq!(config.max_videos_per_keyword, 10);
         assert_eq!(config.max_comments_per_video, 50);
-        assert!(config.skip_existing_content);
+        assert_eq!(config.ai_batch_size, 150);
         assert!(config.continue_on_error);
     }
 }

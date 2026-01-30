@@ -3,7 +3,7 @@
 //! Models match the production database schema.
 
 use bigdecimal::BigDecimal;
-use chrono::{NaiveDateTime, DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -237,10 +237,11 @@ pub mod campaign_status {
 }
 
 /// Crawler task status (string-based, matching production)
+/// Note: "processing" must match fn_update_task_progress stored procedure check
 pub mod task_status {
     pub const INIT: &str = "init";
     pub const PENDING: &str = "pending";
-    pub const RUNNING: &str = "running";
+    pub const PROCESSING: &str = "processing"; // Was "running", changed to match stored procedure
     pub const COMPLETED: &str = "completed";
     pub const FAILED: &str = "failed";
 }

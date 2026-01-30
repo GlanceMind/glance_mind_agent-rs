@@ -59,15 +59,19 @@ pub trait ProgressTracker: Send + Sync {
     async fn update_task_status(&self, task_id: i64, status: TaskStatus) -> DbResult<()>;
 
     /// Update task progress - increment process_count and actual_consumption
-    /// 
+    ///
     /// This calls the fn_update_task_progress stored procedure which:
     /// - Increments task.process_count by the given amount
     /// - Calculates and adds actual_consumption based on unit price
     /// - Updates campaign.actual_consumption
-    /// 
+    ///
     /// Returns TaskProgressUpdate with should_stop flag indicating if campaign is stopping
     /// (matching Python agent behavior)
-    async fn update_task_progress(&self, task_id: i64, increment: i32) -> DbResult<TaskProgressUpdate>;
+    async fn update_task_progress(
+        &self,
+        task_id: i64,
+        increment: i32,
+    ) -> DbResult<TaskProgressUpdate>;
 
     /// Update task with error
     async fn set_task_error(&self, task_id: i64, error: &str) -> DbResult<()>;
@@ -86,9 +90,9 @@ pub trait ProgressTracker: Send + Sync {
 
     /// Get campaign processed count
     async fn get_processed_count(&self, campaign_id: i32) -> DbResult<i32>;
-    
+
     /// Stop campaign gracefully (matching Python agent's fn_stop_campaign_gracefully)
-    /// 
+    ///
     /// This sets campaign status to STOPPING or STOPPED and handles budget refunds.
     /// Used when keyword search returns zero results.
     async fn stop_campaign_gracefully(&self, campaign_id: i32) -> DbResult<CampaignStopResult>;
@@ -99,22 +103,22 @@ pub trait ProgressTracker: Send + Sync {
 pub struct TaskInfo {
     /// Task ID
     pub id: i64,
-    
+
     /// Associated campaign ID
     pub campaign_id: i32,
-    
+
     /// Platform ID
     pub platform_id: i32,
-    
+
     /// Keywords for crawling (JSON array)
     pub keywords: Option<serde_json::Value>,
-    
+
     /// Current status
     pub status: TaskStatus,
-    
+
     /// Progress percentage (0-100)
     pub progress: i32,
-    
+
     /// Error message if failed
     pub error_message: Option<String>,
 }
@@ -181,7 +185,7 @@ impl From<&str> for TaskStatus {
     fn from(value: &str) -> Self {
         match value.to_lowercase().as_str() {
             "init" | "pending" => TaskStatus::Pending,
-            "running" => TaskStatus::Running,
+            "processing" | "running" => TaskStatus::Running, // Support both for compatibility
             "completed" => TaskStatus::Completed,
             "failed" => TaskStatus::Failed,
             _ => TaskStatus::Pending,
@@ -213,19 +217,19 @@ impl TaskStatus {
 pub struct ProgressUpdate {
     /// Task ID
     pub task_id: i64,
-    
+
     /// Progress percentage (0-100)
     pub progress: i32,
-    
+
     /// Status message
     pub message: Option<String>,
-    
+
     /// Contents processed so far
     pub contents_processed: i32,
-    
+
     /// Comments processed so far
     pub comments_processed: i32,
-    
+
     /// Analyses generated so far
     pub analyses_generated: i32,
 }
