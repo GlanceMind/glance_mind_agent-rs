@@ -10,7 +10,7 @@
 # ============================================================================
 
 # ===== Chef Stage - Install cargo-chef =====
-FROM rust:1.83-bookworm AS chef
+FROM rust:1.86-bookworm AS chef
 RUN cargo install cargo-chef --locked
 WORKDIR /app
 
