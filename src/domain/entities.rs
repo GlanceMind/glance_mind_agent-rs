@@ -541,8 +541,11 @@ pub struct TaskConfig {
     /// Maximum comments per video
     pub max_comments_per_video: Option<i32>,
     
-    /// Sort type for search results
+    /// Sort type for search results (TikTok: 0=relevance, 1=most_liked)
     pub sort_type: Option<u8>,
+    
+    /// Publish time filter (TikTok: 0=all, 1=day, 7=week, 30=month, 90=3months, 180=6months)
+    pub publish_time: Option<u8>,
     
     /// Product/service description for AI context
     pub product_prompt: Option<String>,
@@ -575,6 +578,7 @@ impl TaskConfig {
             max_videos: None,
             max_comments_per_video: None,
             sort_type: None,
+            publish_time: None,
             product_prompt: None,
             target_audience: None,
             reply_strategy: None,
@@ -622,6 +626,18 @@ impl TaskConfig {
     /// Set max comments per video
     pub fn with_max_comments_per_video(mut self, max: i32) -> Self {
         self.max_comments_per_video = Some(max);
+        self
+    }
+    
+    /// Set sort type (TikTok: 0=relevance, 1=most_liked)
+    pub fn with_sort_type(mut self, sort_type: u8) -> Self {
+        self.sort_type = Some(sort_type);
+        self
+    }
+    
+    /// Set publish time filter (TikTok: 0=all, 1=day, 7=week, 30=month, 90=3months, 180=6months)
+    pub fn with_publish_time(mut self, publish_time: u8) -> Self {
+        self.publish_time = Some(publish_time);
         self
     }
 }

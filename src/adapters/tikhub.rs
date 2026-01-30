@@ -154,15 +154,33 @@ impl TikHubAdapter {
 #[async_trait]
 impl ContentGateway for TikHubAdapter {
     async fn search(&self, options: &SearchOptions) -> GatewayResult<Vec<Content>> {
-        let params = SearchParams::new(&options.query)
+        let mut params = SearchParams::new(&options.query)
             .with_count(options.count)
             .with_offset(options.offset);
 
-        let params = if let Some(ref region) = options.region {
-            params.with_region(region)
-        } else {
-            params
-        };
+        // Set region if specified
+        if let Some(ref region) = options.region {
+            params = params.with_region(region);
+        }
+        
+        // Set sort type if specified (0=relevance, 1=most_liked)
+        if let Some(sort_type) = options.sort_type {
+            params = params.with_sort_type(sort_type);
+        }
+        
+        // Set publish time filter if specified (0=all, 1=day, 7=week, 30=month, 90=3months, 180=6months)
+        if let Some(publish_time) = options.publish_time {
+            params = params.with_publish_time(publish_time);
+        }
+        
+        tracing::debug!(
+            keyword = %options.query,
+            region = ?options.region,
+            sort_type = ?options.sort_type,
+            publish_time = ?options.publish_time,
+            count = options.count,
+            "TikHub search params"
+        );
 
         // Use retry-enabled search
         let response = self.client

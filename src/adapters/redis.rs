@@ -8,7 +8,7 @@
 
 use redis::{AsyncCommands, Client, aio::ConnectionManager};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::config::platform::{global_registry, PlatformLookup};
 use crate::domain::errors::{QueueError, QueueResult};
@@ -16,6 +16,87 @@ use crate::protocol_gen::{
     CrawlerTask, CrawlerTaskMeta, CrawlerTaskSpec, 
     TaskConfig as ProtocolTaskConfig, TaskFilters, Platform,
 };
+
+// ============================================================
+// Search Options Parsing (from campaign.search_options JSON)
+// ============================================================
+
+/// TikTok-specific search options from campaign configuration
+/// Example JSON: {"tiktok":{"region":"GLOBAL","sort_type":"0","publish_time":"0"}}
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct TikTokSearchOptions {
+    /// Region code (GLOBAL means default US)
+    #[serde(default)]
+    pub region: Option<String>,
+    
+    /// Sort type: "0" = relevance, "1" = most_liked
+    #[serde(default)]
+    pub sort_type: Option<String>,
+    
+    /// Publish time filter: "0"=all, "1"=day, "7"=week, "30"=month, "90"=3months, "180"=6months
+    #[serde(default)]
+    pub publish_time: Option<String>,
+}
+
+impl TikTokSearchOptions {
+    /// Parse sort_type string to u8
+    pub fn sort_type_u8(&self) -> Option<u8> {
+        self.sort_type.as_ref().and_then(|s| s.parse().ok())
+    }
+    
+    /// Parse publish_time string to u8
+    pub fn publish_time_u8(&self) -> Option<u8> {
+        self.publish_time.as_ref().and_then(|s| s.parse().ok())
+    }
+    
+    /// Get effective region (GLOBAL maps to US)
+    pub fn effective_region(&self) -> Option<String> {
+        self.region.as_ref().map(|r| {
+            if r.eq_ignore_ascii_case("GLOBAL") {
+                "US".to_string()
+            } else {
+                r.clone()
+            }
+        })
+    }
+}
+
+/// Platform-keyed search options wrapper
+/// Example: {"tiktok": {...}, "instagram": {...}}
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SearchOptionsWrapper {
+    #[serde(default)]
+    pub tiktok: Option<TikTokSearchOptions>,
+    // Future: add other platforms like instagram, facebook, etc.
+}
+
+/// Parse search_options JSON string into SearchOptionsWrapper
+fn parse_search_options(search_options: Option<&str>) -> SearchOptionsWrapper {
+    match search_options {
+        Some(s) if !s.is_empty() => {
+            debug!("Parsing search_options: {}", s);
+            match serde_json::from_str::<SearchOptionsWrapper>(s) {
+                Ok(opts) => {
+                    if let Some(ref tiktok) = opts.tiktok {
+                        info!(
+                            "Parsed TikTok search_options: region={:?}, sort_type={:?}, publish_time={:?}",
+                            tiktok.region, tiktok.sort_type, tiktok.publish_time
+                        );
+                    }
+                    opts
+                }
+                Err(e) => {
+                    warn!("Failed to parse search_options JSON: {} - input: {:?}", e, s);
+                    SearchOptionsWrapper::default()
+                }
+            }
+        }
+        _ => {
+            debug!("No search_options provided, using defaults");
+            SearchOptionsWrapper::default()
+        }
+    }
+}
 
 /// Redis task consumer for the agent
 /// 
@@ -226,6 +307,9 @@ pub trait CrawlerTaskExt {
     /// Get max count
     fn max_count(&self) -> i32;
     
+    /// Get raw search_options JSON string
+    fn search_options(&self) -> Option<&str>;
+    
     /// Convert to domain TaskConfig
     fn to_domain_task_config(&self, campaign_id: i32) -> crate::domain::TaskConfig;
 }
@@ -269,15 +353,68 @@ impl CrawlerTaskExt for CrawlerTask {
             .map(|c| c.max_count)
             .unwrap_or(10)
     }
+    
+    /// Get raw search_options JSON string
+    fn search_options(&self) -> Option<&str> {
+        self.config.as_ref()
+            .and_then(|c| c.search_options.as_deref())
+    }
 
     fn to_domain_task_config(&self, campaign_id: i32) -> crate::domain::TaskConfig {
         let max_count = self.max_count();
+        let platform_name = self.platform_name();
         
-        crate::domain::TaskConfig::new(campaign_id, &self.platform_name())
+        info!(
+            "Building TaskConfig: campaign_id={}, platform={}, max_count={}, raw_search_options={:?}",
+            campaign_id, platform_name, max_count, self.search_options()
+        );
+        
+        // Parse search_options JSON to extract platform-specific parameters
+        let search_opts = parse_search_options(self.search_options());
+        
+        // Build base config
+        let mut config = crate::domain::TaskConfig::new(campaign_id, &platform_name)
             .with_keywords(self.keywords())
-            .with_region(self.region().unwrap_or_else(|| "US".to_string()))
             .with_max_videos(max_count)
-            .with_max_comments_per_video(50)
+            .with_max_comments_per_video(200);
+        
+        // Apply platform-specific search options
+        if platform_name.eq_ignore_ascii_case("tiktok") {
+            if let Some(tiktok_opts) = search_opts.tiktok {
+                // Region: priority -> search_options > filters > default "US"
+                let region = tiktok_opts.effective_region()
+                    .or_else(|| self.region())
+                    .unwrap_or_else(|| "US".to_string());
+                config = config.with_region(region);
+                
+                // Sort type from search_options
+                if let Some(sort_type) = tiktok_opts.sort_type_u8() {
+                    config = config.with_sort_type(sort_type);
+                }
+                
+                // Publish time from search_options
+                if let Some(publish_time) = tiktok_opts.publish_time_u8() {
+                    config = config.with_publish_time(publish_time);
+                }
+                
+                info!(
+                    "Applied TikTok search_options: region={:?}, sort_type={:?}, publish_time={:?}",
+                    config.region, config.sort_type, config.publish_time
+                );
+            } else {
+                // No tiktok-specific options, use filters.region as fallback
+                let region = self.region().unwrap_or_else(|| "US".to_string());
+                config = config.with_region(region.clone());
+                info!("No TikTok search_options, using filters.region={}", region);
+            }
+        } else {
+            // Non-TikTok platforms: use filters.region as fallback
+            let region = self.region().unwrap_or_else(|| "US".to_string());
+            config = config.with_region(region.clone());
+            debug!("Non-TikTok platform, using filters.region={}", region);
+        }
+        
+        config
     }
 }
 
@@ -482,5 +619,90 @@ mod tests {
         assert!(json.contains("123"));
         assert!(json.contains("true"));
         assert!(json.contains("Completed"));
+    }
+    
+    #[test]
+    fn test_parse_search_options_tiktok() {
+        // Test parsing TikTok search options from campaign configuration
+        let json = r#"{"tiktok":{"region":"GLOBAL","sort_type":"1","publish_time":"7"}}"#;
+        
+        let opts = super::parse_search_options(Some(json));
+        
+        assert!(opts.tiktok.is_some());
+        let tiktok = opts.tiktok.unwrap();
+        
+        // GLOBAL should map to US
+        assert_eq!(tiktok.effective_region(), Some("US".to_string()));
+        assert_eq!(tiktok.sort_type_u8(), Some(1)); // most_liked
+        assert_eq!(tiktok.publish_time_u8(), Some(7)); // last week
+    }
+    
+    #[test]
+    fn test_parse_search_options_with_region() {
+        let json = r#"{"tiktok":{"region":"JP","sort_type":"0","publish_time":"30"}}"#;
+        
+        let opts = super::parse_search_options(Some(json));
+        let tiktok = opts.tiktok.unwrap();
+        
+        // Non-GLOBAL region should be preserved
+        assert_eq!(tiktok.effective_region(), Some("JP".to_string()));
+        assert_eq!(tiktok.sort_type_u8(), Some(0)); // relevance
+        assert_eq!(tiktok.publish_time_u8(), Some(30)); // last month
+    }
+    
+    #[test]
+    fn test_parse_search_options_empty() {
+        let opts = super::parse_search_options(None);
+        assert!(opts.tiktok.is_none());
+        
+        let opts = super::parse_search_options(Some("{}"));
+        assert!(opts.tiktok.is_none());
+    }
+    
+    #[test]
+    fn test_parse_search_options_invalid_json() {
+        // Invalid JSON should return default
+        let opts = super::parse_search_options(Some("not json"));
+        assert!(opts.tiktok.is_none());
+    }
+    
+    #[test]
+    fn test_crawler_task_with_search_options() {
+        init_test_registry();
+        
+        // Task with search_options
+        let json = r#"{
+            "meta": {
+                "task_id": 789,
+                "campaign_id": 16,
+                "source": "scheduler",
+                "timestamp": 1700000000.0
+            },
+            "spec": {
+                "platform": 2,
+                "data_type": 1
+            },
+            "config": {
+                "keywords": ["ai video"],
+                "max_count": 10,
+                "search_offset": 0,
+                "search_limit": 10,
+                "filters": {
+                    "region": "US"
+                },
+                "search_options": "{\"tiktok\":{\"region\":\"GLOBAL\",\"sort_type\":\"1\",\"publish_time\":\"7\"}}"
+            }
+        }"#;
+        
+        let task: CrawlerTask = serde_json::from_str(json).unwrap();
+        let config = task.to_domain_task_config(16);
+        
+        // Verify search options are parsed and applied
+        assert_eq!(config.campaign_id, 16);
+        assert_eq!(config.platform, "tiktok");
+        assert_eq!(config.region, Some("US".to_string())); // GLOBAL -> US
+        assert_eq!(config.sort_type, Some(1)); // most_liked
+        assert_eq!(config.publish_time, Some(7)); // last week
+        assert_eq!(config.max_videos, Some(10));
     }
 }

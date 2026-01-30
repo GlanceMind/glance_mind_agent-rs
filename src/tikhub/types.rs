@@ -302,6 +302,18 @@ impl SearchParams {
         self.offset = offset;
         self
     }
+    
+    /// Set sort type (0=relevance, 1=most_liked)
+    pub fn with_sort_type(mut self, sort_type: u8) -> Self {
+        self.sort_type = sort_type;
+        self
+    }
+    
+    /// Set publish time filter (0=all, 1=day, 7=week, 30=month, 90=3months, 180=6months)
+    pub fn with_publish_time(mut self, publish_time: u8) -> Self {
+        self.publish_time = publish_time;
+        self
+    }
 }
 
 /// Comment fetch parameters

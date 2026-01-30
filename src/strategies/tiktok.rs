@@ -98,9 +98,14 @@ impl PlatformStrategy for TikTokStrategy {
             .unwrap_or(10);
         options = options.with_count(count);
 
-        // Set sort type if specified
+        // Set sort type if specified (0=relevance, 1=most_liked)
         if let Some(sort) = config.sort_type {
             options.sort_type = Some(sort);
+        }
+        
+        // Set publish time filter if specified (0=all, 1=day, 7=week, 30=month, 90=3months, 180=6months)
+        if let Some(publish_time) = config.publish_time {
+            options.publish_time = Some(publish_time);
         }
 
         options
