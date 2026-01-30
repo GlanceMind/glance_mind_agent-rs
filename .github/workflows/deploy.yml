@@ -108,8 +108,8 @@ jobs:
           # Optional - Vars
           # ===================
           
-          # Redis (with network_mode: host, use 127.0.0.1 directly)
-          REDIS_URL=${{ vars.REDIS_URL || 'redis://127.0.0.1:6379/0' }}
+          # Redis (use host.docker.internal, same as scheduler)
+          REDIS_URL=${{ vars.REDIS_URL || 'redis://host.docker.internal:6379/0' }}
           
           # TikHub Base URL
           TIKHUB_BASE_URL=${{ vars.TIKHUB_BASE_URL || 'https://api.tikhub.io' }}

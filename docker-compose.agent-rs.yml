@@ -23,9 +23,9 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    # Use host network to access Redis on 127.0.0.1 directly
-    # Set REDIS_URL=redis://127.0.0.1:6379/0 in .env
-    network_mode: host
+    # Same network configuration as scheduler
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     deploy:
       replicas: 1
       resources:
