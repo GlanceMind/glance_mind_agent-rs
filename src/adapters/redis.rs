@@ -66,11 +66,22 @@ impl RedisTaskConsumer {
     /// ConnectionManager provides automatic reconnection on failures.
     pub async fn init(&mut self) -> QueueResult<()> {
         info!("Initializing Redis connection manager...");
-        let manager = ConnectionManager::new(self.client.clone())
+        let mut manager = ConnectionManager::new(self.client.clone())
             .await
             .map_err(|e| QueueError::Connection(format!("Failed to create connection manager: {}", e)))?;
+        
+        // Verify the connection with a PING command
+        let pong: String = redis::cmd("PING")
+            .query_async(&mut manager)
+            .await
+            .map_err(|e| QueueError::Connection(format!("Redis PING failed: {}", e)))?;
+        
+        if pong != "PONG" {
+            return Err(QueueError::Connection(format!("Unexpected PING response: {}", pong)));
+        }
+        
         self.conn_manager = Some(manager);
-        info!("Redis connection manager initialized successfully");
+        info!("Redis connection manager initialized and verified (PING OK)");
         Ok(())
     }
 

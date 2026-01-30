@@ -23,6 +23,9 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    # Same configuration as scheduler
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     deploy:
       replicas: 1
       resources:
@@ -30,5 +33,3 @@ services:
           memory: 512M
         reservations:
           memory: 256M
-    extra_hosts:
-      - "host.docker.internal:host-gateway"

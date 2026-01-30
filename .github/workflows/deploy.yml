@@ -108,7 +108,7 @@ jobs:
           # Optional - Vars
           # ===================
           
-          # Redis (default: connects to host machine's Redis)
+          # Redis (connects to host machine's Redis via extra_hosts)
           REDIS_URL=${{ vars.REDIS_URL || 'redis://host.docker.internal:6379/0' }}
           
           # TikHub Base URL
