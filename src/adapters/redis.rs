@@ -74,7 +74,7 @@ pub struct SearchOptionsWrapper {
 fn parse_search_options(search_options: Option<&str>) -> SearchOptionsWrapper {
     match search_options {
         Some(s) if !s.is_empty() => {
-            debug!("Parsing search_options: {}", s);
+            info!("Parsing search_options: {}", s);
             match serde_json::from_str::<SearchOptionsWrapper>(s) {
                 Ok(opts) => {
                     if let Some(ref tiktok) = opts.tiktok {
@@ -82,6 +82,8 @@ fn parse_search_options(search_options: Option<&str>) -> SearchOptionsWrapper {
                             "Parsed TikTok search_options: region={:?}, sort_type={:?}, publish_time={:?}",
                             tiktok.region, tiktok.sort_type, tiktok.publish_time
                         );
+                    } else {
+                        info!("search_options parsed but no 'tiktok' field found");
                     }
                     opts
                 }
@@ -92,7 +94,7 @@ fn parse_search_options(search_options: Option<&str>) -> SearchOptionsWrapper {
             }
         }
         _ => {
-            debug!("No search_options provided, using defaults");
+            info!("No search_options provided (value={:?}), using defaults", search_options);
             SearchOptionsWrapper::default()
         }
     }
