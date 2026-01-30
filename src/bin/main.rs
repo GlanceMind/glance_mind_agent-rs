@@ -33,8 +33,8 @@ struct Cli {
     #[arg(long, env = "REDIS_URL", default_value = "redis://127.0.0.1:6379")]
     redis_url: String,
 
-    /// Queue name for tasks
-    #[arg(long, env = "AGENT_QUEUE_NAME", default_value = "gm:agent:tasks")]
+    /// Queue name for tasks (must match scheduler's queue)
+    #[arg(long, env = "AGENT_QUEUE_NAME", default_value = "crawler:task_queue")]
     queue_name: String,
 
     /// Number of concurrent workers
