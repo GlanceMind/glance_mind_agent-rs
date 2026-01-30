@@ -1,0 +1,21 @@
+# Rust
+/target/
+# Note: Cargo.lock is tracked for applications (not libraries) to ensure reproducible builds
+
+# Environment
+.env
+e2e/.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test fixtures (generated, can be large)
+# Uncomment if you want to exclude generated fixtures from git
+# tests/fixtures/tiktok/*.json

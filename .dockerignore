@@ -1,0 +1,36 @@
+# Build artifacts
+target/
+*.rs.bk
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment files (secrets)
+.env
+.env.local
+.env.*.local
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+!README.md
+
+# E2E test environment
+e2e/
+
+# Test fixtures (optional - include if needed for tests in container)
+# tests/fixtures/
+
+# GitHub Actions
+.github/
+
+# Docker files (not needed inside container)
+Dockerfile
+docker-compose*.yml
+.dockerignore

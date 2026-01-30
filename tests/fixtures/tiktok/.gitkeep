@@ -1,0 +1,2 @@
+# This directory contains generated test fixtures from TikHub API
+# Run `cargo run --bin generate-fixtures -- --full` to generate fixtures

@@ -1,0 +1,638 @@
+{
+  "keyword": "fitness",
+  "region": "GB",
+  "generated_at": "2026-01-30T10:02:10.014481+00:00",
+  "total_count": 5,
+  "raw_response": {
+    "code": 200,
+    "data": {
+      "cursor": 5,
+      "has_more": 1,
+      "search_item_list": [
+        {
+          "aweme_info": {
+            "author": {
+              "avatar_thumb": {
+                "url_list": [
+                  "https://p16-common-sign.tiktokcdn-eu.com/tos-maliva-avt-0068/c5f12a27f12e74272fadb49fa9889932~tplv-tiktokx-cropcenter-q:100:100:q70.heic?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=7b99af4b&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=7UA5HjAZEUevlVNgbKXaePTWmYA%3D",
+                  "https://p19-common-sign.tiktokcdn-eu.com/tos-maliva-avt-0068/c5f12a27f12e74272fadb49fa9889932~tplv-tiktokx-cropcenter-q:100:100:q70.heic?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=33827e9c&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=kHXVfMR6jDGe9osceocUEJ832dE%3D",
+                  "https://p16-common-sign.tiktokcdn-eu.com/tos-maliva-avt-0068/c5f12a27f12e74272fadb49fa9889932~tplv-tiktokx-cropcenter-q:100:100:q70.jpeg?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=08b51202&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=i4Oz7KKEXjPbdDdiOz1a0ijJLB4%3D"
+                ]
+              },
+              "custom_verify": "",
+              "follower_count": 528605,
+              "nickname": "Ollie Rhoda | Online Coach",
+              "sec_uid": "MS4wLjABAAAAfS6-sKlFtPzHoRTTd90rN4R9CVaHSiFpM6WSHWMi_codtOSfbihM5eZjy2MkHGoO",
+              "uid": "6813641030421890053",
+              "unique_id": "ollierhoda"
+            },
+            "aweme_id": "7178956597123730693",
+            "create_time": 1671481091,
+            "desc": "Make sure you nail the basics & follow me for more tips🚀 #fyp #gym #workout #training #muscle #bodybuilding #gains #rest #fittok ",
+            "music": {
+              "album": "Love You So",
+              "author": "The King Khan & BBQ Show",
+              "duration": 60,
+              "id": 6728562975734515713,
+              "title": "Love You So"
+            },
+            "share_url": "https://www.tiktok.com/@ollierhoda/video/7178956597123730693?_r=1&u_code=f0hhmibgbha9bi&preview_pb=0&sharer_language=it&_d=f0i17flfb649lh&share_item_id=7178956597123730693&source=h5_m",
+            "statistics": {
+              "collect_count": 49520,
+              "comment_count": 2687,
+              "digg_count": 544645,
+              "download_count": 6153,
+              "play_count": 5762285,
+              "share_count": 14521
+            },
+            "video": {
+              "cover": {
+                "url_list": [
+                  "https://p16-common-sign.tiktokcdn-eu.com/tos-maliva-p-0068/631dec44334040dea74122fc6dbb7a25_1671481093~tplv-tiktokx-cropcenter:500:800.jpeg?biz_tag=musically_video.video_cover&dr=10397&idc=no1a&ps=13740610&refresh_token=92795215&shcp=9b759fb9&shp=c1333099&t=4d5b0474&x-expires=1769788800&x-signature=g1UMpnIqdOqEKA6lc6U5WLJg54c%3D",
+                  "https://p19-common-sign.tiktokcdn-eu.com/tos-maliva-p-0068/631dec44334040dea74122fc6dbb7a25_1671481093~tplv-tiktokx-cropcenter:500:800.jpeg?biz_tag=musically_video.video_cover&dr=10397&idc=no1a&ps=13740610&refresh_token=47bc7c18&shcp=9b759fb9&shp=c1333099&t=4d5b0474&x-expires=1769788800&x-signature=4SWvayBsD%2BVeIn8tFMlDhnCLuQE%3D"
+                ]
+              },
+              "duration": 26818,
+              "dynamic_cover": {
+                "url_list": [
+                  "https://p16-common-sign.tiktokcdn-eu.com/tos-maliva-p-0068/17542f9b99854d0f8663b799be22384f_1671481094~tplv-tiktokx-dmt-logom:tos-useast2a-v-0068/131ebf36675942f59f5f2b78cec2b618.image?dr=9228&refresh_token=e8dec4aa&x-expires=1769853600&x-signature=eo3z2l%2BgmRw%2BVI6%2BmWveDHrQVM4%3D&t=bacd0480&ps=4f5296ae&shp=d05b14bd&shcp=c1333099&idc=no1a&sc=dynamic_cover&biz_tag=tt_video&s=SEARCH",
+                  "https://p19-common-sign.tiktokcdn-eu.com/tos-maliva-p-0068/17542f9b99854d0f8663b799be22384f_1671481094~tplv-tiktokx-dmt-logom:tos-useast2a-v-0068/131ebf36675942f59f5f2b78cec2b618.image?dr=9228&refresh_token=c9882b83&x-expires=1769853600&x-signature=9HIT6MVcVGZ3X772p473TxkfrzE%3D&t=bacd0480&ps=4f5296ae&shp=d05b14bd&shcp=c1333099&idc=no1a&sc=dynamic_cover&biz_tag=tt_video&s=SEARCH"
+                ]
+              },
+              "height": 1024,
+              "play_addr": {
+                "data_size": 5347797,
+                "url_list": [
+                  "https://v45.tiktokcdn-eu.com/99427213cff935d2ccbc98808af8bfb3/697dd339/video/tos/useast2a/tos-useast2a-pve-0068/oQGQGUFBgAxAWJxxiahUAf0CIgwztoMkKINaUh/?a=1233&bti=NTY6QGo0QHM6OjZANDQuYCMucCMxNDNg&ch=0&cr=13&dr=0&er=0&lr=all&net=0&cd=0%7C0%7C0%7C&cv=1&br=3114&bt=1557&cs=0&ds=6&ft=7Xz8TB95IxRfAhEv-RbzVgmaQ6KXtcgZiaQEeRtwm-LD1Inz&mime_type=video_mp4&qs=0&rc=aGc1ZmQ8NDg4OzQ7NTlnN0BpMzQ8cjM6ZjNmaDMzNzczM0BiXzZiNWMuXzAxYmFeNTUwYSNfNmVqcjRnYGRgLS1kMTZzcw%3D%3D&vvpl=1&l=20260130100207679710E3EB352423A61A&btag=e000bd000",
+                  "https://v15m.tiktokcdn-eu.com/d69b12d48bf94c8476974960047d63be/697dd339/video/tos/useast2a/tos-useast2a-pve-0068/oQGQGUFBgAxAWJxxiahUAf0CIgwztoMkKINaUh/?a=1233&bti=NTY6QGo0QHM6OjZANDQuYCMucCMxNDNg&ch=0&cr=13&dr=0&er=0&lr=all&net=0&cd=0%7C0%7C0%7C&cv=1&br=3114&bt=1557&cs=0&ds=6&ft=7Xz8TB95IxRfAhEv-RbzVgmaQ6KXtcgZiaQEeRtwm-LD1Inz&mime_type=video_mp4&qs=0&rc=aGc1ZmQ8NDg4OzQ7NTlnN0BpMzQ8cjM6ZjNmaDMzNzczM0BiXzZiNWMuXzAxYmFeNTUwYSNfNmVqcjRnYGRgLS1kMTZzcw%3D%3D&vvpl=1&l=20260130100207679710E3EB352423A61A&btag=e000b8000",
+                  "https://api16-normal-no1a.tiktokv.eu/aweme/v1/play/?faid=1233&file_id=348d86a2d8e14835b511f98aec92bdee&is_play_url=1&item_id=7178956597123730693&line=0&signaturev3=dmlkZW9faWQ7ZmlsZV9pZDtpdGVtX2lkLmNjNGE1ZmMwYzM1NWY3OGE4ZTU1ZTY3NGI1MTZjZmU5&source=SEARCH&video_id=v09044g40000cegcc0jc77u0moh991b0"
+                ]
+              },
+              "width": 576
+            }
+          }
+        },
+        {
+          "aweme_info": {
+            "author": {
+              "avatar_thumb": {
+                "url_list": [
+                  "https://p16-pu-sign-no.tiktokcdn-eu.com/tos-no1a-avt-0068c001-no/2c66aabe89720eb71053b555a3e3b5a5~tplv-tiktokx-cropcenter-q:100:100:q70.heic?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=4dbb2203&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=cCtZ9VQbn8lcCbHwACWHMm%2F25AQ%3D",
+                  "https://p19-pu-sign-no.tiktokcdn-eu.com/tos-no1a-avt-0068c001-no/2c66aabe89720eb71053b555a3e3b5a5~tplv-tiktokx-cropcenter-q:100:100:q70.heic?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=279585d3&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=y2W5F0grIpCA6W9d%2Bs1%2BxL3usr8%3D",
+                  "https://p16-pu-sign-no.tiktokcdn-eu.com/tos-no1a-avt-0068c001-no/2c66aabe89720eb71053b555a3e3b5a5~tplv-tiktokx-cropcenter-q:100:100:q70.jpeg?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=129eb3fd&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=W1RmN9QIXu7xhmJVNL67%2FGE46Pc%3D"
+                ]
+              },
+              "custom_verify": "",
+              "follower_count": 403398,
+              "nickname": "Berna",
+              "sec_uid": "MS4wLjABAAAA1R8MdLgos9IoYjiWuoVqtT_3UHXCOmhZiYwA7SVO6mLOM1w4Vls0ifXnBYI1F2kA",
+              "uid": "6820036764418327557",
+              "unique_id": "fit.berna"
+            },
+            "aweme_id": "7223076878188383493",
+            "create_time": 1681753642,
+            "desc": "try this to lose fat 😰💦 #cardio #cardioworkout #cardiocircuit #strongwomen #gymtok #fittok #losefat #weightloss #gymgirl #cardioroutine #gymmotivation #gymrat ",
+            "music": {
+              "album": "Just Wanna Rock",
+              "author": "Lil Uzi Vert",
+              "duration": 26,
+              "id": 7143731623425526574,
+              "title": "Just Wanna Rock"
+            },
+            "share_url": "https://www.tiktok.com/@fit.berna/video/7223076878188383493?_r=1&u_code=f0hhmibgbha9bi&preview_pb=0&sharer_language=it&_d=f0i17flfb649lh&share_item_id=7223076878188383493&source=h5_m",
+            "statistics": {
+              "collect_count": 609104,
+              "comment_count": 4793,
+              "digg_count": 2185867,
+              "download_count": 921,
+              "play_count": 26803463,
+              "share_count": 54312
+            },
+            "video": {
+              "cover": {
+                "url_list": [
+                  "https://p16-common-sign.tiktokcdn-eu.com/tos-maliva-p-0068/124c905371a040f2acd9817ff97421ff_1681753643~tplv-tiktokx-cropcenter:500:800.jpeg?biz_tag=musically_video.video_cover&dr=10397&idc=no1a&ps=13740610&refresh_token=b6be7f0d&shcp=9b759fb9&shp=c1333099&t=4d5b0474&x-expires=1769788800&x-signature=mmH1jVPfhXBumXOpHGf84ysemfA%3D",
+                  "https://p19-common-sign.tiktokcdn-eu.com/tos-maliva-p-0068/124c905371a040f2acd9817ff97421ff_1681753643~tplv-tiktokx-cropcenter:500:800.jpeg?biz_tag=musically_video.video_cover&dr=10397&idc=no1a&ps=13740610&refresh_token=78801292&shcp=9b759fb9&shp=c1333099&t=4d5b0474&x-expires=1769788800&x-signature=7C4zCXlK2A4DYRsDrHMv9QNS%2FZQ%3D"
+                ]
+              },
+              "duration": 16787,
+              "dynamic_cover": {
+                "url_list": [
+                  "https://p19-common-sign.tiktokcdn-eu.com/tos-maliva-p-0068/4ae5a2d8c2e24cb1bff084fe924f7149_1681753644~tplv-tiktokx-origin.image?dr=9229&refresh_token=7caa99a8&x-expires=1769853600&x-signature=fe82b7AkZptJfBZ6LDOej%2Fzmha8%3D&t=bacd0480&ps=4f5296ae&shp=d05b14bd&shcp=c1333099&idc=no1a&biz_tag=tt_video&s=SEARCH&sc=dynamic_cover",
+                  "https://p16-common-sign.tiktokcdn-eu.com/tos-maliva-p-0068/4ae5a2d8c2e24cb1bff084fe924f7149_1681753644~tplv-tiktokx-origin.image?dr=9229&refresh_token=96c9ab68&x-expires=1769853600&x-signature=MKsGW0yz91fVLBjaf9qmMHYbR38%3D&t=bacd0480&ps=4f5296ae&shp=d05b14bd&shcp=c1333099&idc=no1a&biz_tag=tt_video&s=SEARCH&sc=dynamic_cover"
+                ]
+              },
+              "height": 1024,
+              "play_addr": {
+                "data_size": 2065078,
+                "url_list": [
+                  "https://v45.tiktokcdn-eu.com/1a5a10b2986518cb4c6570b412bab310/697dd32f/video/tos/useast2a/tos-useast2a-ve-0068c002/oQVloWJReE6YTAnLBDQeTPisQbhjkjDBMgSd9A/?a=1233&bti=NEBzNTY6QGo6OjZALnAjNDQuYCMxNDNg&ch=0&cr=13&dr=0&er=0&lr=all&net=0&cd=0%7C0%7C0%7C&cv=1&br=1922&bt=961&cs=0&ds=6&ft=7Xz8TB95IxRfAhEv-RbzVgmaQ6KXtcgZiaQEeRtwm-LD1Inz&mime_type=video_mp4&qs=0&rc=PDgzOjNmZzs4NWg8ZWQ2NUBpajw5c2g6ZjtyajMzNzczM0BiNGEzY2AtNV4xMV80YzQxYSNpX2ZocjRvNnJgLS1kMTZzcw%3D%3D&vvpl=1&l=20260130100207679710E3EB352423A61A&btag=e000bd000",
+                  "https://v15m.tiktokcdn-eu.com/50343e09afdae0757f4ba073fcad71dc/697dd32f/video/tos/useast2a/tos-useast2a-ve-0068c002/oQVloWJReE6YTAnLBDQeTPisQbhjkjDBMgSd9A/?a=1233&bti=NEBzNTY6QGo6OjZALnAjNDQuYCMxNDNg&ch=0&cr=13&dr=0&er=0&lr=all&net=0&cd=0%7C0%7C0%7C&cv=1&br=1922&bt=961&cs=0&ds=6&ft=7Xz8TB95IxRfAhEv-RbzVgmaQ6KXtcgZiaQEeRtwm-LD1Inz&mime_type=video_mp4&qs=0&rc=PDgzOjNmZzs4NWg8ZWQ2NUBpajw5c2g6ZjtyajMzNzczM0BiNGEzY2AtNV4xMV80YzQxYSNpX2ZocjRvNnJgLS1kMTZzcw%3D%3D&vvpl=1&l=20260130100207679710E3EB352423A61A&btag=e000b8000",
+                  "https://api16-normal-no1a.tiktokv.eu/aweme/v1/play/?faid=1233&file_id=4273fa7bb94e42a5880dccf067d075e9&is_play_url=1&item_id=7223076878188383493&line=0&signaturev3=dmlkZW9faWQ7ZmlsZV9pZDtpdGVtX2lkLjEyNWE2Y2IzZWU5NmM5MjdhYmExMTFmOWVmNDYxOTFh&source=SEARCH&video_id=v09044g40000cguo98rc77uekpi6b9lg"
+                ]
+              },
+              "width": 576
+            }
+          }
+        },
+        {
+          "aweme_info": {
+            "author": {
+              "avatar_thumb": {
+                "url_list": [
+                  "https://p16-common-sign.tiktokcdn-eu.com/tos-maliva-avt-0068/a979e73aa3aa0ca34f5d8af17398b26b~tplv-tiktokx-cropcenter-q:100:100:q70.heic?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=a7e3a809&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=pQNRnyBpC0A7SQc%2FsK5z3GtqRbg%3D",
+                  "https://p19-common-sign.tiktokcdn-eu.com/tos-maliva-avt-0068/a979e73aa3aa0ca34f5d8af17398b26b~tplv-tiktokx-cropcenter-q:100:100:q70.heic?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=61534f94&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=Q9XG99%2BH9H6gZxA0rKws0qWZh2g%3D",
+                  "https://p16-common-sign.tiktokcdn-eu.com/tos-maliva-avt-0068/a979e73aa3aa0ca34f5d8af17398b26b~tplv-tiktokx-cropcenter-q:100:100:q70.jpeg?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=b94e63aa&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=fIdWHa7OMvNsbrdoHoiryM6hBZM%3D"
+                ]
+              },
+              "custom_verify": "",
+              "follower_count": 107601,
+              "nickname": "Catherine",
+              "sec_uid": "MS4wLjABAAAAq7KBw4wDZSjLJTVbqu577v5Sn29tHfiC7nKDmxC7s946y5h34K0Ihx-UgBID7vsX",
+              "uid": "7424903865873695786",
+              "unique_id": "catherine.lift1"
+            },
+            "aweme_id": "7530346745721523511",
+            "create_time": 1753295511,
+            "desc": "the ✨4 key✨ factors that helped me achieve my physique at 16yo!! @AYBL code | CATHERINE #gymmotivation#16yo#gymrat#gymgirl#gymlife#gymbod#motivation#gymcore#fitnessmotivation#gymtips#gymphysique#catherine#relatable#gymtok#gymlife#foryoupage#foryou#fyp#viral#blowup#aybl#gymcontent#secretaccount#musclebuilding#musclemommy#fitnessjourney#fitnessprogress#gymjourney#gymprogress#youngegymrat#gymathlete @DFYNE @Gymshark @YOUNGLA @Breathedivinity @Katelyn ",
+            "music": {
+              "album": "",
+              "author": "Mel1qa",
+              "duration": 32,
+              "id": 7373582233317526273,
+              "title": "suono originale - meliqishvili_vako"
+            },
+            "share_url": "https://www.tiktok.com/@catherine.lift1/video/7530346745721523511?_r=1&u_code=f0hhmibgbha9bi&preview_pb=0&sharer_language=it&_d=f0i17flfb649lh&share_item_id=7530346745721523511&source=h5_m",
+            "statistics": {
+              "collect_count": 97776,
+              "comment_count": 880,
+              "digg_count": 544487,
+              "download_count": 5465,
+              "play_count": 4541352,
+              "share_count": 41995
+            },
+            "video": {
+              "cover": {
+                "url_list": [
+                  "https://p16-common-sign.tiktokcdn-eu.com/tos-useast5-p-0068-tx/o8sJCTBiIplfxPu8KwBJZIXQEAN0ixBXSTpBiA~tplv-tiktokx-cropcenter:500:800.jpeg?biz_tag=musically_video.video_cover&dr=10397&idc=no1a&ps=13740610&refresh_token=9deae15a&shcp=9b759fb9&shp=c1333099&t=4d5b0474&x-expires=1769788800&x-signature=42HpcSM6UimY1OOqo6FmNlqgwo4%3D",
+                  "https://p19-common-sign.tiktokcdn-eu.com/tos-useast5-p-0068-tx/o8sJCTBiIplfxPu8KwBJZIXQEAN0ixBXSTpBiA~tplv-tiktokx-cropcenter:500:800.jpeg?biz_tag=musically_video.video_cover&dr=10397&idc=no1a&ps=13740610&refresh_token=4275a960&shcp=9b759fb9&shp=c1333099&t=4d5b0474&x-expires=1769788800&x-signature=kEjc%2BHEq2RdikflAmle7Hi6oNRc%3D"
+                ]
+              },
+              "duration": 16000,
+              "dynamic_cover": {
+                "url_list": [
+                  "https://p16-common-sign.tiktokcdn-eu.com/tos-useast5-p-0068-tx/o4mIHAPkegAkn6vWEfq9EeGRwAIE2CGoRgLjTL~tplv-tiktokx-origin.image?dr=9229&refresh_token=afb0350d&x-expires=1769853600&x-signature=zQrGZQyBIOk7OEn60k%2FaKVn7tvE%3D&t=bacd0480&ps=4f5296ae&shp=d05b14bd&shcp=c1333099&idc=no1a&biz_tag=tt_video&s=SEARCH&sc=dynamic_cover",
+                  "https://p19-common-sign.tiktokcdn-eu.com/tos-useast5-p-0068-tx/o4mIHAPkegAkn6vWEfq9EeGRwAIE2CGoRgLjTL~tplv-tiktokx-origin.image?dr=9229&refresh_token=c0d5846d&x-expires=1769853600&x-signature=Vws%2BwktIB2OR4W4XfZeGIfe%2FOaI%3D&t=bacd0480&ps=4f5296ae&shp=d05b14bd&shcp=c1333099&idc=no1a&biz_tag=tt_video&s=SEARCH&sc=dynamic_cover"
+                ]
+              },
+              "height": 1024,
+              "play_addr": {
+                "data_size": 2008546,
+                "url_list": [
+                  "https://v45.tiktokcdn-eu.com/f6868bb5e8afc8bba18fccd779eb0874/697dd32e/video/tos/maliva/tos-maliva-ve-0068c799-us/o0MeQkED1bfHiiugVRkCIT4IUDFGLjAAFnCfWA/?a=1233&bti=NEBzNTY6QGo6OjZALnAjNDQuYCMxNDNg&ch=0&cr=13&dr=0&er=0&lr=all&net=0&cd=0%7C0%7C0%7C&cv=1&br=1960&bt=980&cs=0&ds=6&ft=7Xz8TB95IxRfAhEv-RbzVgmaQ6KXtcgZiaQEeRtwm-LD1Inz&mime_type=video_mp4&qs=0&rc=PDVoaGZlZTVnNDpnZjYzaUBpMzxlc2s5cjxsNTMzZzczNEBfXzViYjUvNTMxNDA2NGA0YSNyL2AzMmRzYy1hLS1kMS9zcw%3D%3D&vvpl=1&l=20260130100207679710E3EB352423A61A&btag=e000bd000",
+                  "https://v15m.tiktokcdn-eu.com/55ced5328b5e6dd7ed703cc6470f039f/697dd32e/video/tos/maliva/tos-maliva-ve-0068c799-us/o0MeQkED1bfHiiugVRkCIT4IUDFGLjAAFnCfWA/?a=1233&bti=NEBzNTY6QGo6OjZALnAjNDQuYCMxNDNg&ch=0&cr=13&dr=0&er=0&lr=all&net=0&cd=0%7C0%7C0%7C&cv=1&br=1960&bt=980&cs=0&ds=6&ft=7Xz8TB95IxRfAhEv-RbzVgmaQ6KXtcgZiaQEeRtwm-LD1Inz&mime_type=video_mp4&qs=0&rc=PDVoaGZlZTVnNDpnZjYzaUBpMzxlc2s5cjxsNTMzZzczNEBfXzViYjUvNTMxNDA2NGA0YSNyL2AzMmRzYy1hLS1kMS9zcw%3D%3D&vvpl=1&l=20260130100207679710E3EB352423A61A&btag=e000b8000",
+                  "https://api16-normal-no1a.tiktokv.eu/aweme/v1/play/?faid=1233&file_id=7fc0739c3d77416d822b8becee8eb2b9&is_play_url=1&item_id=7530346745721523511&line=0&signaturev3=dmlkZW9faWQ7ZmlsZV9pZDtpdGVtX2lkLjM2YmFkZGJmOGVmNjk3ODYzZjY5MjQ4MzE2ZGY2MWRi&source=SEARCH&video_id=v12044gd0000d20if9vog65h6pcb29u0"
+                ]
+              },
+              "width": 576
+            }
+          }
+        },
+        {
+          "aweme_info": {
+            "author": {
+              "avatar_thumb": {
+                "url_list": [
+                  "https://p19-common-sign-useastred.tiktokcdn-eu.com/tos-useast2a-avt-0068-euttp/d85bedbe1073b79d407c47fe4beb00b4~tplv-tiktokx-cropcenter-q:100:100:q70.heic?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=82093e5c&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=JNpQgiwn4v3ogBYq4s1cO2YyIjQ%3D",
+                  "https://p16-common-sign-useastred.tiktokcdn-eu.com/tos-useast2a-avt-0068-euttp/d85bedbe1073b79d407c47fe4beb00b4~tplv-tiktokx-cropcenter-q:100:100:q70.heic?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=2dceeb4e&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=pqxIlEPAS2UaR7y9baByGV9CZYM%3D",
+                  "https://p19-common-sign-useastred.tiktokcdn-eu.com/tos-useast2a-avt-0068-euttp/d85bedbe1073b79d407c47fe4beb00b4~tplv-tiktokx-cropcenter-q:100:100:q70.jpeg?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=ee468a39&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=sdnJ1oQVmcXgbmr%2BaK80icR%2FvWA%3D"
+                ]
+              },
+              "custom_verify": "",
+              "follower_count": 43906,
+              "nickname": "Bubblebuttfitness",
+              "sec_uid": "MS4wLjABAAAAMe8FfBUDkIuIqtq999PIllw6kZxkf1jZL-9B0-gr9bQN6liYLKssemY7wxIn2ngG",
+              "uid": "7299261751597466656",
+              "unique_id": "bubblebuttfitness"
+            },
+            "aweme_id": "7315774502430936352",
+            "create_time": 1703336494,
+            "desc": "#fitness #fitnessmotivation #fitnesstips #fitnessgirl #fitnesstiktok #fitnessmodel #fitnesschallenge #fit #fitgirl #gym #training #trainingday #traininggirl #challenge #challenges_tiktok #challengebody ",
+            "music": {
+              "album": "",
+              "author": "Bubblebuttfitness",
+              "duration": 7,
+              "id": 7315774522123864865,
+              "title": "suono originale - bubblebuttfitness"
+            },
+            "share_url": "https://www.tiktok.com/@bubblebuttfitness/video/7315774502430936352?_r=1&u_code=f0hhmibgbha9bi&preview_pb=0&sharer_language=it&_d=f0i17flfb649lh&share_item_id=7315774502430936352&source=h5_m",
+            "statistics": {
+              "collect_count": 8262,
+              "comment_count": 851,
+              "digg_count": 109515,
+              "download_count": 265,
+              "play_count": 1861077,
+              "share_count": 5858
+            },
+            "video": {
+              "cover": {
+                "url_list": [
+                  "https://p19-common-sign-useastred.tiktokcdn-eu.com/tos-useast2a-p-0037-euttp/d6734f546676437a8a26f15a1d34459b_1703336496~tplv-tiktokx-cropcenter:500:800.jpeg?biz_tag=musically_video.video_cover&dr=10397&idc=no1a&ps=13740610&refresh_token=9cd2bba1&shcp=9b759fb9&shp=c1333099&t=4d5b0474&x-expires=1769788800&x-signature=n7oXjBkXX12zzNW4%2F92V3415mjg%3D",
+                  "https://p16-common-sign-useastred.tiktokcdn-eu.com/tos-useast2a-p-0037-euttp/d6734f546676437a8a26f15a1d34459b_1703336496~tplv-tiktokx-cropcenter:500:800.jpeg?biz_tag=musically_video.video_cover&dr=10397&idc=no1a&ps=13740610&refresh_token=5bb0ca56&shcp=9b759fb9&shp=c1333099&t=4d5b0474&x-expires=1769788800&x-signature=uu1rRvOeGwYhXSEFM2Dbvn6w2NA%3D"
+                ]
+              },
+              "duration": 7454,
+              "dynamic_cover": {
+                "url_list": [
+                  "https://p19-common-sign-useastred.tiktokcdn-eu.com/tos-useast2a-p-0037-euttp/f24578465f5d498e8f5ce588ce659ba6_1703336497~tplv-tiktokx-origin.image?dr=9229&refresh_token=2413135b&x-expires=1769853600&x-signature=J9Tb222RGuxTZ4s6fImEOabO0WA%3D&t=bacd0480&ps=4f5296ae&shp=d05b14bd&shcp=c1333099&idc=no1a&item=7315774502430936352&biz_tag=tt_video&s=SEARCH&sc=dynamic_cover",
+                  "https://p16-common-sign-useastred.tiktokcdn-eu.com/tos-useast2a-p-0037-euttp/f24578465f5d498e8f5ce588ce659ba6_1703336497~tplv-tiktokx-origin.image?dr=9229&refresh_token=ffeebb58&x-expires=1769853600&x-signature=jof1%2BR96hOR%2BwAUz9pqCntoKyQs%3D&t=bacd0480&ps=4f5296ae&shp=d05b14bd&shcp=c1333099&idc=no1a&item=7315774502430936352&biz_tag=tt_video&s=SEARCH&sc=dynamic_cover"
+                ]
+              },
+              "height": 1024,
+              "play_addr": {
+                "data_size": 532758,
+                "url_list": [
+                  "https://v45.tiktokcdn-eu.com/3dedb4c46a60761d9574885acb5fe08f/697dd326/video/tos/useast2a/tos-useast2a-ve-0068c001-euttp/owEijIZaOoFI0PqGpQIRwxvYBAGFiHBa29TbE/?a=1233&bti=NEBzNTY6QGo6OjZALnAjNDQuYCMxNDNg&ch=0&cr=13&dr=0&er=0&lr=all&net=0&cd=0%7C0%7C0%7C&cv=1&br=1116&bt=558&cs=0&ds=6&ft=7Xz8TB95IxRfAhEv-RbzVgmaQ6KXtcgZiaQEeRtwm-LD1Inz&mime_type=video_mp4&qs=0&rc=NGQ5NmVlaWg0NDdpZzs2Z0BpMzg2a3c5cjpncDMzZjczM0BeYC1fNi82XzAxMDJeMmEuYSNpL2Y0MmRraDBgLS1kMWNzcw%3D%3D&vvpl=1&l=20260130100207679710E3EB352423A61A&btag=e000b5000",
+                  "https://v15m.tiktokcdn-eu.com/fbb0764bc994f6f0ba8339a424dc1ed6/697dd326/video/tos/useast2a/tos-useast2a-ve-0068c001-euttp/owEijIZaOoFI0PqGpQIRwxvYBAGFiHBa29TbE/?a=1233&bti=NEBzNTY6QGo6OjZALnAjNDQuYCMxNDNg&ch=0&cr=13&dr=0&er=0&lr=all&net=0&cd=0%7C0%7C0%7C&cv=1&br=1116&bt=558&cs=0&ds=6&ft=7Xz8TB95IxRfAhEv-RbzVgmaQ6KXtcgZiaQEeRtwm-LD1Inz&mime_type=video_mp4&qs=0&rc=NGQ5NmVlaWg0NDdpZzs2Z0BpMzg2a3c5cjpncDMzZjczM0BeYC1fNi82XzAxMDJeMmEuYSNpL2Y0MmRraDBgLS1kMWNzcw%3D%3D&vvpl=1&l=20260130100207679710E3EB352423A61A&btag=e000b0000",
+                  "https://api16-normal-no1a.tiktokv.eu/aweme/v1/play/?faid=1233&file_id=1dd358ad5f344131be9f2b9bb306caa1&is_play_url=1&item_id=7315774502430936352&line=0&signaturev3=dmlkZW9faWQ7ZmlsZV9pZDtpdGVtX2lkLjE2NWU5ZTc0OTllMTY1NzBlNDEyYzJkYTkyNzM2MzVi&source=SEARCH&video_id=v0f044gc0000cm3dk7nog65t7hi325l0"
+                ]
+              },
+              "width": 576
+            }
+          }
+        },
+        {
+          "aweme_info": {
+            "author": {
+              "avatar_thumb": {
+                "url_list": [
+                  "https://p19-pu-sign-no.tiktokcdn-eu.com/tos-no1a-avt-0068c001-no/019a752dbe6d2a71927bec9ffc118d31~tplv-tiktokx-cropcenter-q:100:100:q70.heic?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=a5107700&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=jduV%2BWDxztcBcqN5SnPEtC6Dk28%3D",
+                  "https://p16-pu-sign-no.tiktokcdn-eu.com/tos-no1a-avt-0068c001-no/019a752dbe6d2a71927bec9ffc118d31~tplv-tiktokx-cropcenter-q:100:100:q70.heic?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=4cf53994&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=Z2crxZ%2Fed99VuIA%2Fj%2F9qYqZ%2FGFE%3D",
+                  "https://p19-pu-sign-no.tiktokcdn-eu.com/tos-no1a-avt-0068c001-no/019a752dbe6d2a71927bec9ffc118d31~tplv-tiktokx-cropcenter-q:100:100:q70.jpeg?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=86e75f99&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=H6ZGOGIMmyaaBxcZicIA3eDHUnM%3D"
+                ]
+              },
+              "custom_verify": "",
+              "follower_count": 2553,
+              "nickname": "Prime Fitness 🇺🇲",
+              "sec_uid": "MS4wLjABAAAAA_NnYuT0a7v2niKMzva3fm52sfNoImOdJv9w8pU5iZlJnaOx84H967iICmYF57Nl",
+              "uid": "7552437888764675074",
+              "unique_id": "prime.fitness832"
+            },
+            "aweme_id": "7562614517243448598",
+            "create_time": 1760808410,
+            "desc": "girl gym workout women bodybuilding #gymgirl #bodybuildin #faryou #fyp #fitness ",
+            "music": {
+              "album": "",
+              "author": "Prime Fitness 🇺🇲",
+              "duration": 10,
+              "id": 7562614559941626647,
+              "title": "suono originale - prime.fitness832"
+            },
+            "share_url": "https://www.tiktok.com/@prime.fitness832/video/7562614517243448598?_r=1&u_code=f0hhmibgbha9bi&preview_pb=0&sharer_language=it&_d=f0i17flfb649lh&share_item_id=7562614517243448598&source=h5_m",
+            "statistics": {
+              "collect_count": 876,
+              "comment_count": 125,
+              "digg_count": 4630,
+              "download_count": 1644,
+              "play_count": 578126,
+              "share_count": 766
+            },
+            "video": {
+              "cover": {
+                "url_list": [
+                  "https://p19-pu-sign-no.tiktokcdn-eu.com/tos-no1a-p-0037-no/oogjkIRA5He5evQPGLQVI5LPYAAF9AePIMIAbl~tplv-tiktokx-cropcenter:500:800.jpeg?biz_tag=musically_video.video_cover&dr=10397&idc=no1a&ps=13740610&refresh_token=f2e94259&shcp=9b759fb9&shp=c1333099&t=4d5b0474&x-expires=1769788800&x-signature=RMhlhytJSddn6%2BuTNeUQuFg%2BJbg%3D",
+                  "https://p16-pu-sign-no.tiktokcdn-eu.com/tos-no1a-p-0037-no/oogjkIRA5He5evQPGLQVI5LPYAAF9AePIMIAbl~tplv-tiktokx-cropcenter:500:800.jpeg?biz_tag=musically_video.video_cover&dr=10397&idc=no1a&ps=13740610&refresh_token=30ef7182&shcp=9b759fb9&shp=c1333099&t=4d5b0474&x-expires=1769788800&x-signature=mUS4JI2YmgkCO8GSSKHnQ4ZIqSI%3D"
+                ]
+              },
+              "duration": 10846,
+              "dynamic_cover": {
+                "url_list": [
+                  "https://p16-pu-sign-no.tiktokcdn-eu.com/tos-no1a-p-0037-no/oogjkIRA5He5evQPGLQVI5LPYAAF9AePIMIAbl~tplv-tiktokx-origin.image?dr=9229&refresh_token=388c3f39&x-expires=1769853600&x-signature=ILZbH3iSxCtE%2BIA43EqgAs0viOk%3D&t=bacd0480&ps=4f5296ae&shp=d05b14bd&shcp=c1333099&idc=no1a&s=SEARCH&sc=dynamic_cover&biz_tag=tt_video",
+                  "https://p19-pu-sign-no.tiktokcdn-eu.com/tos-no1a-p-0037-no/oogjkIRA5He5evQPGLQVI5LPYAAF9AePIMIAbl~tplv-tiktokx-origin.image?dr=9229&refresh_token=004f2e3b&x-expires=1769853600&x-signature=cZXUP%2BPKIhx8z3f3WmZG82qF1sA%3D&t=bacd0480&ps=4f5296ae&shp=d05b14bd&shcp=c1333099&idc=no1a&s=SEARCH&sc=dynamic_cover&biz_tag=tt_video"
+                ]
+              },
+              "height": 640,
+              "play_addr": {
+                "data_size": 760722,
+                "url_list": [
+                  "https://v45.tiktokcdn-eu.com/2bed49b03e63dbb83d646dabf7d81e6a/697dd32a/video/tos/no1a/tos-no1a-ve-0068-no/oALkdm1R5ADPLz3LI0Q5LjzDI5zeEnf5I2eAIG/?a=1233&bti=NEBzNTY6QGo6OjZALnAjNDQuYCMxNDNg&ch=0&cr=13&dr=0&er=0&lr=all&net=0&cd=0%7C0%7C0%7C&br=1094&bt=547&cs=0&ds=1&ft=7Xz8TB95IxRfAhEv-RbzVgmaQ6KXtcgZiaQEeRtwm-LD1Inz&mime_type=video_mp4&qs=0&rc=aDtnaTxoNjk5NTs3OWRkOEBpM3N4c3c5cjl2NjMzbzczNUA0M182Y2JeNTYxMzMxNTY0YSNzYy4zMmRzbW1hLS1kMTFzcw%3D%3D&vvpl=1&l=20260130100207679710E3EB352423A61A&btag=e000b5000",
+                  "https://v15m.tiktokcdn-eu.com/94a5def27e26aafc1f65dc61c2764838/697dd32a/video/tos/no1a/tos-no1a-ve-0068-no/oALkdm1R5ADPLz3LI0Q5LjzDI5zeEnf5I2eAIG/?a=1233&bti=NEBzNTY6QGo6OjZALnAjNDQuYCMxNDNg&ch=0&cr=13&dr=0&er=0&lr=all&net=0&cd=0%7C0%7C0%7C&br=1094&bt=547&cs=0&ds=1&ft=7Xz8TB95IxRfAhEv-RbzVgmaQ6KXtcgZiaQEeRtwm-LD1Inz&mime_type=video_mp4&qs=0&rc=aDtnaTxoNjk5NTs3OWRkOEBpM3N4c3c5cjl2NjMzbzczNUA0M182Y2JeNTYxMzMxNTY0YSNzYy4zMmRzbW1hLS1kMTFzcw%3D%3D&vvpl=1&l=20260130100207679710E3EB352423A61A&btag=e000b0000",
+                  "https://api16-normal-no1a.tiktokv.eu/aweme/v1/play/?faid=1233&file_id=759a8a466468429686a3eef99fbd687e&is_play_url=1&item_id=7562614517243448598&line=0&signaturev3=dmlkZW9faWQ7ZmlsZV9pZDtpdGVtX2lkLjMzNDc3YmQ3Y2JiYTAwZWUxMmRjMDQxNmE5ZDAyZDAy&source=SEARCH&video_id=v24044gl0000d3psp6vog65t6p1ufpv0"
+                ]
+              },
+              "width": 360
+            }
+          }
+        }
+      ]
+    },
+    "message": "Request successful. This request will incur a charge."
+  },
+  "videos": [
+    {
+      "author": {
+        "avatar_thumb": {
+          "url_list": [
+            "https://p16-common-sign.tiktokcdn-eu.com/tos-maliva-avt-0068/c5f12a27f12e74272fadb49fa9889932~tplv-tiktokx-cropcenter-q:100:100:q70.heic?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=7b99af4b&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=7UA5HjAZEUevlVNgbKXaePTWmYA%3D",
+            "https://p19-common-sign.tiktokcdn-eu.com/tos-maliva-avt-0068/c5f12a27f12e74272fadb49fa9889932~tplv-tiktokx-cropcenter-q:100:100:q70.heic?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=33827e9c&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=kHXVfMR6jDGe9osceocUEJ832dE%3D",
+            "https://p16-common-sign.tiktokcdn-eu.com/tos-maliva-avt-0068/c5f12a27f12e74272fadb49fa9889932~tplv-tiktokx-cropcenter-q:100:100:q70.jpeg?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=08b51202&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=i4Oz7KKEXjPbdDdiOz1a0ijJLB4%3D"
+          ]
+        },
+        "custom_verify": "",
+        "follower_count": 528605,
+        "nickname": "Ollie Rhoda | Online Coach",
+        "sec_uid": "MS4wLjABAAAAfS6-sKlFtPzHoRTTd90rN4R9CVaHSiFpM6WSHWMi_codtOSfbihM5eZjy2MkHGoO",
+        "uid": "6813641030421890053",
+        "unique_id": "ollierhoda"
+      },
+      "aweme_id": "7178956597123730693",
+      "create_time": 1671481091,
+      "desc": "Make sure you nail the basics & follow me for more tips🚀 #fyp #gym #workout #training #muscle #bodybuilding #gains #rest #fittok ",
+      "music": {
+        "album": "Love You So",
+        "author": "The King Khan & BBQ Show",
+        "duration": 60,
+        "id": 6728562975734515713,
+        "title": "Love You So"
+      },
+      "share_url": "https://www.tiktok.com/@ollierhoda/video/7178956597123730693?_r=1&u_code=f0hhmibgbha9bi&preview_pb=0&sharer_language=it&_d=f0i17flfb649lh&share_item_id=7178956597123730693&source=h5_m",
+      "statistics": {
+        "collect_count": 49520,
+        "comment_count": 2687,
+        "digg_count": 544645,
+        "download_count": 6153,
+        "play_count": 5762285,
+        "share_count": 14521
+      },
+      "video": {
+        "cover": {
+          "url_list": [
+            "https://p16-common-sign.tiktokcdn-eu.com/tos-maliva-p-0068/631dec44334040dea74122fc6dbb7a25_1671481093~tplv-tiktokx-cropcenter:500:800.jpeg?biz_tag=musically_video.video_cover&dr=10397&idc=no1a&ps=13740610&refresh_token=92795215&shcp=9b759fb9&shp=c1333099&t=4d5b0474&x-expires=1769788800&x-signature=g1UMpnIqdOqEKA6lc6U5WLJg54c%3D",
+            "https://p19-common-sign.tiktokcdn-eu.com/tos-maliva-p-0068/631dec44334040dea74122fc6dbb7a25_1671481093~tplv-tiktokx-cropcenter:500:800.jpeg?biz_tag=musically_video.video_cover&dr=10397&idc=no1a&ps=13740610&refresh_token=47bc7c18&shcp=9b759fb9&shp=c1333099&t=4d5b0474&x-expires=1769788800&x-signature=4SWvayBsD%2BVeIn8tFMlDhnCLuQE%3D"
+          ]
+        },
+        "duration": 26818,
+        "dynamic_cover": {
+          "url_list": [
+            "https://p16-common-sign.tiktokcdn-eu.com/tos-maliva-p-0068/17542f9b99854d0f8663b799be22384f_1671481094~tplv-tiktokx-dmt-logom:tos-useast2a-v-0068/131ebf36675942f59f5f2b78cec2b618.image?dr=9228&refresh_token=e8dec4aa&x-expires=1769853600&x-signature=eo3z2l%2BgmRw%2BVI6%2BmWveDHrQVM4%3D&t=bacd0480&ps=4f5296ae&shp=d05b14bd&shcp=c1333099&idc=no1a&sc=dynamic_cover&biz_tag=tt_video&s=SEARCH",
+            "https://p19-common-sign.tiktokcdn-eu.com/tos-maliva-p-0068/17542f9b99854d0f8663b799be22384f_1671481094~tplv-tiktokx-dmt-logom:tos-useast2a-v-0068/131ebf36675942f59f5f2b78cec2b618.image?dr=9228&refresh_token=c9882b83&x-expires=1769853600&x-signature=9HIT6MVcVGZ3X772p473TxkfrzE%3D&t=bacd0480&ps=4f5296ae&shp=d05b14bd&shcp=c1333099&idc=no1a&sc=dynamic_cover&biz_tag=tt_video&s=SEARCH"
+          ]
+        },
+        "height": 1024,
+        "play_addr": {
+          "data_size": 5347797,
+          "url_list": [
+            "https://v45.tiktokcdn-eu.com/99427213cff935d2ccbc98808af8bfb3/697dd339/video/tos/useast2a/tos-useast2a-pve-0068/oQGQGUFBgAxAWJxxiahUAf0CIgwztoMkKINaUh/?a=1233&bti=NTY6QGo0QHM6OjZANDQuYCMucCMxNDNg&ch=0&cr=13&dr=0&er=0&lr=all&net=0&cd=0%7C0%7C0%7C&cv=1&br=3114&bt=1557&cs=0&ds=6&ft=7Xz8TB95IxRfAhEv-RbzVgmaQ6KXtcgZiaQEeRtwm-LD1Inz&mime_type=video_mp4&qs=0&rc=aGc1ZmQ8NDg4OzQ7NTlnN0BpMzQ8cjM6ZjNmaDMzNzczM0BiXzZiNWMuXzAxYmFeNTUwYSNfNmVqcjRnYGRgLS1kMTZzcw%3D%3D&vvpl=1&l=20260130100207679710E3EB352423A61A&btag=e000bd000",
+            "https://v15m.tiktokcdn-eu.com/d69b12d48bf94c8476974960047d63be/697dd339/video/tos/useast2a/tos-useast2a-pve-0068/oQGQGUFBgAxAWJxxiahUAf0CIgwztoMkKINaUh/?a=1233&bti=NTY6QGo0QHM6OjZANDQuYCMucCMxNDNg&ch=0&cr=13&dr=0&er=0&lr=all&net=0&cd=0%7C0%7C0%7C&cv=1&br=3114&bt=1557&cs=0&ds=6&ft=7Xz8TB95IxRfAhEv-RbzVgmaQ6KXtcgZiaQEeRtwm-LD1Inz&mime_type=video_mp4&qs=0&rc=aGc1ZmQ8NDg4OzQ7NTlnN0BpMzQ8cjM6ZjNmaDMzNzczM0BiXzZiNWMuXzAxYmFeNTUwYSNfNmVqcjRnYGRgLS1kMTZzcw%3D%3D&vvpl=1&l=20260130100207679710E3EB352423A61A&btag=e000b8000",
+            "https://api16-normal-no1a.tiktokv.eu/aweme/v1/play/?faid=1233&file_id=348d86a2d8e14835b511f98aec92bdee&is_play_url=1&item_id=7178956597123730693&line=0&signaturev3=dmlkZW9faWQ7ZmlsZV9pZDtpdGVtX2lkLmNjNGE1ZmMwYzM1NWY3OGE4ZTU1ZTY3NGI1MTZjZmU5&source=SEARCH&video_id=v09044g40000cegcc0jc77u0moh991b0"
+          ]
+        },
+        "width": 576
+      }
+    },
+    {
+      "author": {
+        "avatar_thumb": {
+          "url_list": [
+            "https://p16-pu-sign-no.tiktokcdn-eu.com/tos-no1a-avt-0068c001-no/2c66aabe89720eb71053b555a3e3b5a5~tplv-tiktokx-cropcenter-q:100:100:q70.heic?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=4dbb2203&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=cCtZ9VQbn8lcCbHwACWHMm%2F25AQ%3D",
+            "https://p19-pu-sign-no.tiktokcdn-eu.com/tos-no1a-avt-0068c001-no/2c66aabe89720eb71053b555a3e3b5a5~tplv-tiktokx-cropcenter-q:100:100:q70.heic?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=279585d3&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=y2W5F0grIpCA6W9d%2Bs1%2BxL3usr8%3D",
+            "https://p16-pu-sign-no.tiktokcdn-eu.com/tos-no1a-avt-0068c001-no/2c66aabe89720eb71053b555a3e3b5a5~tplv-tiktokx-cropcenter-q:100:100:q70.jpeg?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=129eb3fd&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=W1RmN9QIXu7xhmJVNL67%2FGE46Pc%3D"
+          ]
+        },
+        "custom_verify": "",
+        "follower_count": 403398,
+        "nickname": "Berna",
+        "sec_uid": "MS4wLjABAAAA1R8MdLgos9IoYjiWuoVqtT_3UHXCOmhZiYwA7SVO6mLOM1w4Vls0ifXnBYI1F2kA",
+        "uid": "6820036764418327557",
+        "unique_id": "fit.berna"
+      },
+      "aweme_id": "7223076878188383493",
+      "create_time": 1681753642,
+      "desc": "try this to lose fat 😰💦 #cardio #cardioworkout #cardiocircuit #strongwomen #gymtok #fittok #losefat #weightloss #gymgirl #cardioroutine #gymmotivation #gymrat ",
+      "music": {
+        "album": "Just Wanna Rock",
+        "author": "Lil Uzi Vert",
+        "duration": 26,
+        "id": 7143731623425526574,
+        "title": "Just Wanna Rock"
+      },
+      "share_url": "https://www.tiktok.com/@fit.berna/video/7223076878188383493?_r=1&u_code=f0hhmibgbha9bi&preview_pb=0&sharer_language=it&_d=f0i17flfb649lh&share_item_id=7223076878188383493&source=h5_m",
+      "statistics": {
+        "collect_count": 609104,
+        "comment_count": 4793,
+        "digg_count": 2185867,
+        "download_count": 921,
+        "play_count": 26803463,
+        "share_count": 54312
+      },
+      "video": {
+        "cover": {
+          "url_list": [
+            "https://p16-common-sign.tiktokcdn-eu.com/tos-maliva-p-0068/124c905371a040f2acd9817ff97421ff_1681753643~tplv-tiktokx-cropcenter:500:800.jpeg?biz_tag=musically_video.video_cover&dr=10397&idc=no1a&ps=13740610&refresh_token=b6be7f0d&shcp=9b759fb9&shp=c1333099&t=4d5b0474&x-expires=1769788800&x-signature=mmH1jVPfhXBumXOpHGf84ysemfA%3D",
+            "https://p19-common-sign.tiktokcdn-eu.com/tos-maliva-p-0068/124c905371a040f2acd9817ff97421ff_1681753643~tplv-tiktokx-cropcenter:500:800.jpeg?biz_tag=musically_video.video_cover&dr=10397&idc=no1a&ps=13740610&refresh_token=78801292&shcp=9b759fb9&shp=c1333099&t=4d5b0474&x-expires=1769788800&x-signature=7C4zCXlK2A4DYRsDrHMv9QNS%2FZQ%3D"
+          ]
+        },
+        "duration": 16787,
+        "dynamic_cover": {
+          "url_list": [
+            "https://p19-common-sign.tiktokcdn-eu.com/tos-maliva-p-0068/4ae5a2d8c2e24cb1bff084fe924f7149_1681753644~tplv-tiktokx-origin.image?dr=9229&refresh_token=7caa99a8&x-expires=1769853600&x-signature=fe82b7AkZptJfBZ6LDOej%2Fzmha8%3D&t=bacd0480&ps=4f5296ae&shp=d05b14bd&shcp=c1333099&idc=no1a&biz_tag=tt_video&s=SEARCH&sc=dynamic_cover",
+            "https://p16-common-sign.tiktokcdn-eu.com/tos-maliva-p-0068/4ae5a2d8c2e24cb1bff084fe924f7149_1681753644~tplv-tiktokx-origin.image?dr=9229&refresh_token=96c9ab68&x-expires=1769853600&x-signature=MKsGW0yz91fVLBjaf9qmMHYbR38%3D&t=bacd0480&ps=4f5296ae&shp=d05b14bd&shcp=c1333099&idc=no1a&biz_tag=tt_video&s=SEARCH&sc=dynamic_cover"
+          ]
+        },
+        "height": 1024,
+        "play_addr": {
+          "data_size": 2065078,
+          "url_list": [
+            "https://v45.tiktokcdn-eu.com/1a5a10b2986518cb4c6570b412bab310/697dd32f/video/tos/useast2a/tos-useast2a-ve-0068c002/oQVloWJReE6YTAnLBDQeTPisQbhjkjDBMgSd9A/?a=1233&bti=NEBzNTY6QGo6OjZALnAjNDQuYCMxNDNg&ch=0&cr=13&dr=0&er=0&lr=all&net=0&cd=0%7C0%7C0%7C&cv=1&br=1922&bt=961&cs=0&ds=6&ft=7Xz8TB95IxRfAhEv-RbzVgmaQ6KXtcgZiaQEeRtwm-LD1Inz&mime_type=video_mp4&qs=0&rc=PDgzOjNmZzs4NWg8ZWQ2NUBpajw5c2g6ZjtyajMzNzczM0BiNGEzY2AtNV4xMV80YzQxYSNpX2ZocjRvNnJgLS1kMTZzcw%3D%3D&vvpl=1&l=20260130100207679710E3EB352423A61A&btag=e000bd000",
+            "https://v15m.tiktokcdn-eu.com/50343e09afdae0757f4ba073fcad71dc/697dd32f/video/tos/useast2a/tos-useast2a-ve-0068c002/oQVloWJReE6YTAnLBDQeTPisQbhjkjDBMgSd9A/?a=1233&bti=NEBzNTY6QGo6OjZALnAjNDQuYCMxNDNg&ch=0&cr=13&dr=0&er=0&lr=all&net=0&cd=0%7C0%7C0%7C&cv=1&br=1922&bt=961&cs=0&ds=6&ft=7Xz8TB95IxRfAhEv-RbzVgmaQ6KXtcgZiaQEeRtwm-LD1Inz&mime_type=video_mp4&qs=0&rc=PDgzOjNmZzs4NWg8ZWQ2NUBpajw5c2g6ZjtyajMzNzczM0BiNGEzY2AtNV4xMV80YzQxYSNpX2ZocjRvNnJgLS1kMTZzcw%3D%3D&vvpl=1&l=20260130100207679710E3EB352423A61A&btag=e000b8000",
+            "https://api16-normal-no1a.tiktokv.eu/aweme/v1/play/?faid=1233&file_id=4273fa7bb94e42a5880dccf067d075e9&is_play_url=1&item_id=7223076878188383493&line=0&signaturev3=dmlkZW9faWQ7ZmlsZV9pZDtpdGVtX2lkLjEyNWE2Y2IzZWU5NmM5MjdhYmExMTFmOWVmNDYxOTFh&source=SEARCH&video_id=v09044g40000cguo98rc77uekpi6b9lg"
+          ]
+        },
+        "width": 576
+      }
+    },
+    {
+      "author": {
+        "avatar_thumb": {
+          "url_list": [
+            "https://p16-common-sign.tiktokcdn-eu.com/tos-maliva-avt-0068/a979e73aa3aa0ca34f5d8af17398b26b~tplv-tiktokx-cropcenter-q:100:100:q70.heic?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=a7e3a809&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=pQNRnyBpC0A7SQc%2FsK5z3GtqRbg%3D",
+            "https://p19-common-sign.tiktokcdn-eu.com/tos-maliva-avt-0068/a979e73aa3aa0ca34f5d8af17398b26b~tplv-tiktokx-cropcenter-q:100:100:q70.heic?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=61534f94&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=Q9XG99%2BH9H6gZxA0rKws0qWZh2g%3D",
+            "https://p16-common-sign.tiktokcdn-eu.com/tos-maliva-avt-0068/a979e73aa3aa0ca34f5d8af17398b26b~tplv-tiktokx-cropcenter-q:100:100:q70.jpeg?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=b94e63aa&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=fIdWHa7OMvNsbrdoHoiryM6hBZM%3D"
+          ]
+        },
+        "custom_verify": "",
+        "follower_count": 107601,
+        "nickname": "Catherine",
+        "sec_uid": "MS4wLjABAAAAq7KBw4wDZSjLJTVbqu577v5Sn29tHfiC7nKDmxC7s946y5h34K0Ihx-UgBID7vsX",
+        "uid": "7424903865873695786",
+        "unique_id": "catherine.lift1"
+      },
+      "aweme_id": "7530346745721523511",
+      "create_time": 1753295511,
+      "desc": "the ✨4 key✨ factors that helped me achieve my physique at 16yo!! @AYBL code | CATHERINE #gymmotivation#16yo#gymrat#gymgirl#gymlife#gymbod#motivation#gymcore#fitnessmotivation#gymtips#gymphysique#catherine#relatable#gymtok#gymlife#foryoupage#foryou#fyp#viral#blowup#aybl#gymcontent#secretaccount#musclebuilding#musclemommy#fitnessjourney#fitnessprogress#gymjourney#gymprogress#youngegymrat#gymathlete @DFYNE @Gymshark @YOUNGLA @Breathedivinity @Katelyn ",
+      "music": {
+        "album": "",
+        "author": "Mel1qa",
+        "duration": 32,
+        "id": 7373582233317526273,
+        "title": "suono originale - meliqishvili_vako"
+      },
+      "share_url": "https://www.tiktok.com/@catherine.lift1/video/7530346745721523511?_r=1&u_code=f0hhmibgbha9bi&preview_pb=0&sharer_language=it&_d=f0i17flfb649lh&share_item_id=7530346745721523511&source=h5_m",
+      "statistics": {
+        "collect_count": 97776,
+        "comment_count": 880,
+        "digg_count": 544487,
+        "download_count": 5465,
+        "play_count": 4541352,
+        "share_count": 41995
+      },
+      "video": {
+        "cover": {
+          "url_list": [
+            "https://p16-common-sign.tiktokcdn-eu.com/tos-useast5-p-0068-tx/o8sJCTBiIplfxPu8KwBJZIXQEAN0ixBXSTpBiA~tplv-tiktokx-cropcenter:500:800.jpeg?biz_tag=musically_video.video_cover&dr=10397&idc=no1a&ps=13740610&refresh_token=9deae15a&shcp=9b759fb9&shp=c1333099&t=4d5b0474&x-expires=1769788800&x-signature=42HpcSM6UimY1OOqo6FmNlqgwo4%3D",
+            "https://p19-common-sign.tiktokcdn-eu.com/tos-useast5-p-0068-tx/o8sJCTBiIplfxPu8KwBJZIXQEAN0ixBXSTpBiA~tplv-tiktokx-cropcenter:500:800.jpeg?biz_tag=musically_video.video_cover&dr=10397&idc=no1a&ps=13740610&refresh_token=4275a960&shcp=9b759fb9&shp=c1333099&t=4d5b0474&x-expires=1769788800&x-signature=kEjc%2BHEq2RdikflAmle7Hi6oNRc%3D"
+          ]
+        },
+        "duration": 16000,
+        "dynamic_cover": {
+          "url_list": [
+            "https://p16-common-sign.tiktokcdn-eu.com/tos-useast5-p-0068-tx/o4mIHAPkegAkn6vWEfq9EeGRwAIE2CGoRgLjTL~tplv-tiktokx-origin.image?dr=9229&refresh_token=afb0350d&x-expires=1769853600&x-signature=zQrGZQyBIOk7OEn60k%2FaKVn7tvE%3D&t=bacd0480&ps=4f5296ae&shp=d05b14bd&shcp=c1333099&idc=no1a&biz_tag=tt_video&s=SEARCH&sc=dynamic_cover",
+            "https://p19-common-sign.tiktokcdn-eu.com/tos-useast5-p-0068-tx/o4mIHAPkegAkn6vWEfq9EeGRwAIE2CGoRgLjTL~tplv-tiktokx-origin.image?dr=9229&refresh_token=c0d5846d&x-expires=1769853600&x-signature=Vws%2BwktIB2OR4W4XfZeGIfe%2FOaI%3D&t=bacd0480&ps=4f5296ae&shp=d05b14bd&shcp=c1333099&idc=no1a&biz_tag=tt_video&s=SEARCH&sc=dynamic_cover"
+          ]
+        },
+        "height": 1024,
+        "play_addr": {
+          "data_size": 2008546,
+          "url_list": [
+            "https://v45.tiktokcdn-eu.com/f6868bb5e8afc8bba18fccd779eb0874/697dd32e/video/tos/maliva/tos-maliva-ve-0068c799-us/o0MeQkED1bfHiiugVRkCIT4IUDFGLjAAFnCfWA/?a=1233&bti=NEBzNTY6QGo6OjZALnAjNDQuYCMxNDNg&ch=0&cr=13&dr=0&er=0&lr=all&net=0&cd=0%7C0%7C0%7C&cv=1&br=1960&bt=980&cs=0&ds=6&ft=7Xz8TB95IxRfAhEv-RbzVgmaQ6KXtcgZiaQEeRtwm-LD1Inz&mime_type=video_mp4&qs=0&rc=PDVoaGZlZTVnNDpnZjYzaUBpMzxlc2s5cjxsNTMzZzczNEBfXzViYjUvNTMxNDA2NGA0YSNyL2AzMmRzYy1hLS1kMS9zcw%3D%3D&vvpl=1&l=20260130100207679710E3EB352423A61A&btag=e000bd000",
+            "https://v15m.tiktokcdn-eu.com/55ced5328b5e6dd7ed703cc6470f039f/697dd32e/video/tos/maliva/tos-maliva-ve-0068c799-us/o0MeQkED1bfHiiugVRkCIT4IUDFGLjAAFnCfWA/?a=1233&bti=NEBzNTY6QGo6OjZALnAjNDQuYCMxNDNg&ch=0&cr=13&dr=0&er=0&lr=all&net=0&cd=0%7C0%7C0%7C&cv=1&br=1960&bt=980&cs=0&ds=6&ft=7Xz8TB95IxRfAhEv-RbzVgmaQ6KXtcgZiaQEeRtwm-LD1Inz&mime_type=video_mp4&qs=0&rc=PDVoaGZlZTVnNDpnZjYzaUBpMzxlc2s5cjxsNTMzZzczNEBfXzViYjUvNTMxNDA2NGA0YSNyL2AzMmRzYy1hLS1kMS9zcw%3D%3D&vvpl=1&l=20260130100207679710E3EB352423A61A&btag=e000b8000",
+            "https://api16-normal-no1a.tiktokv.eu/aweme/v1/play/?faid=1233&file_id=7fc0739c3d77416d822b8becee8eb2b9&is_play_url=1&item_id=7530346745721523511&line=0&signaturev3=dmlkZW9faWQ7ZmlsZV9pZDtpdGVtX2lkLjM2YmFkZGJmOGVmNjk3ODYzZjY5MjQ4MzE2ZGY2MWRi&source=SEARCH&video_id=v12044gd0000d20if9vog65h6pcb29u0"
+          ]
+        },
+        "width": 576
+      }
+    },
+    {
+      "author": {
+        "avatar_thumb": {
+          "url_list": [
+            "https://p19-common-sign-useastred.tiktokcdn-eu.com/tos-useast2a-avt-0068-euttp/d85bedbe1073b79d407c47fe4beb00b4~tplv-tiktokx-cropcenter-q:100:100:q70.heic?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=82093e5c&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=JNpQgiwn4v3ogBYq4s1cO2YyIjQ%3D",
+            "https://p16-common-sign-useastred.tiktokcdn-eu.com/tos-useast2a-avt-0068-euttp/d85bedbe1073b79d407c47fe4beb00b4~tplv-tiktokx-cropcenter-q:100:100:q70.heic?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=2dceeb4e&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=pqxIlEPAS2UaR7y9baByGV9CZYM%3D",
+            "https://p19-common-sign-useastred.tiktokcdn-eu.com/tos-useast2a-avt-0068-euttp/d85bedbe1073b79d407c47fe4beb00b4~tplv-tiktokx-cropcenter-q:100:100:q70.jpeg?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=ee468a39&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=sdnJ1oQVmcXgbmr%2BaK80icR%2FvWA%3D"
+          ]
+        },
+        "custom_verify": "",
+        "follower_count": 43906,
+        "nickname": "Bubblebuttfitness",
+        "sec_uid": "MS4wLjABAAAAMe8FfBUDkIuIqtq999PIllw6kZxkf1jZL-9B0-gr9bQN6liYLKssemY7wxIn2ngG",
+        "uid": "7299261751597466656",
+        "unique_id": "bubblebuttfitness"
+      },
+      "aweme_id": "7315774502430936352",
+      "create_time": 1703336494,
+      "desc": "#fitness #fitnessmotivation #fitnesstips #fitnessgirl #fitnesstiktok #fitnessmodel #fitnesschallenge #fit #fitgirl #gym #training #trainingday #traininggirl #challenge #challenges_tiktok #challengebody ",
+      "music": {
+        "album": "",
+        "author": "Bubblebuttfitness",
+        "duration": 7,
+        "id": 7315774522123864865,
+        "title": "suono originale - bubblebuttfitness"
+      },
+      "share_url": "https://www.tiktok.com/@bubblebuttfitness/video/7315774502430936352?_r=1&u_code=f0hhmibgbha9bi&preview_pb=0&sharer_language=it&_d=f0i17flfb649lh&share_item_id=7315774502430936352&source=h5_m",
+      "statistics": {
+        "collect_count": 8262,
+        "comment_count": 851,
+        "digg_count": 109515,
+        "download_count": 265,
+        "play_count": 1861077,
+        "share_count": 5858
+      },
+      "video": {
+        "cover": {
+          "url_list": [
+            "https://p19-common-sign-useastred.tiktokcdn-eu.com/tos-useast2a-p-0037-euttp/d6734f546676437a8a26f15a1d34459b_1703336496~tplv-tiktokx-cropcenter:500:800.jpeg?biz_tag=musically_video.video_cover&dr=10397&idc=no1a&ps=13740610&refresh_token=9cd2bba1&shcp=9b759fb9&shp=c1333099&t=4d5b0474&x-expires=1769788800&x-signature=n7oXjBkXX12zzNW4%2F92V3415mjg%3D",
+            "https://p16-common-sign-useastred.tiktokcdn-eu.com/tos-useast2a-p-0037-euttp/d6734f546676437a8a26f15a1d34459b_1703336496~tplv-tiktokx-cropcenter:500:800.jpeg?biz_tag=musically_video.video_cover&dr=10397&idc=no1a&ps=13740610&refresh_token=5bb0ca56&shcp=9b759fb9&shp=c1333099&t=4d5b0474&x-expires=1769788800&x-signature=uu1rRvOeGwYhXSEFM2Dbvn6w2NA%3D"
+          ]
+        },
+        "duration": 7454,
+        "dynamic_cover": {
+          "url_list": [
+            "https://p19-common-sign-useastred.tiktokcdn-eu.com/tos-useast2a-p-0037-euttp/f24578465f5d498e8f5ce588ce659ba6_1703336497~tplv-tiktokx-origin.image?dr=9229&refresh_token=2413135b&x-expires=1769853600&x-signature=J9Tb222RGuxTZ4s6fImEOabO0WA%3D&t=bacd0480&ps=4f5296ae&shp=d05b14bd&shcp=c1333099&idc=no1a&item=7315774502430936352&biz_tag=tt_video&s=SEARCH&sc=dynamic_cover",
+            "https://p16-common-sign-useastred.tiktokcdn-eu.com/tos-useast2a-p-0037-euttp/f24578465f5d498e8f5ce588ce659ba6_1703336497~tplv-tiktokx-origin.image?dr=9229&refresh_token=ffeebb58&x-expires=1769853600&x-signature=jof1%2BR96hOR%2BwAUz9pqCntoKyQs%3D&t=bacd0480&ps=4f5296ae&shp=d05b14bd&shcp=c1333099&idc=no1a&item=7315774502430936352&biz_tag=tt_video&s=SEARCH&sc=dynamic_cover"
+          ]
+        },
+        "height": 1024,
+        "play_addr": {
+          "data_size": 532758,
+          "url_list": [
+            "https://v45.tiktokcdn-eu.com/3dedb4c46a60761d9574885acb5fe08f/697dd326/video/tos/useast2a/tos-useast2a-ve-0068c001-euttp/owEijIZaOoFI0PqGpQIRwxvYBAGFiHBa29TbE/?a=1233&bti=NEBzNTY6QGo6OjZALnAjNDQuYCMxNDNg&ch=0&cr=13&dr=0&er=0&lr=all&net=0&cd=0%7C0%7C0%7C&cv=1&br=1116&bt=558&cs=0&ds=6&ft=7Xz8TB95IxRfAhEv-RbzVgmaQ6KXtcgZiaQEeRtwm-LD1Inz&mime_type=video_mp4&qs=0&rc=NGQ5NmVlaWg0NDdpZzs2Z0BpMzg2a3c5cjpncDMzZjczM0BeYC1fNi82XzAxMDJeMmEuYSNpL2Y0MmRraDBgLS1kMWNzcw%3D%3D&vvpl=1&l=20260130100207679710E3EB352423A61A&btag=e000b5000",
+            "https://v15m.tiktokcdn-eu.com/fbb0764bc994f6f0ba8339a424dc1ed6/697dd326/video/tos/useast2a/tos-useast2a-ve-0068c001-euttp/owEijIZaOoFI0PqGpQIRwxvYBAGFiHBa29TbE/?a=1233&bti=NEBzNTY6QGo6OjZALnAjNDQuYCMxNDNg&ch=0&cr=13&dr=0&er=0&lr=all&net=0&cd=0%7C0%7C0%7C&cv=1&br=1116&bt=558&cs=0&ds=6&ft=7Xz8TB95IxRfAhEv-RbzVgmaQ6KXtcgZiaQEeRtwm-LD1Inz&mime_type=video_mp4&qs=0&rc=NGQ5NmVlaWg0NDdpZzs2Z0BpMzg2a3c5cjpncDMzZjczM0BeYC1fNi82XzAxMDJeMmEuYSNpL2Y0MmRraDBgLS1kMWNzcw%3D%3D&vvpl=1&l=20260130100207679710E3EB352423A61A&btag=e000b0000",
+            "https://api16-normal-no1a.tiktokv.eu/aweme/v1/play/?faid=1233&file_id=1dd358ad5f344131be9f2b9bb306caa1&is_play_url=1&item_id=7315774502430936352&line=0&signaturev3=dmlkZW9faWQ7ZmlsZV9pZDtpdGVtX2lkLjE2NWU5ZTc0OTllMTY1NzBlNDEyYzJkYTkyNzM2MzVi&source=SEARCH&video_id=v0f044gc0000cm3dk7nog65t7hi325l0"
+          ]
+        },
+        "width": 576
+      }
+    },
+    {
+      "author": {
+        "avatar_thumb": {
+          "url_list": [
+            "https://p19-pu-sign-no.tiktokcdn-eu.com/tos-no1a-avt-0068c001-no/019a752dbe6d2a71927bec9ffc118d31~tplv-tiktokx-cropcenter-q:100:100:q70.heic?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=a5107700&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=jduV%2BWDxztcBcqN5SnPEtC6Dk28%3D",
+            "https://p16-pu-sign-no.tiktokcdn-eu.com/tos-no1a-avt-0068c001-no/019a752dbe6d2a71927bec9ffc118d31~tplv-tiktokx-cropcenter-q:100:100:q70.heic?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=4cf53994&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=Z2crxZ%2Fed99VuIA%2Fj%2F9qYqZ%2FGFE%3D",
+            "https://p19-pu-sign-no.tiktokcdn-eu.com/tos-no1a-avt-0068c001-no/019a752dbe6d2a71927bec9ffc118d31~tplv-tiktokx-cropcenter-q:100:100:q70.jpeg?biz_tag=musically_video.video_user_cover&dr=9606&idc=no1a&ps=87d6e48a&refresh_token=86e75f99&s=SEARCH&sc=avatar&shcp=c1333099&shp=d05b14bd&t=223449c4&x-expires=1769853600&x-signature=H6ZGOGIMmyaaBxcZicIA3eDHUnM%3D"
+          ]
+        },
+        "custom_verify": "",
+        "follower_count": 2553,
+        "nickname": "Prime Fitness 🇺🇲",
+        "sec_uid": "MS4wLjABAAAAA_NnYuT0a7v2niKMzva3fm52sfNoImOdJv9w8pU5iZlJnaOx84H967iICmYF57Nl",
+        "uid": "7552437888764675074",
+        "unique_id": "prime.fitness832"
+      },
+      "aweme_id": "7562614517243448598",
+      "create_time": 1760808410,
+      "desc": "girl gym workout women bodybuilding #gymgirl #bodybuildin #faryou #fyp #fitness ",
+      "music": {
+        "album": "",
+        "author": "Prime Fitness 🇺🇲",
+        "duration": 10,
+        "id": 7562614559941626647,
+        "title": "suono originale - prime.fitness832"
+      },
+      "share_url": "https://www.tiktok.com/@prime.fitness832/video/7562614517243448598?_r=1&u_code=f0hhmibgbha9bi&preview_pb=0&sharer_language=it&_d=f0i17flfb649lh&share_item_id=7562614517243448598&source=h5_m",
+      "statistics": {
+        "collect_count": 876,
+        "comment_count": 125,
+        "digg_count": 4630,
+        "download_count": 1644,
+        "play_count": 578126,
+        "share_count": 766
+      },
+      "video": {
+        "cover": {
+          "url_list": [
+            "https://p19-pu-sign-no.tiktokcdn-eu.com/tos-no1a-p-0037-no/oogjkIRA5He5evQPGLQVI5LPYAAF9AePIMIAbl~tplv-tiktokx-cropcenter:500:800.jpeg?biz_tag=musically_video.video_cover&dr=10397&idc=no1a&ps=13740610&refresh_token=f2e94259&shcp=9b759fb9&shp=c1333099&t=4d5b0474&x-expires=1769788800&x-signature=RMhlhytJSddn6%2BuTNeUQuFg%2BJbg%3D",
+            "https://p16-pu-sign-no.tiktokcdn-eu.com/tos-no1a-p-0037-no/oogjkIRA5He5evQPGLQVI5LPYAAF9AePIMIAbl~tplv-tiktokx-cropcenter:500:800.jpeg?biz_tag=musically_video.video_cover&dr=10397&idc=no1a&ps=13740610&refresh_token=30ef7182&shcp=9b759fb9&shp=c1333099&t=4d5b0474&x-expires=1769788800&x-signature=mUS4JI2YmgkCO8GSSKHnQ4ZIqSI%3D"
+          ]
+        },
+        "duration": 10846,
+        "dynamic_cover": {
+          "url_list": [
+            "https://p16-pu-sign-no.tiktokcdn-eu.com/tos-no1a-p-0037-no/oogjkIRA5He5evQPGLQVI5LPYAAF9AePIMIAbl~tplv-tiktokx-origin.image?dr=9229&refresh_token=388c3f39&x-expires=1769853600&x-signature=ILZbH3iSxCtE%2BIA43EqgAs0viOk%3D&t=bacd0480&ps=4f5296ae&shp=d05b14bd&shcp=c1333099&idc=no1a&s=SEARCH&sc=dynamic_cover&biz_tag=tt_video",
+            "https://p19-pu-sign-no.tiktokcdn-eu.com/tos-no1a-p-0037-no/oogjkIRA5He5evQPGLQVI5LPYAAF9AePIMIAbl~tplv-tiktokx-origin.image?dr=9229&refresh_token=004f2e3b&x-expires=1769853600&x-signature=cZXUP%2BPKIhx8z3f3WmZG82qF1sA%3D&t=bacd0480&ps=4f5296ae&shp=d05b14bd&shcp=c1333099&idc=no1a&s=SEARCH&sc=dynamic_cover&biz_tag=tt_video"
+          ]
+        },
+        "height": 640,
+        "play_addr": {
+          "data_size": 760722,
+          "url_list": [
+            "https://v45.tiktokcdn-eu.com/2bed49b03e63dbb83d646dabf7d81e6a/697dd32a/video/tos/no1a/tos-no1a-ve-0068-no/oALkdm1R5ADPLz3LI0Q5LjzDI5zeEnf5I2eAIG/?a=1233&bti=NEBzNTY6QGo6OjZALnAjNDQuYCMxNDNg&ch=0&cr=13&dr=0&er=0&lr=all&net=0&cd=0%7C0%7C0%7C&br=1094&bt=547&cs=0&ds=1&ft=7Xz8TB95IxRfAhEv-RbzVgmaQ6KXtcgZiaQEeRtwm-LD1Inz&mime_type=video_mp4&qs=0&rc=aDtnaTxoNjk5NTs3OWRkOEBpM3N4c3c5cjl2NjMzbzczNUA0M182Y2JeNTYxMzMxNTY0YSNzYy4zMmRzbW1hLS1kMTFzcw%3D%3D&vvpl=1&l=20260130100207679710E3EB352423A61A&btag=e000b5000",
+            "https://v15m.tiktokcdn-eu.com/94a5def27e26aafc1f65dc61c2764838/697dd32a/video/tos/no1a/tos-no1a-ve-0068-no/oALkdm1R5ADPLz3LI0Q5LjzDI5zeEnf5I2eAIG/?a=1233&bti=NEBzNTY6QGo6OjZALnAjNDQuYCMxNDNg&ch=0&cr=13&dr=0&er=0&lr=all&net=0&cd=0%7C0%7C0%7C&br=1094&bt=547&cs=0&ds=1&ft=7Xz8TB95IxRfAhEv-RbzVgmaQ6KXtcgZiaQEeRtwm-LD1Inz&mime_type=video_mp4&qs=0&rc=aDtnaTxoNjk5NTs3OWRkOEBpM3N4c3c5cjl2NjMzbzczNUA0M182Y2JeNTYxMzMxNTY0YSNzYy4zMmRzbW1hLS1kMTFzcw%3D%3D&vvpl=1&l=20260130100207679710E3EB352423A61A&btag=e000b0000",
+            "https://api16-normal-no1a.tiktokv.eu/aweme/v1/play/?faid=1233&file_id=759a8a466468429686a3eef99fbd687e&is_play_url=1&item_id=7562614517243448598&line=0&signaturev3=dmlkZW9faWQ7ZmlsZV9pZDtpdGVtX2lkLjMzNDc3YmQ3Y2JiYTAwZWUxMmRjMDQxNmE5ZDAyZDAy&source=SEARCH&video_id=v24044gl0000d3psp6vog65t6p1ufpv0"
+          ]
+        },
+        "width": 360
+      }
+    }
+  ]
+}

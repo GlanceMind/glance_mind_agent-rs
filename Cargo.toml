@@ -1,0 +1,60 @@
+[package]
+name = "glance_mind_agent_rs"
+version = "0.1.0"
+edition = "2021"
+description = "Rust implementation of GlanceMind Agent - AI-powered social media comment analysis"
+authors = ["GlanceMind Team"]
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Database (Diesel with PostgreSQL)
+diesel = { version = "2.2", features = ["postgres", "r2d2", "chrono", "serde_json", "numeric", "64-column-tables"] }
+diesel_migrations = "2.2"
+bigdecimal = { version = "0.4", features = ["serde"] }
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+thiserror = "1"
+anyhow = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Environment
+dotenvy = "0.15"
+
+# Async trait
+async-trait = "0.1"
+
+# Redis
+redis = { version = "0.25", features = ["tokio-comp", "connection-manager"] }
+
+# Random (for weighted template selection, matching Python agent)
+rand = "0.8"
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[[bin]]
+name = "generate-fixtures"
+path = "src/bin/generate_fixtures.rs"
+
+[[bin]]
+name = "gm-agent"
+path = "src/bin/main.rs"

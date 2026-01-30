@@ -1,0 +1,6 @@
+# E2E Test Dependencies
+pytest>=7.0.0
+psycopg2-binary>=2.9.0
+redis>=4.0.0
+python-dotenv>=1.0.0
+tenacity>=8.0.0

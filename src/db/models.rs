@@ -1,0 +1,256 @@
+//! Database models
+//!
+//! Models match the production database schema.
+
+use bigdecimal::BigDecimal;
+use chrono::{NaiveDateTime, DateTime, Utc};
+use diesel::prelude::*;
+use serde::{Deserialize, Serialize};
+
+use super::schema::*;
+
+// ============================================================
+// Platform Models
+// ============================================================
+
+/// Platform record
+#[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
+#[diesel(table_name = gm_platforms)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct Platform {
+    pub id: i32,
+    pub name: String,
+    pub display_name: String,
+    pub is_active: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub base_url: String,
+    pub page_size: i32,
+    pub content_table_name: Option<String>,
+    pub comment_table_name: Option<String>,
+}
+
+// ============================================================
+// Campaign Models
+// ============================================================
+
+/// Campaign record for querying
+#[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
+#[diesel(table_name = gm_campaigns)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct Campaign {
+    pub id: i32,
+    pub user_id: i32,
+    pub name: String,
+    pub status: String,
+    pub platform_id: i32,
+    pub region_id: i32,
+    pub ai_model_id: i32,
+    pub target_audience: Option<String>,
+    pub product_prompt: String,
+    pub schedule_config: Option<serde_json::Value>,
+    pub enable_ai_refactor: Option<bool>,
+    pub persona_id: Option<i32>,
+    pub max_scan_count: Option<i32>,
+    pub budget_cap: Option<BigDecimal>,
+    pub end_date: Option<DateTime<Utc>>,
+    pub schedule_type: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub keyword: Option<String>,
+    pub social_group_id: Option<i32>,
+    pub call_to_action: Option<String>,
+    pub tone_of_voice: Option<String>,
+    pub additional_info: Option<String>,
+    pub total_scanned: i32,
+    pub auto_like: bool,
+    pub auto_follow: bool,
+    pub auto_dm: bool,
+    pub pending_consumption: BigDecimal,
+    pub actual_consumption: BigDecimal,
+    pub is_frozen: bool,
+    pub search_options: Option<serde_json::Value>,
+    pub auto_reply_comments: bool,
+    pub auto_reply_post: bool,
+    pub completed_reason: Option<String>,
+}
+
+// ============================================================
+// Campaign Template Models
+// ============================================================
+
+/// Campaign template record
+#[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
+#[diesel(table_name = gm_campaign_templates)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct CampaignTemplate {
+    pub id: i32,
+    pub campaign_id: i32,
+    pub weight: i32,
+    pub reply_prompt: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub dm_prompt: Option<String>,
+    pub reply_post_prompt: Option<String>,
+    pub name: Option<String>,
+}
+
+// ============================================================
+// Crawler Task Models
+// ============================================================
+
+/// Crawler task record for querying
+#[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
+#[diesel(table_name = gm_crawler_tasks)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct CrawlerTask {
+    pub id: i32,
+    pub campaign_id: i32,
+    pub keywords: Option<Vec<String>>,
+    pub max_count: i32,
+    pub process_count: i32,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub search_offset: i32,
+    pub search_limit: i32,
+    pub reserved_amount: Option<BigDecimal>,
+    pub actual_consumption: Option<BigDecimal>,
+    pub settled_at: Option<DateTime<Utc>>,
+}
+
+// ============================================================
+// Agent Video Models (TikTok)
+// ============================================================
+
+/// Agent video record for querying
+#[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
+#[diesel(table_name = gm_agent_videos)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct AgentVideo {
+    pub id: i32,
+    pub video_id: Option<String>,
+    pub author: Option<String>,
+    pub description: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub task_id: i32,
+    pub campaign_id: Option<i32>,
+    pub like_count: Option<i32>,
+    pub comment_count: Option<i32>,
+    pub share_count: Option<i32>,
+    pub play_count: Option<i32>,
+    pub publish_time: Option<i64>,
+    pub author_unique_id: Option<String>,
+    pub url: Option<String>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+/// New agent video for insertion
+#[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
+#[diesel(table_name = gm_agent_videos)]
+pub struct NewAgentVideo {
+    pub video_id: Option<String>,
+    pub author: Option<String>,
+    pub description: Option<String>,
+    pub task_id: i32,
+    pub campaign_id: Option<i32>,
+    pub like_count: Option<i32>,
+    pub comment_count: Option<i32>,
+    pub share_count: Option<i32>,
+    pub play_count: Option<i32>,
+    pub publish_time: Option<i64>,
+    pub author_unique_id: Option<String>,
+    pub url: Option<String>,
+}
+
+// ============================================================
+// Agent Comment Models (TikTok)
+// ============================================================
+
+/// Agent comment record for querying
+#[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
+#[diesel(table_name = gm_agent_comments)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct AgentComment {
+    pub id: i32,
+    pub video_db_id: i32,
+    pub comment_id: String,
+    pub user_nickname: Option<String>,
+    pub user_unique_id: Option<String>,
+    pub content: Option<String>,
+    pub reason: Option<String>,
+    pub suggested_reply: Option<String>,
+    pub create_time: Option<NaiveDateTime>,
+    pub created_at: DateTime<Utc>,
+    pub campaign_id: Option<i32>,
+    pub status: i16,
+    pub suggested_dm: Option<String>,
+    pub suggested_reply_post: Option<String>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+/// New agent comment for insertion
+#[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
+#[diesel(table_name = gm_agent_comments)]
+pub struct NewAgentComment {
+    pub video_db_id: i32,
+    pub comment_id: String,
+    pub user_nickname: Option<String>,
+    pub user_unique_id: Option<String>,
+    pub content: Option<String>,
+    pub campaign_id: Option<i32>,
+    pub status: i16,
+}
+
+/// Update agent comment (for AI analysis results)
+#[derive(Debug, Clone, AsChangeset)]
+#[diesel(table_name = gm_agent_comments)]
+pub struct UpdateAgentComment {
+    pub reason: Option<String>,
+    pub suggested_reply: Option<String>,
+    pub suggested_dm: Option<String>,
+    pub suggested_reply_post: Option<String>,
+    pub status: Option<i16>,
+    // Matching Python agent: updated_at = NOW() on update
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+// ============================================================
+// Status Constants
+// ============================================================
+
+/// Comment processing status
+pub mod comment_status {
+    pub const PENDING: i16 = 0;
+    pub const PROCESSING: i16 = 1;
+    pub const COMPLETED: i16 = 2;
+    pub const FAILED: i16 = 3;
+}
+
+/// Campaign status (string-based, matching production)
+pub mod campaign_status {
+    pub const DRAFT: &str = "DRAFT";
+    pub const ACTIVE: &str = "ACTIVE";
+    pub const PAUSED: &str = "PAUSED";
+    pub const COMPLETED: &str = "COMPLETED";
+    pub const STOPPING: &str = "STOPPING";
+}
+
+/// Crawler task status (string-based, matching production)
+pub mod task_status {
+    pub const INIT: &str = "init";
+    pub const PENDING: &str = "pending";
+    pub const RUNNING: &str = "running";
+    pub const COMPLETED: &str = "completed";
+    pub const FAILED: &str = "failed";
+}
+
+/// Platform IDs (must match database)
+pub mod platform_id {
+    pub const REDDIT: i32 = 1;
+    pub const TIKTOK: i32 = 2;
+    pub const FACEBOOK: i32 = 3;
+    pub const INSTAGRAM: i32 = 4;
+    pub const TWITTER: i32 = 5;
+    pub const YOUTUBE: i32 = 6;
+}
