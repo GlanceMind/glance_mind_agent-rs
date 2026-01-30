@@ -349,8 +349,9 @@ impl WorkerBuilder {
             .or_else(|| std::env::var("REDIS_URL").ok())
             .ok_or("redis_url is required")?;
         
+        // Default queue name must match scheduler's queue
         let queue_name = self.queue_name
-            .unwrap_or_else(|| "gm:agent:tasks".to_string());
+            .unwrap_or_else(|| "crawler:task_queue".to_string());
         
         let consumer = RedisTaskConsumer::new(&redis_url, &queue_name)
             .map_err(|e| format!("Failed to create Redis consumer: {}", e))?;

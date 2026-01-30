@@ -44,7 +44,7 @@ use glance_mind_agent_rs::{
     // Protocol types
     protocol_gen::Platform,
     // Domain errors
-    domain::errors::{GatewayResult, AiResult, AiError},
+    domain::errors::{GatewayResult, AiResult},
     // Port types
     ports::ai_analyzer::AnalysisContext,
 };
@@ -75,53 +75,73 @@ impl MockTikHubAdapter {
     fn new() -> Self {
         // Create a China Travel video
         let video = Content::new("tiktok", "china_travel_video_001")
-            .with_author("china_travel_guide", Some("中国旅游达人".to_string()))
+            .with_author("china_travel_guide")
+            .with_author_name("中国旅游达人")
             .with_description("探索中国最美的地方！从长城到桂林，带你看遍中国🇨🇳 #中国旅游 #travel #china".to_string())
-            .with_url(Some("https://tiktok.com/@china_guide/video/001".to_string()))
+            .with_url("https://tiktok.com/@china_guide/video/001")
             .with_engagement(Engagement {
                 likes: 50000,
                 comments: 1200,
                 shares: 3000,
                 views: 500000,
             })
-            .with_created_at(Some(1706000000));
+            .with_created_at(1706000000);
 
         // Create some comments
         let comments = vec![
             Comment::new("tiktok", "cmt_001", "china_travel_video_001")
-                .with_author("travel_fan_1", Some("旅游爱好者".to_string()))
+                .with_author("travel_fan_1")
+                .with_author_name("旅游爱好者")
                 .with_text("好想去长城啊！有推荐的旅行社吗？".to_string())
                 .with_likes(150)
-                .with_created_at(Some(1706001000)),
+                .with_created_at(1706001000),
             Comment::new("tiktok", "cmt_002", "china_travel_video_001")
-                .with_author("curious_tourist", Some("Curious Tourist".to_string()))
+                .with_author("curious_tourist")
+                .with_author_name("Curious Tourist")
                 .with_text("How much does a trip to China cost?".to_string())
                 .with_likes(85)
-                .with_created_at(Some(1706002000)),
+                .with_created_at(1706002000),
             Comment::new("tiktok", "cmt_003", "china_travel_video_001")
-                .with_author("food_lover_88", Some("吃货小王".to_string()))
+                .with_author("food_lover_88")
+                .with_author_name("吃货小王")
                 .with_text("北京烤鸭哪家最正宗？".to_string())
                 .with_likes(200)
-                .with_created_at(Some(1706003000)),
+                .with_created_at(1706003000),
         ];
 
         Self { video, comments }
     }
 }
 
+use glance_mind_agent_rs::{
+    SearchOptions, KeywordType,
+    ports::comment_gateway::{FetchCommentsOptions, FetchCommentsResult},
+};
+
 #[async_trait]
 impl ContentGateway for MockTikHubAdapter {
-    async fn search_content(
-        &self,
-        _platform: &str,
-        _keyword: &str,
-        _options: Option<glance_mind_agent_rs::SearchOptions>,
-    ) -> GatewayResult<Vec<Content>> {
+    async fn search(&self, _options: &SearchOptions) -> GatewayResult<Vec<Content>> {
         // Return only 1 video as requested
         Ok(vec![self.video.clone()])
     }
 
-    async fn get_content(&self, _platform: &str, content_id: &str) -> GatewayResult<Option<Content>> {
+    async fn fetch_by_keyword(
+        &self,
+        _keyword: &KeywordType,
+        _options: &SearchOptions,
+    ) -> GatewayResult<Vec<Content>> {
+        Ok(vec![self.video.clone()])
+    }
+
+    async fn fetch_user_content(
+        &self,
+        _user_id: &str,
+        _count: u32,
+    ) -> GatewayResult<Vec<Content>> {
+        Ok(vec![self.video.clone()])
+    }
+
+    async fn fetch_by_id(&self, content_id: &str) -> GatewayResult<Option<Content>> {
         if content_id == self.video.content_id {
             Ok(Some(self.video.clone()))
         } else {
@@ -129,29 +149,48 @@ impl ContentGateway for MockTikHubAdapter {
         }
     }
 
-    async fn health_check(&self) -> bool {
-        true
+    fn platform(&self) -> &str {
+        "tiktok"
     }
 }
 
 #[async_trait]
 impl CommentGateway for MockTikHubAdapter {
-    async fn get_comments(
+    async fn fetch_comments(
         &self,
-        _platform: &str,
         content_id: &str,
-        _max_count: Option<i32>,
-        _cursor: Option<i64>,
-    ) -> GatewayResult<(Vec<Comment>, Option<i64>)> {
+        _options: &FetchCommentsOptions,
+    ) -> GatewayResult<FetchCommentsResult> {
         if content_id == self.video.content_id {
-            Ok((self.comments.clone(), None))
+            Ok(FetchCommentsResult::new(self.comments.clone()))
         } else {
-            Ok((vec![], None))
+            Ok(FetchCommentsResult::empty())
         }
     }
 
-    async fn health_check(&self) -> bool {
-        true
+    async fn fetch_all_comments(
+        &self,
+        content_id: &str,
+        _max_count: u32,
+    ) -> GatewayResult<Vec<Comment>> {
+        if content_id == self.video.content_id {
+            Ok(self.comments.clone())
+        } else {
+            Ok(vec![])
+        }
+    }
+
+    async fn fetch_replies(
+        &self,
+        _content_id: &str,
+        _comment_id: &str,
+        _options: &FetchCommentsOptions,
+    ) -> GatewayResult<Vec<Comment>> {
+        Ok(vec![])
+    }
+
+    fn platform(&self) -> &str {
+        "tiktok"
     }
 }
 
@@ -176,9 +215,7 @@ impl AiAnalyzer for AlwaysOkAiAnalyzer {
             .with_dm("OK - 私信")
             .with_post_reply("OK - 帖子回复")
             .with_reason("统一回复测试")
-            .with_confidence(1.0)
-            .with_tokens(10)
-            .with_model("mock-always-ok"))
+            .with_model_info("mock-always-ok", 10))
     }
 
     async fn analyze_batch(
@@ -297,8 +334,8 @@ async fn check_test_infrastructure() -> bool {
         return false;
     }
 
-    // Check Redis
-    let redis_ok = RedisTaskConsumer::new(TEST_REDIS_URL, TEST_QUEUE_NAME).is_ok();
+    // Check Redis - just verify client can be created (actual connection tested async)
+    let redis_ok = redis::Client::open(TEST_REDIS_URL).is_ok();
     if !redis_ok {
         eprintln!("Redis not available at {}", TEST_REDIS_URL);
         return false;
@@ -561,9 +598,10 @@ async fn test_redis_task_queue_integration() {
     // Initialize platform registry
     init_global_registry(PlatformRegistry::with_defaults());
 
-    // Create Redis consumer
-    let consumer = RedisTaskConsumer::new(TEST_REDIS_URL, TEST_QUEUE_NAME)
+    // Create Redis consumer and initialize connection
+    let mut consumer = RedisTaskConsumer::new(TEST_REDIS_URL, TEST_QUEUE_NAME)
         .expect("Failed to create Redis consumer");
+    consumer.init().await.expect("Failed to initialize Redis connection");
 
     // Create a test task (simulating scheduler)
     let task = CrawlerTaskBuilder::new(TEST_CAMPAIGN_ID as i64)

@@ -6,9 +6,9 @@
 //! Task structures are defined in the protocol module (from glance_mind_protocol).
 //! Platform mappings are loaded from the global registry (initialized at startup).
 
-use redis::{AsyncCommands, Client, aio::MultiplexedConnection};
+use redis::{AsyncCommands, Client, aio::ConnectionManager};
 use serde::{Deserialize, Serialize};
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::config::platform::{global_registry, PlatformLookup};
 use crate::domain::errors::{QueueError, QueueResult};
@@ -18,8 +18,11 @@ use crate::protocol_gen::{
 };
 
 /// Redis task consumer for the agent
+/// 
+/// Uses ConnectionManager for automatic reconnection on connection failures.
 pub struct RedisTaskConsumer {
     client: Client,
+    conn_manager: Option<ConnectionManager>,
     queue_name: String,
     result_queue: String,
     timeout_secs: u64,
@@ -33,6 +36,7 @@ impl RedisTaskConsumer {
         
         Ok(Self {
             client,
+            conn_manager: None,
             queue_name: queue_name.to_string(),
             result_queue: format!("{}_results", queue_name),
             timeout_secs: 30,
@@ -44,8 +48,9 @@ impl RedisTaskConsumer {
         let redis_url = std::env::var("REDIS_URL")
             .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
         
+        // Default queue name must match scheduler's queue: crawler:task_queue
         let queue_name = std::env::var("AGENT_QUEUE_NAME")
-            .unwrap_or_else(|_| "gm:agent:tasks".to_string());
+            .unwrap_or_else(|_| "crawler:task_queue".to_string());
         
         Self::new(&redis_url, &queue_name)
     }
@@ -55,13 +60,25 @@ impl RedisTaskConsumer {
         self.timeout_secs = secs;
         self
     }
-
-    /// Get a connection
-    async fn get_conn(&self) -> QueueResult<MultiplexedConnection> {
-        self.client
-            .get_multiplexed_async_connection()
+    
+    /// Initialize the connection manager (call once before using)
+    /// 
+    /// ConnectionManager provides automatic reconnection on failures.
+    pub async fn init(&mut self) -> QueueResult<()> {
+        info!("Initializing Redis connection manager...");
+        let manager = ConnectionManager::new(self.client.clone())
             .await
-            .map_err(|e| QueueError::Connection(e.to_string()))
+            .map_err(|e| QueueError::Connection(format!("Failed to create connection manager: {}", e)))?;
+        self.conn_manager = Some(manager);
+        info!("Redis connection manager initialized successfully");
+        Ok(())
+    }
+
+    /// Get a connection (uses ConnectionManager with auto-reconnect)
+    async fn get_conn(&self) -> QueueResult<ConnectionManager> {
+        self.conn_manager
+            .clone()
+            .ok_or_else(|| QueueError::Connection("Connection manager not initialized. Call init() first.".to_string()))
     }
 
     /// Consume a task from the queue (blocking)

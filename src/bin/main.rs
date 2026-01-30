@@ -143,8 +143,12 @@ async fn main() -> anyhow::Result<()> {
 
     // Create Redis task consumer
     info!("Connecting to Redis...");
-    let task_consumer = RedisTaskConsumer::new(&cli.redis_url, &cli.queue_name)
+    let mut task_consumer = RedisTaskConsumer::new(&cli.redis_url, &cli.queue_name)
         .map_err(|e| anyhow::anyhow!("Failed to create Redis consumer: {}", e))?;
+    
+    // Initialize the connection manager (required before use)
+    task_consumer.init().await
+        .map_err(|e| anyhow::anyhow!("Failed to initialize Redis connection: {}", e))?;
     
     let task_consumer = Arc::new(task_consumer);
 
@@ -186,12 +190,20 @@ async fn run_health_check(redis_url: &str, database_url: &str) -> anyhow::Result
 
     // Check Redis
     info!("  Checking Redis...");
-    let consumer = RedisTaskConsumer::new(redis_url, "health_check")?;
-    if consumer.health_check().await {
-        info!("  ✅ Redis: OK");
-    } else {
-        error!("  ❌ Redis: Failed");
-        return Err(anyhow::anyhow!("Redis health check failed"));
+    let mut consumer = RedisTaskConsumer::new(redis_url, "health_check")?;
+    match consumer.init().await {
+        Ok(_) => {
+            if consumer.health_check().await {
+                info!("  ✅ Redis: OK");
+            } else {
+                error!("  ❌ Redis: Failed (health check)");
+                return Err(anyhow::anyhow!("Redis health check failed"));
+            }
+        }
+        Err(e) => {
+            error!("  ❌ Redis: Failed to connect - {}", e);
+            return Err(anyhow::anyhow!("Redis connection failed: {}", e));
+        }
     }
 
     // Check Database
