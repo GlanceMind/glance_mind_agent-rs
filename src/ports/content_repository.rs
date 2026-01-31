@@ -2,8 +2,8 @@
 
 use async_trait::async_trait;
 
-use crate::domain::{Content, Comment, ReplySuggestion};
 use crate::domain::errors::DbResult;
+use crate::domain::{Comment, Content, ReplySuggestion};
 
 /// Result from content save operation (matching Python agent's ON CONFLICT behavior)
 #[derive(Debug, Clone)]
@@ -25,23 +25,37 @@ pub trait ContentRepository: Send + Sync {
     async fn content_exists(&self, platform: &str, content_id: &str) -> DbResult<bool>;
 
     /// Get content by platform content ID
-    async fn get_content(&self, platform: &str, content_id: &str) -> DbResult<Option<StoredContent>>;
+    async fn get_content(
+        &self,
+        platform: &str,
+        content_id: &str,
+    ) -> DbResult<Option<StoredContent>>;
 
     /// Get content by internal database ID
     async fn get_content_by_id(&self, id: i32) -> DbResult<Option<StoredContent>>;
 
     /// Save content with ON CONFLICT handling (matching Python agent's atomic upsert)
-    /// 
+    ///
     /// Uses ON CONFLICT (task_id, video_id) DO UPDATE to:
     /// - Return existing record ID if already exists
     /// - Insert new record if not exists
     /// - Returns ContentSaveResult with is_new flag to indicate if this was a new insert
-    /// 
+    ///
     /// This matches Python agent's behavior where only new videos trigger progress updates.
-    async fn save_content(&self, content: &Content, campaign_id: Option<i32>, task_id: Option<i32>) -> DbResult<ContentSaveResult>;
+    async fn save_content(
+        &self,
+        content: &Content,
+        campaign_id: Option<i32>,
+        task_id: Option<i32>,
+    ) -> DbResult<ContentSaveResult>;
 
     /// Save multiple content items in batch
-    async fn save_contents(&self, contents: &[Content], campaign_id: Option<i32>, task_id: Option<i32>) -> DbResult<Vec<ContentSaveResult>>;
+    async fn save_contents(
+        &self,
+        contents: &[Content],
+        campaign_id: Option<i32>,
+        task_id: Option<i32>,
+    ) -> DbResult<Vec<ContentSaveResult>>;
 
     /// Update content engagement metrics
     async fn update_content_engagement(
@@ -61,7 +75,11 @@ pub trait ContentRepository: Send + Sync {
     async fn comment_exists(&self, platform: &str, comment_id: &str) -> DbResult<bool>;
 
     /// Get comment by platform comment ID
-    async fn get_comment(&self, platform: &str, comment_id: &str) -> DbResult<Option<StoredComment>>;
+    async fn get_comment(
+        &self,
+        platform: &str,
+        comment_id: &str,
+    ) -> DbResult<Option<StoredComment>>;
 
     /// Get comment by internal database ID
     async fn get_comment_by_id(&self, id: i32) -> DbResult<Option<StoredComment>>;
@@ -73,7 +91,11 @@ pub trait ContentRepository: Send + Sync {
     async fn save_comments(&self, comments: &[Comment], content_db_id: i32) -> DbResult<Vec<i32>>;
 
     /// Get pending comments for a campaign
-    async fn get_pending_comments(&self, campaign_id: i32, limit: i32) -> DbResult<Vec<StoredComment>>;
+    async fn get_pending_comments(
+        &self,
+        campaign_id: i32,
+        limit: i32,
+    ) -> DbResult<Vec<StoredComment>>;
 
     /// Update comment status
     async fn update_comment_status(&self, id: i32, status: CommentStatus) -> DbResult<()>;
@@ -83,12 +105,12 @@ pub trait ContentRepository: Send + Sync {
     // ============================================================
 
     /// Save comment with AI analysis in one operation (matching Python agent's save_comments_and_analysis)
-    /// 
+    ///
     /// This method:
     /// 1. Checks if comment already exists (via video_db_id + comment_id)
     /// 2. If exists, updates the AI analysis fields
     /// 3. If not exists, inserts new record with comment data and AI analysis
-    /// 
+    ///
     /// This matches Python agent's behavior of only saving comments that have AI suggestions.
     async fn save_comment_with_analysis(
         &self,
@@ -115,37 +137,37 @@ pub trait ContentRepository: Send + Sync {
 pub struct StoredContent {
     /// Database ID
     pub id: i32,
-    
+
     /// Platform ID (from database)
     pub platform_id: i32,
-    
+
     /// Platform content ID
     pub content_id: String,
-    
+
     /// Author username
     pub author_unique_id: Option<String>,
-    
+
     /// Author display name
     pub author_nickname: Option<String>,
-    
+
     /// Content description
     pub description: Option<String>,
-    
+
     /// Content URL
     pub content_url: Option<String>,
-    
+
     /// Engagement metrics
     pub likes: Option<i64>,
     pub comments: Option<i64>,
     pub shares: Option<i64>,
     pub views: Option<i64>,
-    
+
     /// Content creation timestamp
     pub content_created_at: Option<i64>,
-    
+
     /// Raw platform data
     pub raw_data: Option<serde_json::Value>,
-    
+
     /// Associated campaign ID
     pub campaign_id: Option<i32>,
 }
@@ -177,46 +199,46 @@ impl StoredContent {
 pub struct StoredComment {
     /// Database ID
     pub id: i32,
-    
+
     /// Platform ID
     pub platform_id: i32,
-    
+
     /// Content database ID
     pub content_id: i32,
-    
+
     /// Platform comment ID
     pub comment_id: String,
-    
+
     /// Parent comment ID
     pub parent_comment_id: Option<String>,
-    
+
     /// Author user ID
     pub author_uid: Option<String>,
-    
+
     /// Author username
     pub author_unique_id: Option<String>,
-    
+
     /// Author display name
     pub author_nickname: Option<String>,
-    
+
     /// Comment text
     pub comment_text: Option<String>,
-    
+
     /// Like count
     pub likes: Option<i64>,
-    
+
     /// Reply count
     pub reply_count: Option<i32>,
-    
+
     /// Comment creation timestamp
     pub comment_created_at: Option<i64>,
-    
+
     /// Whether this is a reply
     pub is_reply: bool,
-    
+
     /// Raw platform data
     pub raw_data: Option<serde_json::Value>,
-    
+
     /// Processing status
     pub status: i16,
 }
@@ -248,28 +270,28 @@ impl StoredComment {
 pub struct StoredAnalysis {
     /// Database ID
     pub id: i32,
-    
+
     /// Comment database ID
     pub comment_id: i32,
-    
+
     /// Campaign ID
     pub campaign_id: i32,
-    
+
     /// Suggested reply text
     pub suggested_reply: Option<String>,
-    
+
     /// Suggested DM text
     pub suggested_dm: Option<String>,
-    
+
     /// Suggested post reply
     pub suggested_reply_post: Option<String>,
-    
+
     /// Reason/explanation
     pub reason: Option<String>,
-    
+
     /// Tokens used
     pub tokens_used: Option<i32>,
-    
+
     /// Model name
     pub model_name: Option<String>,
 }

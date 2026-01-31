@@ -2,8 +2,8 @@
 
 use async_trait::async_trait;
 
-use crate::domain::{Comment, Content, ReplySuggestion};
 use crate::domain::errors::AiResult;
+use crate::domain::{Comment, Content, ReplySuggestion};
 
 /// Port for AI-powered comment analysis and reply generation
 #[async_trait]
@@ -52,31 +52,31 @@ pub trait AiAnalyzer: Send + Sync {
 pub struct AnalysisContext {
     /// Product/service description
     pub product_prompt: Option<String>,
-    
+
     /// Target audience description
     pub target_audience: Option<String>,
-    
+
     /// Reply strategy instructions
     pub reply_strategy: Option<String>,
-    
+
     /// DM strategy instructions
     pub dm_strategy: Option<String>,
-    
+
     /// Reply post strategy instructions
     pub reply_post_strategy: Option<String>,
-    
+
     /// Brand voice/tone guidelines
     pub brand_voice: Option<String>,
-    
+
     /// Language preference for replies
     pub preferred_language: Option<String>,
-    
+
     /// Maximum reply length
     pub max_reply_length: Option<i32>,
-    
+
     /// Whether to generate DM suggestions
     pub generate_dm: bool,
-    
+
     /// Whether to generate post reply suggestions
     pub generate_post_reply: bool,
 }
@@ -170,10 +170,10 @@ impl AnalysisContext {
 pub struct AnalysisRequest {
     /// Comment to analyze
     pub comment: Comment,
-    
+
     /// Content the comment belongs to
     pub content: Content,
-    
+
     /// Campaign ID for tracking
     pub campaign_id: i32,
 }
@@ -194,19 +194,19 @@ impl AnalysisRequest {
 pub struct AiUsageStats {
     /// Total tokens used in prompts
     pub prompt_tokens: i32,
-    
+
     /// Total tokens used in completions
     pub completion_tokens: i32,
-    
+
     /// Total tokens used
     pub total_tokens: i32,
-    
+
     /// Number of requests made
     pub request_count: i32,
-    
+
     /// Number of successful requests
     pub success_count: i32,
-    
+
     /// Number of failed requests
     pub error_count: i32,
 }

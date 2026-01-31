@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, Semaphore, SemaphorePermit, OwnedSemaphorePermit};
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, SemaphorePermit};
 use tracing::{debug, trace};
 
 /// Rate limiter for API calls with both concurrency and interval control
@@ -50,22 +50,26 @@ impl RateLimiter {
         Self {
             semaphore: Arc::new(Semaphore::new(concurrency)),
             min_interval_ms,
-            last_call: Mutex::new(Instant::now().checked_sub(Duration::from_millis(min_interval_ms)).unwrap_or_else(Instant::now)),
+            last_call: Mutex::new(
+                Instant::now()
+                    .checked_sub(Duration::from_millis(min_interval_ms))
+                    .unwrap_or_else(Instant::now),
+            ),
             name: "RateLimiter".to_string(),
         }
     }
-    
+
     /// Create a named rate limiter (for better logging)
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = name.into();
         self
     }
-    
+
     /// Get the current number of available permits
     pub fn available_permits(&self) -> usize {
         self.semaphore.available_permits()
     }
-    
+
     /// Acquire a permit, waiting if necessary
     ///
     /// This method will:
@@ -74,12 +78,12 @@ impl RateLimiter {
     pub async fn acquire(&self) -> SemaphorePermit<'_> {
         // First, acquire the semaphore permit
         let permit = self.semaphore.acquire().await.expect("Semaphore closed");
-        
+
         // Then, enforce minimum interval
         if self.min_interval_ms > 0 {
             let mut last = self.last_call.lock().await;
             let elapsed = last.elapsed().as_millis() as u64;
-            
+
             if elapsed < self.min_interval_ms {
                 let wait_ms = self.min_interval_ms - elapsed;
                 trace!(
@@ -89,43 +93,48 @@ impl RateLimiter {
                 );
                 tokio::time::sleep(Duration::from_millis(wait_ms)).await;
             }
-            
+
             *last = Instant::now();
         }
-        
+
         debug!(
             name = %self.name,
             available = self.semaphore.available_permits(),
             "Rate limiter: permit acquired"
         );
-        
+
         permit
     }
-    
+
     /// Try to acquire a permit without waiting
     ///
     /// Returns None if no permit is available immediately
     pub fn try_acquire(&self) -> Option<SemaphorePermit<'_>> {
         self.semaphore.try_acquire().ok()
     }
-    
+
     /// Acquire an owned permit (can be moved across tasks)
     pub async fn acquire_owned(self: &Arc<Self>) -> OwnedSemaphorePermit {
-        let permit = self.semaphore.clone().acquire_owned().await.expect("Semaphore closed");
-        
+        let permit = self
+            .semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("Semaphore closed");
+
         // Enforce minimum interval
         if self.min_interval_ms > 0 {
             let mut last = self.last_call.lock().await;
             let elapsed = last.elapsed().as_millis() as u64;
-            
+
             if elapsed < self.min_interval_ms {
                 let wait_ms = self.min_interval_ms - elapsed;
                 tokio::time::sleep(Duration::from_millis(wait_ms)).await;
             }
-            
+
             *last = Instant::now();
         }
-        
+
         permit
     }
 }
@@ -153,19 +162,19 @@ impl RateLimiter {
     pub fn ai_default() -> Self {
         Self::new(20, 50).with_name("AI")
     }
-    
+
     /// Create an AI rate limiter from configuration
     pub fn ai_from_config(concurrency: usize, min_interval_ms: u64) -> Self {
         Self::new(concurrency, min_interval_ms).with_name("AI")
     }
-    
+
     /// Create a TikHub rate limiter with default settings
     ///
     /// Default: 3 concurrent calls, 500ms minimum interval
     pub fn tikhub_default() -> Self {
         Self::new(3, 500).with_name("TikHub")
     }
-    
+
     /// Create a TikHub rate limiter from configuration
     pub fn tikhub_from_config(concurrency: usize, min_interval_ms: u64) -> Self {
         Self::new(concurrency, min_interval_ms).with_name("TikHub")
@@ -191,7 +200,7 @@ impl GlobalRateLimiters {
             tikhub: Arc::new(TikHubRateLimiter::tikhub_default()),
         }
     }
-    
+
     /// Create global rate limiters from concurrency config
     pub fn from_config(config: &crate::domain::ConcurrencyConfig) -> Self {
         Self {
@@ -226,50 +235,54 @@ impl std::fmt::Debug for GlobalRateLimiters {
 mod tests {
     use super::*;
     use std::time::Duration;
-    
+
     #[tokio::test]
     async fn test_rate_limiter_concurrency() {
         let limiter = Arc::new(RateLimiter::new(2, 0));
-        
+
         // Acquire 2 permits
         let p1 = limiter.acquire().await;
         let p2 = limiter.acquire().await;
-        
+
         // Third should not be available
         assert!(limiter.try_acquire().is_none());
-        
+
         // Release one
         drop(p1);
-        
+
         // Now one should be available
         assert!(limiter.try_acquire().is_some());
-        
+
         drop(p2);
     }
-    
+
     #[tokio::test]
     async fn test_rate_limiter_interval() {
         let limiter = RateLimiter::new(10, 100); // 100ms interval
-        
+
         let start = Instant::now();
-        
+
         // First call should be immediate
         let _p1 = limiter.acquire().await;
         drop(_p1);
-        
+
         // Second call should wait ~100ms
         let _p2 = limiter.acquire().await;
-        
+
         let elapsed = start.elapsed();
-        assert!(elapsed >= Duration::from_millis(90), "Elapsed: {:?}", elapsed);
+        assert!(
+            elapsed >= Duration::from_millis(90),
+            "Elapsed: {:?}",
+            elapsed
+        );
     }
-    
+
     #[tokio::test]
     async fn test_ai_rate_limiter() {
         let limiter = RateLimiter::ai_default();
         assert_eq!(limiter.semaphore.available_permits(), 20);
     }
-    
+
     #[tokio::test]
     async fn test_global_rate_limiters() {
         let config = crate::domain::ConcurrencyConfig {
@@ -278,9 +291,9 @@ mod tests {
             tikhub_concurrency: 5,
             ..Default::default()
         };
-        
+
         let limiters = GlobalRateLimiters::from_config(&config);
-        
+
         assert_eq!(limiters.ai.available_permits(), 10);
         assert_eq!(limiters.tikhub.available_permits(), 5);
     }

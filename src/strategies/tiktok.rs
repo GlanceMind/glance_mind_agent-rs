@@ -2,7 +2,7 @@
 //!
 //! Handles TikTok-specific keyword parsing, search options, and prompt formatting.
 
-use crate::domain::{Content, Comment, KeywordType, SearchOptions, TaskConfig};
+use crate::domain::{Comment, Content, KeywordType, SearchOptions, TaskConfig};
 use crate::strategies::PlatformStrategy;
 
 /// TikTok platform strategy implementation
@@ -81,8 +81,8 @@ impl PlatformStrategy for TikTokStrategy {
 
     fn build_search_options(&self, config: &TaskConfig, keyword: &KeywordType) -> SearchOptions {
         let query = keyword.value().to_string();
-        
-        let mut options = SearchOptions::new(query);
+
+        let mut options = SearchOptions::new(query).with_platform(self.name());
 
         // Set region from config or use default
         if let Some(ref region) = config.region {
@@ -92,17 +92,14 @@ impl PlatformStrategy for TikTokStrategy {
         }
 
         // Set count from config
-        let count = config
-            .max_videos
-            .map(|v| v.min(20) as u32)
-            .unwrap_or(10);
+        let count = config.max_videos.map(|v| v.min(20) as u32).unwrap_or(10);
         options = options.with_count(count);
 
         // Set sort type if specified (0=relevance, 1=most_liked)
         if let Some(sort) = config.sort_type {
             options.sort_type = Some(sort);
         }
-        
+
         // Set publish time filter if specified (0=all, 1=day, 7=week, 30=month, 90=3months, 180=6months)
         if let Some(publish_time) = config.publish_time {
             options.publish_time = Some(publish_time);
@@ -232,7 +229,7 @@ mod tests {
     #[test]
     fn test_parse_unique_id() {
         let strategy = TikTokStrategy::new();
-        
+
         // With prefix
         let keyword = strategy.parse_keyword("tiktok_unique_id:@testuser");
         assert!(matches!(keyword, KeywordType::UserId(_)));
@@ -255,7 +252,7 @@ mod tests {
     #[test]
     fn test_parse_video_id() {
         let strategy = TikTokStrategy::new();
-        
+
         // With prefix
         let keyword = strategy.parse_keyword("tiktok_video_id:7123456789012345678");
         assert!(matches!(keyword, KeywordType::ContentId(_)));
@@ -301,18 +298,17 @@ mod tests {
     #[test]
     fn test_format_analysis_prompt() {
         let strategy = TikTokStrategy::new();
-        
+
         let content = Content::new("tiktok", "123456")
             .with_author("testuser")
             .with_description("Test video");
-        
-        let comments = vec![
-            Comment::new("tiktok", "c1", "123456")
-                .with_author("commenter1")
-                .with_text("Great video!"),
-        ];
 
-        let prompt = strategy.format_analysis_prompt(&content, &comments, "We sell fitness equipment");
+        let comments = vec![Comment::new("tiktok", "c1", "123456")
+            .with_author("commenter1")
+            .with_text("Great video!")];
+
+        let prompt =
+            strategy.format_analysis_prompt(&content, &comments, "We sell fitness equipment");
 
         assert!(prompt.contains("TikTok Video Information"));
         assert!(prompt.contains("@testuser"));
@@ -323,7 +319,7 @@ mod tests {
     #[test]
     fn test_is_user_keyword() {
         let strategy = TikTokStrategy::new();
-        
+
         assert!(strategy.is_user_keyword("@username"));
         assert!(strategy.is_user_keyword("tiktok_unique_id:user"));
         assert!(strategy.is_user_keyword("tiktok_sec_user_id:xxx"));
@@ -334,7 +330,7 @@ mod tests {
     #[test]
     fn test_is_content_keyword() {
         let strategy = TikTokStrategy::new();
-        
+
         assert!(strategy.is_content_keyword("tiktok_video_id:123"));
         assert!(strategy.is_content_keyword("7123456789012345678"));
         assert!(!strategy.is_content_keyword("@username"));

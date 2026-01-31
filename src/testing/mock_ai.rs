@@ -4,9 +4,9 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-use crate::domain::{Comment, Content, ReplySuggestion, CommentIntent, Sentiment};
 use crate::domain::errors::{AiError, AiResult};
-use crate::ports::{AiAnalyzer, ai_analyzer::AnalysisContext};
+use crate::domain::{Comment, CommentIntent, Content, ReplySuggestion, Sentiment};
+use crate::ports::{ai_analyzer::AnalysisContext, AiAnalyzer};
 
 /// Mock AI analyzer for testing
 pub struct MockAiAnalyzer {
@@ -128,8 +128,13 @@ impl MockAiAnalyzer {
         match mode.as_ref() {
             Some(MockAiError::Network) => Err(AiError::Network("Mock network error".into())),
             Some(MockAiError::RateLimit) => Err(AiError::RateLimited),
-            Some(MockAiError::TokenLimit) => Err(AiError::TokenLimitExceeded { used: 10000, limit: 8000 }),
-            Some(MockAiError::InvalidInput) => Err(AiError::InvalidInput("Mock invalid input".into())),
+            Some(MockAiError::TokenLimit) => Err(AiError::TokenLimitExceeded {
+                used: 10000,
+                limit: 8000,
+            }),
+            Some(MockAiError::InvalidInput) => {
+                Err(AiError::InvalidInput("Mock invalid input".into()))
+            }
             None => Ok(()),
         }
     }
@@ -143,18 +148,12 @@ impl MockAiAnalyzer {
 
         let mode = self.mode.read().unwrap();
         match &*mode {
-            MockAiMode::Simple => {
-                ReplySuggestion::new(&comment.comment_id)
-                    .with_reply("Thank you for your comment!")
-                    .with_reason("Generic response")
-                    .with_model_info("mock-simple", 50)
-            }
-            MockAiMode::Smart => {
-                self.generate_smart_response(comment)
-            }
-            MockAiMode::Empty => {
-                ReplySuggestion::new(&comment.comment_id)
-            }
+            MockAiMode::Simple => ReplySuggestion::new(&comment.comment_id)
+                .with_reply("Thank you for your comment!")
+                .with_reason("Generic response")
+                .with_model_info("mock-simple", 50),
+            MockAiMode::Smart => self.generate_smart_response(comment),
+            MockAiMode::Empty => ReplySuggestion::new(&comment.comment_id),
             MockAiMode::Template(template) => {
                 let reply = template
                     .replace("{author}", &comment.author)
@@ -168,27 +167,47 @@ impl MockAiAnalyzer {
 
     fn generate_smart_response(&self, comment: &Comment) -> ReplySuggestion {
         let text_lower = comment.text.to_lowercase();
-        
+
         // Detect intent
-        let (intent, sentiment, reply) = if text_lower.contains('?') || text_lower.contains("how") || text_lower.contains("what") {
+        let (intent, sentiment, reply) = if text_lower.contains('?')
+            || text_lower.contains("how")
+            || text_lower.contains("what")
+        {
             (
                 CommentIntent::Question,
                 Sentiment::Neutral,
-                format!("Great question! Let me help you with that. {}", self.answer_question(&text_lower)),
+                format!(
+                    "Great question! Let me help you with that. {}",
+                    self.answer_question(&text_lower)
+                ),
             )
-        } else if text_lower.contains("buy") || text_lower.contains("price") || text_lower.contains("purchase") {
+        } else if text_lower.contains("buy")
+            || text_lower.contains("price")
+            || text_lower.contains("purchase")
+        {
             (
                 CommentIntent::PurchaseIntent,
                 Sentiment::Positive,
-                "Thanks for your interest! Check out our link in bio for more details and pricing.".to_string(),
+                "Thanks for your interest! Check out our link in bio for more details and pricing."
+                    .to_string(),
             )
-        } else if text_lower.contains("love") || text_lower.contains("great") || text_lower.contains("amazing") || text_lower.contains("awesome") {
+        } else if text_lower.contains("love")
+            || text_lower.contains("great")
+            || text_lower.contains("amazing")
+            || text_lower.contains("awesome")
+        {
             (
                 CommentIntent::Praise,
                 Sentiment::Positive,
-                format!("Thank you so much, @{}! We really appreciate your support! 🙏", comment.author),
+                format!(
+                    "Thank you so much, @{}! We really appreciate your support! 🙏",
+                    comment.author
+                ),
             )
-        } else if text_lower.contains("bad") || text_lower.contains("hate") || text_lower.contains("terrible") {
+        } else if text_lower.contains("bad")
+            || text_lower.contains("hate")
+            || text_lower.contains("terrible")
+        {
             (
                 CommentIntent::Complaint,
                 Sentiment::Negative,
@@ -206,9 +225,11 @@ impl MockAiAnalyzer {
             .with_reply(reply)
             .with_intent(intent)
             .with_sentiment(sentiment)
-            .with_reason(format!("Detected {} intent with {} sentiment", 
+            .with_reason(format!(
+                "Detected {} intent with {} sentiment",
                 format!("{:?}", intent).to_lowercase(),
-                format!("{:?}", sentiment).to_lowercase()))
+                format!("{:?}", sentiment).to_lowercase()
+            ))
             .with_model_info("mock-smart", 100)
     }
 
@@ -240,7 +261,7 @@ impl AiAnalyzer for MockAiAnalyzer {
         _context: &AnalysisContext,
     ) -> AiResult<ReplySuggestion> {
         self.check_error()?;
-        
+
         // Simulate delay
         let delay = *self.delay_ms.read().unwrap();
         if delay > 0 {
@@ -248,10 +269,10 @@ impl AiAnalyzer for MockAiAnalyzer {
         }
 
         self.track_call(vec![comment.comment_id.clone()], content.content_id.clone());
-        
+
         let response = self.generate_response(comment, content);
         self.add_tokens(response.tokens_used.unwrap_or(50));
-        
+
         Ok(response)
     }
 
@@ -299,13 +320,16 @@ mod tests {
     #[tokio::test]
     async fn test_mock_ai_simple() {
         let analyzer = MockAiAnalyzer::simple();
-        
+
         let content = Content::new("mock", "v123");
         let comment = Comment::new("mock", "c1", "v123").with_text("Hello!");
         let context = AnalysisContext::new();
 
-        let result = analyzer.analyze_comment(&comment, &content, &context).await.unwrap();
-        
+        let result = analyzer
+            .analyze_comment(&comment, &content, &context)
+            .await
+            .unwrap();
+
         assert!(result.reply_text.is_some());
         assert!(result.reply_text.unwrap().contains("Thank you"));
     }
@@ -313,13 +337,16 @@ mod tests {
     #[tokio::test]
     async fn test_mock_ai_smart_question() {
         let analyzer = MockAiAnalyzer::new();
-        
+
         let content = Content::new("mock", "v123");
         let comment = Comment::new("mock", "c1", "v123").with_text("How much does it cost?");
         let context = AnalysisContext::new();
 
-        let result = analyzer.analyze_comment(&comment, &content, &context).await.unwrap();
-        
+        let result = analyzer
+            .analyze_comment(&comment, &content, &context)
+            .await
+            .unwrap();
+
         assert_eq!(result.intent, Some(CommentIntent::Question));
         assert!(result.reply_text.unwrap().contains("question"));
     }
@@ -327,15 +354,18 @@ mod tests {
     #[tokio::test]
     async fn test_mock_ai_smart_praise() {
         let analyzer = MockAiAnalyzer::new();
-        
+
         let content = Content::new("mock", "v123");
         let comment = Comment::new("mock", "c1", "v123")
             .with_author("fan123")
             .with_text("This is amazing!");
         let context = AnalysisContext::new();
 
-        let result = analyzer.analyze_comment(&comment, &content, &context).await.unwrap();
-        
+        let result = analyzer
+            .analyze_comment(&comment, &content, &context)
+            .await
+            .unwrap();
+
         assert_eq!(result.intent, Some(CommentIntent::Praise));
         assert_eq!(result.sentiment, Some(Sentiment::Positive));
         assert!(result.reply_text.unwrap().contains("fan123"));
@@ -344,7 +374,7 @@ mod tests {
     #[tokio::test]
     async fn test_mock_ai_custom_response() {
         let analyzer = MockAiAnalyzer::new();
-        
+
         let custom = ReplySuggestion::new("c1")
             .with_reply("Custom response!")
             .with_intent(CommentIntent::PurchaseIntent);
@@ -354,8 +384,11 @@ mod tests {
         let comment = Comment::new("mock", "c1", "v123").with_text("Hello!");
         let context = AnalysisContext::new();
 
-        let result = analyzer.analyze_comment(&comment, &content, &context).await.unwrap();
-        
+        let result = analyzer
+            .analyze_comment(&comment, &content, &context)
+            .await
+            .unwrap();
+
         assert_eq!(result.reply_text, Some("Custom response!".to_string()));
         assert_eq!(result.intent, Some(CommentIntent::PurchaseIntent));
     }
@@ -377,7 +410,7 @@ mod tests {
     #[tokio::test]
     async fn test_mock_ai_batch() {
         let analyzer = MockAiAnalyzer::new();
-        
+
         let content = Content::new("mock", "v123");
         let comments = vec![
             Comment::new("mock", "c1", "v123").with_text("Great!"),
@@ -385,8 +418,11 @@ mod tests {
         ];
         let context = AnalysisContext::new();
 
-        let results = analyzer.analyze_batch(&comments, &content, &context).await.unwrap();
-        
+        let results = analyzer
+            .analyze_batch(&comments, &content, &context)
+            .await
+            .unwrap();
+
         assert_eq!(results.len(), 2);
         assert!(analyzer.get_total_tokens() > 0);
     }

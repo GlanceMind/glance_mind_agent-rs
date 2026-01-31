@@ -1,24 +1,24 @@
 //! Fixture Generator - Fetch real data from TikHub API and save as test fixtures
 
+use chrono::Utc;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::fs;
 use tracing::{info, warn};
-use chrono::Utc;
 
-use crate::tikhub::{TikHubClient, SearchParams, UserVideoParams};
+use super::{TikTokCommentsFixture, TikTokSearchFixture, TikTokUserVideosFixture};
 use crate::error::{Error, Result};
-use super::{TikTokSearchFixture, TikTokCommentsFixture, TikTokUserVideosFixture};
+use crate::tikhub::{SearchParams, TikHubClient, UserVideoParams};
 
 /// Fixture Generator
-/// 
+///
 /// Generates test fixtures by calling real TikHub API and saving responses.
-/// 
+///
 /// # Example
-/// 
+///
 /// ```no_run
 /// use glance_mind_agent_rs::fixtures::FixtureGenerator;
-/// 
+///
 /// #[tokio::main]
 /// async fn main() {
 ///     let generator = FixtureGenerator::from_env().unwrap();
@@ -43,20 +43,18 @@ impl FixtureGenerator {
     }
 
     /// Create a fixture generator from environment variables
-    /// 
+    ///
     /// Output directory defaults to `tests/fixtures/tiktok`
     pub fn from_env() -> Result<Self> {
-        let client = TikHubClient::from_env()
-            .map_err(|e| Error::Config(e.to_string()))?;
-        
+        let client = TikHubClient::from_env().map_err(|e| Error::Config(e.to_string()))?;
+
         Ok(Self::new(client, "tests/fixtures/tiktok"))
     }
 
     /// Create a fixture generator with custom output directory
     pub fn from_env_with_dir(output_dir: impl Into<PathBuf>) -> Result<Self> {
-        let client = TikHubClient::from_env()
-            .map_err(|e| Error::Config(e.to_string()))?;
-        
+        let client = TikHubClient::from_env().map_err(|e| Error::Config(e.to_string()))?;
+
         Ok(Self::new(client, output_dir))
     }
 
@@ -81,7 +79,7 @@ impl FixtureGenerator {
     }
 
     /// Generate a video search fixture
-    /// 
+    ///
     /// Calls TikHub search API and saves the response as a JSON fixture file.
     pub async fn generate_search_fixture(
         &self,
@@ -91,17 +89,24 @@ impl FixtureGenerator {
     ) -> Result<PathBuf> {
         self.ensure_dir().await?;
 
-        info!("🔍 Generating search fixture: keyword='{}', region={}, count={}", keyword, region, count);
+        info!(
+            "🔍 Generating search fixture: keyword='{}', region={}, count={}",
+            keyword, region, count
+        );
 
         let params = SearchParams::new(keyword)
             .with_region(region)
             .with_count(count);
 
-        let response = self.client.search_videos(&params).await
+        let response = self
+            .client
+            .search_videos(&params)
+            .await
             .map_err(|e| Error::Config(format!("TikHub API error: {}", e)))?;
 
         // Extract videos
-        let videos: Vec<serde_json::Value> = response.data
+        let videos: Vec<serde_json::Value> = response
+            .data
             .as_ref()
             .and_then(|d| d.search_item_list.as_ref())
             .map(|list| {
@@ -138,7 +143,7 @@ impl FixtureGenerator {
     }
 
     /// Generate a comments fixture for a video
-    /// 
+    ///
     /// Fetches all comments (up to max_count) with automatic pagination.
     pub async fn generate_comments_fixture(
         &self,
@@ -147,9 +152,15 @@ impl FixtureGenerator {
     ) -> Result<PathBuf> {
         self.ensure_dir().await?;
 
-        info!("💬 Generating comments fixture: aweme_id={}, max_count={}", aweme_id, max_count);
+        info!(
+            "💬 Generating comments fixture: aweme_id={}, max_count={}",
+            aweme_id, max_count
+        );
 
-        let comments = self.client.fetch_all_comments(aweme_id, max_count).await
+        let comments = self
+            .client
+            .fetch_all_comments(aweme_id, max_count)
+            .await
             .map_err(|e| Error::Config(format!("TikHub API error: {}", e)))?;
 
         info!("✅ Fetched {} comments", comments.len());
@@ -188,15 +199,22 @@ impl FixtureGenerator {
     ) -> Result<PathBuf> {
         self.ensure_dir().await?;
 
-        info!("👤 Generating user videos fixture: @{}, count={}", unique_id, count);
+        info!(
+            "👤 Generating user videos fixture: @{}, count={}",
+            unique_id, count
+        );
 
         let params = UserVideoParams::by_unique_id(unique_id).with_count(count);
 
-        let response = self.client.fetch_user_videos(&params).await
+        let response = self
+            .client
+            .fetch_user_videos(&params)
+            .await
             .map_err(|e| Error::Config(format!("TikHub API error: {}", e)))?;
 
         // Extract videos
-        let videos: Vec<serde_json::Value> = response.data
+        let videos: Vec<serde_json::Value> = response
+            .data
             .as_ref()
             .and_then(|d| d.aweme_list.as_ref())
             .map(|list| {
@@ -230,7 +248,7 @@ impl FixtureGenerator {
     }
 
     /// Generate a complete test dataset
-    /// 
+    ///
     /// This will:
     /// 1. Search for videos with multiple keywords
     /// 2. Fetch comments for some of those videos
@@ -239,11 +257,7 @@ impl FixtureGenerator {
         info!("🚀 Generating full TikTok test dataset...\n");
 
         // 1. Generate search fixtures
-        let keywords = vec![
-            ("travel", "US"),
-            ("cooking", "US"),
-            ("fitness", "GB"),
-        ];
+        let keywords = vec![("travel", "US"), ("cooking", "US"), ("fitness", "GB")];
 
         let mut video_ids = Vec::new();
 
@@ -251,7 +265,7 @@ impl FixtureGenerator {
             match self.generate_search_fixture(keyword, region, 5).await {
                 Ok(path) => {
                     info!("  ✓ Generated: {}\n", path.display());
-                    
+
                     // Extract some video IDs for comment fetching
                     if let Ok(content) = fs::read_to_string(&path).await {
                         if let Ok(fixture) = serde_json::from_str::<TikTokSearchFixture>(&content) {

@@ -1,8 +1,8 @@
 //! Test Fixtures - Pre-built test data for testing
 
-use crate::domain::{Content, Comment, Engagement};
-use crate::ports::prompt_repository::{CampaignConfig, CampaignStatus};
+use crate::domain::{Comment, Content, Engagement};
 use crate::ports::progress_tracker::{TaskInfo, TaskStatus};
+use crate::ports::prompt_repository::{CampaignConfig, CampaignStatus};
 
 /// Pre-built test fixtures
 #[derive(Debug, Clone)]
@@ -11,6 +11,24 @@ pub struct TestFixtures {
     comments: Vec<(String, Vec<Comment>)>,
     campaigns: Vec<CampaignConfig>,
     tasks: Vec<TaskInfo>,
+}
+
+impl Default for TestFixtures {
+    fn default() -> Self {
+        let mut fixtures = Self::empty();
+
+        // Add sample videos
+        fixtures.add_fitness_videos();
+        fixtures.add_cooking_videos();
+
+        // Add sample campaigns
+        fixtures.add_sample_campaigns();
+
+        // Add sample tasks
+        fixtures.add_sample_tasks();
+
+        fixtures
+    }
 }
 
 impl TestFixtures {
@@ -22,23 +40,6 @@ impl TestFixtures {
             campaigns: Vec::new(),
             tasks: Vec::new(),
         }
-    }
-
-    /// Create default test fixtures
-    pub fn default() -> Self {
-        let mut fixtures = Self::empty();
-        
-        // Add sample videos
-        fixtures.add_fitness_videos();
-        fixtures.add_cooking_videos();
-        
-        // Add sample campaigns
-        fixtures.add_sample_campaigns();
-        
-        // Add sample tasks
-        fixtures.add_sample_tasks();
-        
-        fixtures
     }
 
     /// Get all contents
@@ -96,7 +97,7 @@ impl TestFixtures {
                 views: 250000,
             })
             .with_created_at(1700000000);
-        
+
         let comments1 = vec![
             Comment::new("tiktok", "fc_001", "fitness_video_001")
                 .with_author("user123")
@@ -124,7 +125,7 @@ impl TestFixtures {
                 .with_text("Just did this with my kids! Great family workout 🏃‍♀️")
                 .with_likes(120),
         ];
-        
+
         self.add_content(content1);
         self.add_comments("fitness_video_001", comments1);
 
@@ -139,7 +140,7 @@ impl TestFixtures {
                 shares: 650,
                 views: 120000,
             });
-        
+
         let comments2 = vec![
             Comment::new("tiktok", "fc_006", "fitness_video_002")
                 .with_author("beginner_betty")
@@ -150,7 +151,7 @@ impl TestFixtures {
                 .with_text("How often should I do this workout?")
                 .with_likes(25),
         ];
-        
+
         self.add_content(content2);
         self.add_comments("fitness_video_002", comments2);
     }
@@ -166,7 +167,7 @@ impl TestFixtures {
                 shares: 3500,
                 views: 500000,
             });
-        
+
         let comments = vec![
             Comment::new("tiktok", "cc_001", "cooking_video_001")
                 .with_author("foodie_fan")
@@ -181,7 +182,7 @@ impl TestFixtures {
                 .with_text("Can you make a vegan version of this?")
                 .with_likes(45),
         ];
-        
+
         self.add_content(content);
         self.add_comments("cooking_video_001", comments);
     }
@@ -198,14 +199,16 @@ impl TestFixtures {
             product_prompt: Some(
                 "We are launching FitLife, a fitness tracking app that helps users \
                 track workouts, count calories, and achieve their fitness goals. \
-                The app is available on iOS and Android for $4.99/month.".to_string()
+                The app is available on iOS and Android for $4.99/month."
+                    .to_string(),
             ),
             reply_strategy: Some(
                 "Be friendly and helpful. Answer questions about fitness. \
-                When appropriate, mention our app as a solution.".to_string()
+                When appropriate, mention our app as a solution."
+                    .to_string(),
             ),
             dm_strategy: Some(
-                "Send a personalized DM offering a free trial of the app.".to_string()
+                "Send a personalized DM offering a free trial of the app.".to_string(),
             ),
             reply_post_strategy: None,
             max_comments: Some(1000),
@@ -222,11 +225,13 @@ impl TestFixtures {
             target_audience: Some("Home cooks and cooking enthusiasts".to_string()),
             product_prompt: Some(
                 "We sell premium kitchen tools including chef knives, cutting boards, \
-                and cookware sets. Quality guaranteed with free shipping over $50.".to_string()
+                and cookware sets. Quality guaranteed with free shipping over $50."
+                    .to_string(),
             ),
             reply_strategy: Some(
                 "Engage with cooking content. Share tips and recommend our products \
-                when relevant.".to_string()
+                when relevant."
+                    .to_string(),
             ),
             dm_strategy: None,
             reply_post_strategy: None,
@@ -328,30 +333,25 @@ impl TestScenarioBuilder {
                 shares: 50,
                 views: 10000,
             });
-        
+
         let comments: Vec<Comment> = comment_texts
             .iter()
             .enumerate()
             .map(|(i, text)| {
-                Comment::new("tiktok", &format!("{}_{}", content_id, i), content_id)
-                    .with_author(&format!("user_{}", i))
+                Comment::new("tiktok", format!("{}_{}", content_id, i), content_id)
+                    .with_author(format!("user_{}", i))
                     .with_text(*text)
                     .with_likes((i * 10) as i64)
             })
             .collect();
-        
+
         self.fixtures.add_content(content);
         self.fixtures.add_comments(content_id, comments);
         self
     }
 
     /// Add a campaign
-    pub fn with_campaign(
-        mut self,
-        id: i32,
-        name: &str,
-        product_prompt: &str,
-    ) -> Self {
+    pub fn with_campaign(mut self, id: i32, name: &str, product_prompt: &str) -> Self {
         self.fixtures.add_campaign(CampaignConfig {
             id,
             user_id: 1,
@@ -402,7 +402,7 @@ mod tests {
     #[test]
     fn test_default_fixtures() {
         let fixtures = TestFixtures::default();
-        
+
         assert!(!fixtures.contents().is_empty());
         assert!(!fixtures.comments().is_empty());
         assert!(!fixtures.campaigns().is_empty());

@@ -6,22 +6,32 @@
 use std::sync::Arc;
 
 use glance_mind_agent_rs::{
-    // Domain
-    Content, Comment, TaskConfig,
-    // Ports
-    ContentGateway, CommentGateway, AiAnalyzer,
-    ContentRepository, PromptRepository, ProgressTracker,
-    // Testing
-    MockContentGateway, MockCommentGateway, MockAiAnalyzer, MockRepository,
-    TestFixtures,
-    testing::fixtures::TestScenarioBuilder,
-    // Orchestrator
-    WorkflowOrchestrator, OrchestratorConfig,
-    // Strategies
-    TikTokStrategy,
+    ports::progress_tracker::{TaskInfo, TaskStatus},
     // Ports types
     ports::prompt_repository::{CampaignConfig, CampaignStatus},
-    ports::progress_tracker::{TaskInfo, TaskStatus},
+    testing::fixtures::TestScenarioBuilder,
+    AiAnalyzer,
+    Comment,
+    CommentGateway,
+    // Domain
+    Content,
+    // Ports
+    ContentGateway,
+    ContentRepository,
+    MockAiAnalyzer,
+    MockCommentGateway,
+    // Testing
+    MockContentGateway,
+    MockRepository,
+    OrchestratorConfig,
+    ProgressTracker,
+    PromptRepository,
+    TaskConfig,
+    TestFixtures,
+    // Strategies
+    TikTokStrategy,
+    // Orchestrator
+    WorkflowOrchestrator,
 };
 
 // ============================================================
@@ -36,8 +46,8 @@ fn create_test_orchestrator(
     repository: Arc<MockRepository>,
 ) -> WorkflowOrchestrator {
     WorkflowOrchestrator::builder()
-        .content_gateway(content_gateway as Arc<dyn ContentGateway>)
-        .comment_gateway(comment_gateway as Arc<dyn CommentGateway>)
+        .add_content_gateway("tiktok", content_gateway as Arc<dyn ContentGateway>)
+        .add_comment_gateway("tiktok", comment_gateway as Arc<dyn CommentGateway>)
         .ai_analyzer(ai_analyzer as Arc<dyn AiAnalyzer>)
         .content_repository(repository.clone() as Arc<dyn ContentRepository>)
         .prompt_repository(repository.clone() as Arc<dyn PromptRepository>)
@@ -54,7 +64,9 @@ fn create_test_orchestrator(
 }
 
 /// Setup test environment with fixtures
-fn setup_test_environment(fixtures: &TestFixtures) -> (
+fn setup_test_environment(
+    fixtures: &TestFixtures,
+) -> (
     Arc<MockContentGateway>,
     Arc<MockCommentGateway>,
     Arc<MockAiAnalyzer>,
@@ -68,10 +80,7 @@ fn setup_test_environment(fixtures: &TestFixtures) -> (
     // Load fixtures into gateways
     for content in fixtures.contents() {
         // Add to content gateway for search
-        content_gateway.add_search_results(
-            "fitness",
-            vec![content.clone()],
-        );
+        content_gateway.add_search_results("fitness", vec![content.clone()]);
         content_gateway.add_content(content);
     }
 
@@ -106,18 +115,29 @@ async fn test_basic_workflow_with_mock_data() {
             "test_video_001",
             "testuser",
             "Test video about fitness",
-            vec!["Great video!", "How much?", "Love it!", "Amazing content!", "Where to buy?"],
+            vec![
+                "Great video!",
+                "How much?",
+                "Love it!",
+                "Amazing content!",
+                "Where to buy?",
+            ],
         )
         .with_campaign(1, "Test Campaign", "We sell fitness products")
         .with_task(1, 1, vec!["fitness"])
         .build();
 
     let (content_gw, comment_gw, ai, repo) = setup_test_environment(&fixtures);
-    
+
     // Add search results for "fitness" keyword
     content_gw.add_search_results("fitness", fixtures.contents());
 
-    let orchestrator = create_test_orchestrator(content_gw.clone(), comment_gw.clone(), ai.clone(), repo.clone());
+    let orchestrator = create_test_orchestrator(
+        content_gw.clone(),
+        comment_gw.clone(),
+        ai.clone(),
+        repo.clone(),
+    );
 
     // Create task config
     let task_config = TaskConfig::new(1, "tiktok")
@@ -128,26 +148,38 @@ async fn test_basic_workflow_with_mock_data() {
 
     // Process task
     let result = orchestrator.process_task(1, task_config).await;
-    
+
     // Verify result
     assert!(result.is_ok(), "Task should succeed: {:?}", result.err());
     let task_result = result.unwrap();
-    
+
     assert!(task_result.success, "Task result should be successful");
-    assert!(task_result.contents_processed > 0, "Should process at least 1 content");
-    assert!(task_result.comments_processed > 0, "Should process comments");
-    
+    assert!(
+        task_result.contents_processed > 0,
+        "Should process at least 1 content"
+    );
+    assert!(
+        task_result.comments_processed > 0,
+        "Should process comments"
+    );
+
     // Verify data was saved
     let contents = repo.get_all_contents();
-    assert!(!contents.is_empty(), "Contents should be saved to repository");
-    
+    assert!(
+        !contents.is_empty(),
+        "Contents should be saved to repository"
+    );
+
     let comments = repo.get_all_comments();
-    assert!(!comments.is_empty(), "Comments should be saved to repository");
-    
+    assert!(
+        !comments.is_empty(),
+        "Comments should be saved to repository"
+    );
+
     // Verify AI was called
     let ai_calls = ai.get_calls();
     assert!(!ai_calls.is_empty(), "AI should have been called");
-    
+
     // Verify analyses were saved
     let analyses = repo.get_all_analyses();
     assert!(!analyses.is_empty(), "Analyses should be saved");
@@ -160,12 +192,15 @@ async fn test_workflow_with_default_fixtures() {
     let (content_gw, comment_gw, ai, repo) = setup_test_environment(&fixtures);
 
     // Add fitness-related content to search results
-    let fitness_contents: Vec<Content> = fixtures.contents()
+    let fitness_contents: Vec<Content> = fixtures
+        .contents()
         .into_iter()
-        .filter(|c| c.description.to_lowercase().contains("fitness") || 
-                    c.description.to_lowercase().contains("workout"))
+        .filter(|c| {
+            c.description.to_lowercase().contains("fitness")
+                || c.description.to_lowercase().contains("workout")
+        })
         .collect();
-    
+
     content_gw.add_search_results("fitness", fitness_contents);
 
     let orchestrator = create_test_orchestrator(content_gw, comment_gw, ai.clone(), repo.clone());
@@ -178,10 +213,10 @@ async fn test_workflow_with_default_fixtures() {
     let result = orchestrator.process_task(1, task_config).await.unwrap();
 
     assert!(result.success);
-    println!("Processed {} contents, {} comments, {} analyses",
-        result.contents_processed,
-        result.comments_processed,
-        result.analyses_generated);
+    println!(
+        "Processed {} contents, {} comments, {} analyses",
+        result.contents_processed, result.comments_processed, result.analyses_generated
+    );
 }
 
 // ============================================================
@@ -204,8 +239,7 @@ async fn test_workflow_handles_gateway_error() {
 
     let orchestrator = create_test_orchestrator(content_gw, comment_gw, ai, repo);
 
-    let task_config = TaskConfig::new(1, "tiktok")
-        .with_keywords(vec!["test".to_string()]);
+    let task_config = TaskConfig::new(1, "tiktok").with_keywords(vec!["test".to_string()]);
 
     let result = orchestrator.process_task(1, task_config).await;
 
@@ -221,7 +255,12 @@ async fn test_workflow_handles_ai_error() {
 
     let fixtures = TestScenarioBuilder::new()
         // Need at least 5 comments for AI processing
-        .with_video("v1", "user", "Test video", vec!["C1", "C2", "C3", "C4", "C5"])
+        .with_video(
+            "v1",
+            "user",
+            "Test video",
+            vec!["C1", "C2", "C3", "C4", "C5"],
+        )
         .with_campaign(1, "Test", "Product")
         .with_task(1, 1, vec!["test"])
         .build();
@@ -234,8 +273,7 @@ async fn test_workflow_handles_ai_error() {
 
     let orchestrator = create_test_orchestrator(content_gw, comment_gw, ai, repo.clone());
 
-    let task_config = TaskConfig::new(1, "tiktok")
-        .with_keywords(vec!["test".to_string()]);
+    let task_config = TaskConfig::new(1, "tiktok").with_keywords(vec!["test".to_string()]);
 
     let result = orchestrator.process_task(1, task_config).await.unwrap();
 
@@ -297,7 +335,10 @@ async fn test_workflow_respects_campaign_limit() {
 
     // Verify task completed (campaign limit is checked internally but not exposed via get_processed_count)
     // The orchestrator processes content and comments regardless of campaign tracking
-    assert!(result.contents_processed > 0, "Should process at least 1 content");
+    assert!(
+        result.contents_processed > 0,
+        "Should process at least 1 content"
+    );
 }
 
 #[tokio::test]
@@ -337,8 +378,7 @@ async fn test_workflow_stops_on_paused_campaign() {
 
     let orchestrator = create_test_orchestrator(content_gw, comment_gw, ai, repo);
 
-    let task_config = TaskConfig::new(1, "tiktok")
-        .with_keywords(vec!["test".to_string()]);
+    let task_config = TaskConfig::new(1, "tiktok").with_keywords(vec!["test".to_string()]);
 
     let result = orchestrator.process_task(1, task_config).await.unwrap();
 
@@ -355,29 +395,37 @@ async fn test_ai_generates_appropriate_responses() {
     use glance_mind_agent_rs::CommentIntent;
 
     let ai = MockAiAnalyzer::new();
-    
+
     let content = Content::new("tiktok", "v1")
         .with_author("seller")
         .with_description("Amazing product!");
 
     // Test question detection
-    let question = Comment::new("tiktok", "c1", "v1")
-        .with_text("How much does it cost?");
-    let response = ai.analyze_comment(&question, &content, &Default::default()).await.unwrap();
+    let question = Comment::new("tiktok", "c1", "v1").with_text("How much does it cost?");
+    let response = ai
+        .analyze_comment(&question, &content, &Default::default())
+        .await
+        .unwrap();
     assert_eq!(response.intent, Some(CommentIntent::Question));
 
     // Test praise detection
     let praise = Comment::new("tiktok", "c2", "v1")
         .with_author("fan")
         .with_text("This is amazing! I love it!");
-    let response = ai.analyze_comment(&praise, &content, &Default::default()).await.unwrap();
+    let response = ai
+        .analyze_comment(&praise, &content, &Default::default())
+        .await
+        .unwrap();
     assert_eq!(response.intent, Some(CommentIntent::Praise));
     assert!(response.reply_text.unwrap().contains("fan"));
 
     // Test purchase intent - Note: text should not contain '?' as it triggers Question detection first
-    let buyer = Comment::new("tiktok", "c3", "v1")
-        .with_text("I want to buy this product right now!");
-    let response = ai.analyze_comment(&buyer, &content, &Default::default()).await.unwrap();
+    let buyer =
+        Comment::new("tiktok", "c3", "v1").with_text("I want to buy this product right now!");
+    let response = ai
+        .analyze_comment(&buyer, &content, &Default::default())
+        .await
+        .unwrap();
     assert_eq!(response.intent, Some(CommentIntent::PurchaseIntent));
 }
 
@@ -388,27 +436,34 @@ async fn test_ai_generates_appropriate_responses() {
 #[tokio::test]
 async fn test_repository_data_persistence() {
     let repo = MockRepository::new();
-    
+
     // Save content
     let content = Content::new("tiktok", "v123")
         .with_author("testuser")
         .with_description("Test video");
     let save_result = repo.save_content(&content, Some(1), None).await.unwrap();
     let content_db_id = save_result.id;
-    
+
     // Save comment
     let comment = Comment::new("tiktok", "c456", "v123")
         .with_author("commenter")
         .with_text("Great!");
     let comment_id = repo.save_comment(&comment, content_db_id).await.unwrap();
-    
+
     // Verify retrieval
     assert!(repo.content_exists("tiktok", "v123").await.unwrap());
     assert!(repo.comment_exists("tiktok", "c456").await.unwrap());
-    
-    let stored_content = repo.get_content_by_id(content_db_id).await.unwrap().unwrap();
-    assert_eq!(stored_content.author_unique_id, Some("testuser".to_string()));
-    
+
+    let stored_content = repo
+        .get_content_by_id(content_db_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored_content.author_unique_id,
+        Some("testuser".to_string())
+    );
+
     let stored_comment = repo.get_comment_by_id(comment_id).await.unwrap().unwrap();
     assert_eq!(stored_comment.comment_text, Some("Great!".to_string()));
 }
@@ -427,15 +482,19 @@ async fn test_workflow_with_multiple_keywords() {
         .build();
 
     let (content_gw, comment_gw, ai, repo) = setup_test_environment(&fixtures);
-    
+
     // Add different content for each keyword
-    let fitness_content = fixtures.contents().into_iter()
+    let fitness_content = fixtures
+        .contents()
+        .into_iter()
         .filter(|c| c.content_id == "v1")
         .collect();
-    let cooking_content = fixtures.contents().into_iter()
+    let cooking_content = fixtures
+        .contents()
+        .into_iter()
         .filter(|c| c.content_id == "v2")
         .collect();
-    
+
     content_gw.add_search_results("fitness", fitness_content);
     content_gw.add_search_results("cooking", cooking_content);
 
@@ -447,7 +506,10 @@ async fn test_workflow_with_multiple_keywords() {
     let result = orchestrator.process_task(1, task_config).await.unwrap();
 
     assert!(result.success);
-    assert!(result.contents_processed >= 2, "Should process content from multiple keywords");
+    assert!(
+        result.contents_processed >= 2,
+        "Should process content from multiple keywords"
+    );
 
     // Verify gateway was called for each keyword
     let calls = content_gw.get_calls();
@@ -462,17 +524,17 @@ async fn test_workflow_with_multiple_keywords() {
 async fn test_large_batch_processing() {
     // Create a scenario with many comments
     let mut builder = TestScenarioBuilder::new();
-    
+
     let mut comments = Vec::new();
     for i in 0..50 {
         comments.push(format!("Comment {}", i).as_str().to_owned());
     }
     let comment_refs: Vec<&str> = comments.iter().map(|s| s.as_str()).collect();
-    
+
     builder = builder.with_video("big_video", "popular_user", "Popular video", comment_refs);
     builder = builder.with_campaign(1, "Large Campaign", "Product");
     builder = builder.with_task(1, 1, vec!["popular"]);
-    
+
     let fixtures = builder.build();
     let (content_gw, comment_gw, ai, repo) = setup_test_environment(&fixtures);
     content_gw.add_search_results("popular", fixtures.contents());
@@ -489,8 +551,11 @@ async fn test_large_batch_processing() {
 
     assert!(result.success);
     assert!(result.comments_processed >= 50);
-    println!("Processed {} comments in {:?}", result.comments_processed, duration);
-    
+    println!(
+        "Processed {} comments in {:?}",
+        result.comments_processed, duration
+    );
+
     // Verify token tracking
     let total_tokens = ai.get_total_tokens();
     assert!(total_tokens > 0, "Should track token usage");
@@ -508,7 +573,8 @@ async fn test_complete_e2e_fitness_campaign() {
     let (content_gw, comment_gw, ai, repo) = setup_test_environment(&fixtures);
 
     // Setup search results
-    let fitness_contents: Vec<Content> = fixtures.contents()
+    let fitness_contents: Vec<Content> = fixtures
+        .contents()
         .into_iter()
         .filter(|c| c.content_id.contains("fitness"))
         .collect();
@@ -528,12 +594,12 @@ async fn test_complete_e2e_fitness_campaign() {
 
     // Verify complete workflow
     assert!(result.success, "E2E workflow should succeed");
-    
+
     // Verify all components worked
     let contents = repo.get_all_contents();
     let comments = repo.get_all_comments();
     let analyses = repo.get_all_analyses();
-    
+
     println!("E2E Test Results:");
     println!("  Contents saved: {}", contents.len());
     println!("  Comments saved: {}", comments.len());

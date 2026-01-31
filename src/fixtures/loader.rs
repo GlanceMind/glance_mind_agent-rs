@@ -3,20 +3,20 @@
 use std::path::{Path, PathBuf};
 use tracing::debug;
 
+use super::{TikTokCommentsFixture, TikTokSearchFixture, TikTokUserVideosFixture};
 use crate::error::{Error, Result};
-use super::{TikTokSearchFixture, TikTokCommentsFixture, TikTokUserVideosFixture};
 
 /// Fixture Loader
-/// 
+///
 /// Loads test fixtures from JSON files for use in tests.
-/// 
+///
 /// # Example
-/// 
+///
 /// ```no_run
 /// use glance_mind_agent_rs::fixtures::FixtureLoader;
-/// 
+///
 /// let loader = FixtureLoader::from_cargo_test();
-/// 
+///
 /// let fixture = loader.load_search_fixture("travel", "us").unwrap();
 /// println!("Loaded {} videos", fixture.videos.len());
 /// ```
@@ -33,11 +33,10 @@ impl FixtureLoader {
     }
 
     /// Create a fixture loader that works from Cargo test environment
-    /// 
+    ///
     /// Uses CARGO_MANIFEST_DIR to locate the project root.
     pub fn from_cargo_test() -> Self {
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
-            .unwrap_or_else(|_| ".".to_string());
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
         Self::new(format!("{}/tests/fixtures/tiktok", manifest_dir))
     }
 
@@ -66,7 +65,7 @@ impl FixtureLoader {
     }
 
     /// Load a search fixture
-    /// 
+    ///
     /// # Arguments
     /// * `keyword` - The search keyword used to generate the fixture
     /// * `region` - The region code (e.g., "us", "gb")
@@ -79,14 +78,14 @@ impl FixtureLoader {
 
         let content = std::fs::read_to_string(&path)
             .map_err(|_| Error::FixtureNotFound(path.display().to_string()))?;
-        
+
         let fixture: TikTokSearchFixture = serde_json::from_str(&content)?;
-        
+
         Ok(fixture)
     }
 
     /// Load a comments fixture
-    /// 
+    ///
     /// # Arguments
     /// * `aweme_id` - The video ID
     pub fn load_comments_fixture(&self, aweme_id: &str) -> Result<TikTokCommentsFixture> {
@@ -97,14 +96,14 @@ impl FixtureLoader {
 
         let content = std::fs::read_to_string(&path)
             .map_err(|_| Error::FixtureNotFound(path.display().to_string()))?;
-        
+
         let fixture: TikTokCommentsFixture = serde_json::from_str(&content)?;
-        
+
         Ok(fixture)
     }
 
     /// Load a user videos fixture
-    /// 
+    ///
     /// # Arguments
     /// * `unique_id` - The username (e.g., "tiktok")
     pub fn load_user_videos_fixture(&self, unique_id: &str) -> Result<TikTokUserVideosFixture> {
@@ -115,9 +114,9 @@ impl FixtureLoader {
 
         let content = std::fs::read_to_string(&path)
             .map_err(|_| Error::FixtureNotFound(path.display().to_string()))?;
-        
+
         let fixture: TikTokUserVideosFixture = serde_json::from_str(&content)?;
-        
+
         Ok(fixture)
     }
 
@@ -153,6 +152,9 @@ mod tests {
     fn test_safe_filename() {
         assert_eq!(FixtureLoader::safe_filename("hello world"), "hello_world");
         assert_eq!(FixtureLoader::safe_filename("test/path"), "test_path");
-        assert_eq!(FixtureLoader::safe_filename("normal-text_123"), "normal-text_123");
+        assert_eq!(
+            FixtureLoader::safe_filename("normal-text_123"),
+            "normal-text_123"
+        );
     }
 }

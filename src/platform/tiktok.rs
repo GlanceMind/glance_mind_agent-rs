@@ -4,13 +4,13 @@
 //! - TikTokStrategy for platform-specific behavior
 //! - TikHubAdapter for API access
 
-use std::sync::Arc;
 use async_trait::async_trait;
+use std::sync::Arc;
 
 use crate::adapters::TikHubAdapter;
 use crate::domain::errors::GatewayError;
 use crate::platform::{Platform, PlatformConfigBase, PlatformStrategy};
-use crate::ports::{ContentGateway, CommentGateway};
+use crate::ports::{CommentGateway, ContentGateway};
 use crate::strategies::TikTokStrategy;
 use crate::tikhub::TikHubClient;
 
@@ -19,10 +19,10 @@ use crate::tikhub::TikHubClient;
 pub struct TikTokConfig {
     /// Base configuration
     pub base: PlatformConfigBase,
-    
+
     /// TikHub API key
     pub api_key: String,
-    
+
     /// TikHub base URL
     pub base_url: String,
 }
@@ -30,9 +30,9 @@ pub struct TikTokConfig {
 impl TikTokConfig {
     /// Create from environment variables
     pub fn from_env() -> Result<Self, String> {
-        let api_key = std::env::var("TIKHUB_API_KEY")
-            .map_err(|_| "TIKHUB_API_KEY not set".to_string())?;
-        
+        let api_key =
+            std::env::var("TIKHUB_API_KEY").map_err(|_| "TIKHUB_API_KEY not set".to_string())?;
+
         let base_url = std::env::var("TIKHUB_BASE_URL")
             .unwrap_or_else(|_| "https://api.tikhub.io".to_string());
 
@@ -65,7 +65,7 @@ impl TikTokPlatform {
     pub fn new(config: TikTokConfig) -> Result<Self, GatewayError> {
         let client = TikHubClient::new(&config.api_key, &config.base_url)
             .map_err(|e| GatewayError::AuthFailed(e.to_string()))?;
-        
+
         let adapter = Arc::new(TikHubAdapter::new(client));
         let strategy = TikTokStrategy::with_region(&config.base.default_region);
 
@@ -78,8 +78,7 @@ impl TikTokPlatform {
 
     /// Create from environment variables
     pub fn from_env() -> Result<Self, GatewayError> {
-        let config = TikTokConfig::from_env()
-            .map_err(|e| GatewayError::AuthFailed(e))?;
+        let config = TikTokConfig::from_env().map_err(GatewayError::AuthFailed)?;
         Self::new(config)
     }
 

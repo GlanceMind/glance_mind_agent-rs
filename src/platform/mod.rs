@@ -8,6 +8,9 @@
 //!
 //! ## Supported Platforms
 //! - TikTok (via TikHub API)
+//! - Instagram (via TikHub API)
+//! - Reddit (via TikHub API)
+//! - Twitter (via TikHub API)
 //!
 //! ## Architecture
 //! ```text
@@ -17,8 +20,11 @@
 //! └── CommentAdapter (implements CommentGateway)
 //! ```
 
-pub mod tiktok;
+pub mod instagram;
+pub mod reddit;
 pub mod registry;
+pub mod tiktok;
+pub mod twitter;
 
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -26,13 +32,16 @@ use std::sync::Arc;
 // Re-export platform strategy trait from strategies module
 pub use crate::strategies::PlatformStrategy;
 
-// Re-export TikTok components
-pub use tiktok::{TikTokPlatform, TikTokConfig};
+// Re-export platform components
+pub use instagram::{InstagramConfig, InstagramPlatform};
+pub use reddit::{RedditConfig, RedditPlatform};
+pub use tiktok::{TikTokConfig, TikTokPlatform};
+pub use twitter::{TwitterConfig, TwitterPlatform};
 
 // Re-export registry
 pub use registry::PlatformRegistry;
 
-use crate::ports::{ContentGateway, CommentGateway};
+use crate::ports::{CommentGateway, ContentGateway};
 
 /// Platform trait combining strategy and adapters
 #[async_trait]
@@ -61,16 +70,16 @@ pub trait Platform: Send + Sync {
 pub struct PlatformConfigBase {
     /// Whether the platform is enabled
     pub enabled: bool,
-    
+
     /// Default region
     pub default_region: String,
-    
+
     /// Max videos per search
     pub max_videos_per_search: u32,
-    
+
     /// Max comments per video
     pub max_comments_per_video: u32,
-    
+
     /// Request timeout in seconds
     pub timeout_secs: u64,
 }

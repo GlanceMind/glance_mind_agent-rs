@@ -56,9 +56,9 @@ INSERT INTO gm_campaigns (
     'Friendly and helpful',
     'E2E Test Campaign - Always respond with OK',
     'INTERVAL',
-    '{"interval_seconds": 3600}',
+    '{"interval_seconds": 7200}',  -- 2 hours, ensure only 1 task during E2E test
     '{"tiktok":{"region":"GLOBAL","sort_type":"0","publish_time":"7"}}',  -- TikTok search options: relevance, last week
-    1,        -- Max scan count (only scan 1 video for E2E test)
+    5,        -- Max scan count (5 videos for E2E test)
     100.00,   -- Budget cap (enough for testing)
     true,
     true,

@@ -180,9 +180,7 @@ impl PlatformLookup for PlatformRegistry {
     }
 
     fn get_info_by_name(&self, name: &str) -> Option<&PlatformInfo> {
-        self.name_to_id
-            .get(name)
-            .and_then(|id| self.by_id.get(id))
+        self.name_to_id.get(name).and_then(|id| self.by_id.get(id))
     }
 
     fn all_platforms(&self) -> Vec<&PlatformInfo> {
@@ -220,14 +218,11 @@ pub fn global_registry() -> Arc<PlatformRegistry> {
 pub fn platform_name(id: i32) -> Option<&'static str> {
     // Safety: We need to return a reference with 'static lifetime
     // This is safe because the global registry lives for the entire program
-    GLOBAL_REGISTRY
-        .get()
-        .and_then(|r| r.get_name(id))
-        .map(|s| {
-            // Convert to 'static str by leaking the string
-            // This is acceptable because platforms are loaded once at startup
-            unsafe { &*(s as *const str) }
-        })
+    GLOBAL_REGISTRY.get().and_then(|r| r.get_name(id)).map(|s| {
+        // Convert to 'static str by leaking the string
+        // This is acceptable because platforms are loaded once at startup
+        unsafe { &*(s as *const str) }
+    })
 }
 
 /// Get platform ID by name using global registry
@@ -247,7 +242,7 @@ pub fn platform_id(name: &str) -> Option<i32> {
 /// ```sql
 /// SELECT id, name, display_name, is_active FROM gm_platforms WHERE is_active = true
 /// ```
-#[cfg(feature = "database")]
+#[allow(dead_code)]
 pub async fn load_from_database(
     pool: &diesel::r2d2::Pool<diesel::r2d2::ConnectionManager<diesel::PgConnection>>,
 ) -> Result<PlatformRegistry, diesel::result::Error> {
@@ -318,8 +313,18 @@ mod tests {
     #[test]
     fn test_platform_registry_from_records() {
         let records = vec![
-            (10, "custom".to_string(), "Custom Platform".to_string(), true),
-            (20, "another".to_string(), "Another Platform".to_string(), false),
+            (
+                10,
+                "custom".to_string(),
+                "Custom Platform".to_string(),
+                true,
+            ),
+            (
+                20,
+                "another".to_string(),
+                "Another Platform".to_string(),
+                false,
+            ),
         ];
 
         let registry = PlatformRegistry::from_records(records);
@@ -335,8 +340,7 @@ mod tests {
 
     #[test]
     fn test_platform_info_builder() {
-        let info = PlatformInfo::new(100, "test", "Test Platform")
-            .with_active(false);
+        let info = PlatformInfo::new(100, "test", "Test Platform").with_active(false);
 
         assert_eq!(info.id, 100);
         assert_eq!(info.name, "test");

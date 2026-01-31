@@ -7,18 +7,20 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use crate::domain::{Content, Comment, KeywordType, SearchOptions, ReplySuggestion, Engagement};
-use crate::domain::errors::{GatewayResult, AiResult, DbResult};
-use crate::ports::{
-    ContentGateway, CommentGateway, AiAnalyzer,
-    ContentRepository, PromptRepository, ProgressTracker,
-    comment_gateway::{FetchCommentsOptions, FetchCommentsResult},
-    content_repository::{ContentSaveResult, StoredContent, StoredComment, StoredAnalysis, CommentStatus},
-    prompt_repository::{CampaignConfig, CampaignStatus, PlatformConfig},
-    progress_tracker::{CampaignStopResult, TaskInfo, TaskProgressUpdate, TaskStatus},
-    ai_analyzer::AnalysisContext,
-};
+use crate::domain::errors::{AiResult, DbResult, GatewayResult};
+use crate::domain::{Comment, Content, Engagement, KeywordType, ReplySuggestion, SearchOptions};
 use crate::fixtures::FixtureLoader;
+use crate::ports::{
+    ai_analyzer::AnalysisContext,
+    comment_gateway::{FetchCommentsOptions, FetchCommentsResult},
+    content_repository::{
+        CommentStatus, ContentSaveResult, StoredAnalysis, StoredComment, StoredContent,
+    },
+    progress_tracker::{CampaignStopResult, TaskInfo, TaskProgressUpdate, TaskStatus},
+    prompt_repository::{CampaignConfig, CampaignStatus, PlatformConfig},
+    AiAnalyzer, CommentGateway, ContentGateway, ContentRepository, ProgressTracker,
+    PromptRepository,
+};
 
 // ============================================================
 // Fixture Mock Gateway - Content and Comments
@@ -65,7 +67,11 @@ impl FixtureMockAdapter {
     }
 
     /// Convert fixture comment to domain Comment
-    fn fixture_to_comment(&self, comment: &crate::tikhub::TikTokComment, content_id: &str) -> Comment {
+    fn fixture_to_comment(
+        &self,
+        comment: &crate::tikhub::TikTokComment,
+        content_id: &str,
+    ) -> Comment {
         Comment {
             platform: self.platform.clone(),
             comment_id: comment.cid.clone(),
@@ -90,7 +96,7 @@ impl ContentGateway for FixtureMockAdapter {
     async fn search(&self, options: &SearchOptions) -> GatewayResult<Vec<Content>> {
         // Try to load a fixture matching the query
         let region = options.region.as_deref().unwrap_or("us");
-        
+
         match self.loader.load_search_fixture(&options.query, region) {
             Ok(fixture) => {
                 // Use parse_videos() to convert raw JSON to typed structs
@@ -120,26 +126,18 @@ impl ContentGateway for FixtureMockAdapter {
                 opts.query = query.clone();
                 self.search(&opts).await
             }
-            KeywordType::UserId(user_id) => {
-                self.fetch_user_content(user_id, options.count).await
-            }
+            KeywordType::UserId(user_id) => self.fetch_user_content(user_id, options.count).await,
             KeywordType::SecUserId(sec_uid) => {
                 self.fetch_user_content(sec_uid, options.count).await
             }
-            KeywordType::ContentId(content_id) => {
-                match self.fetch_by_id(content_id).await? {
-                    Some(content) => Ok(vec![content]),
-                    None => Ok(vec![]),
-                }
-            }
+            KeywordType::ContentId(content_id) => match self.fetch_by_id(content_id).await? {
+                Some(content) => Ok(vec![content]),
+                None => Ok(vec![]),
+            },
         }
     }
 
-    async fn fetch_user_content(
-        &self,
-        user_id: &str,
-        count: u32,
-    ) -> GatewayResult<Vec<Content>> {
+    async fn fetch_user_content(&self, user_id: &str, count: u32) -> GatewayResult<Vec<Content>> {
         // Try to load user videos fixture
         match self.loader.load_user_videos_fixture(user_id) {
             Ok(fixture) => {
@@ -181,9 +179,9 @@ impl CommentGateway for FixtureMockAdapter {
                     .take(options.count as usize)
                     .map(|c| self.fixture_to_comment(c, content_id))
                     .collect();
-                
+
                 let has_more = total > options.count as usize;
-                
+
                 Ok(FetchCommentsResult {
                     comments,
                     has_more,
@@ -200,10 +198,9 @@ impl CommentGateway for FixtureMockAdapter {
         content_id: &str,
         max_count: u32,
     ) -> GatewayResult<Vec<Comment>> {
-        let result = self.fetch_comments(
-            content_id,
-            &FetchCommentsOptions::new(max_count),
-        ).await?;
+        let result = self
+            .fetch_comments(content_id, &FetchCommentsOptions::new(max_count))
+            .await?;
         Ok(result.comments)
     }
 
@@ -250,7 +247,10 @@ impl MockAiAnalyzer {
     /// Generate a default mock response
     fn generate_mock_response(&self, comment: &Comment) -> ReplySuggestion {
         ReplySuggestion::new(&comment.comment_id)
-            .with_reply(format!("Thank you for your comment: {}", &comment.text[..comment.text.len().min(20)]))
+            .with_reply(format!(
+                "Thank you for your comment: {}",
+                &comment.text[..comment.text.len().min(20)]
+            ))
             .with_reason("Auto-generated mock response")
             .with_model_info(&self.model, 100)
     }
@@ -383,13 +383,20 @@ impl ContentRepository for InMemoryRepository {
     async fn content_exists(&self, platform: &str, content_id: &str) -> DbResult<bool> {
         let contents = self.contents.read().unwrap();
         let platform_id = self.platform_id(platform);
-        Ok(contents.values().any(|c| c.platform_id == platform_id && c.content_id == content_id))
+        Ok(contents
+            .values()
+            .any(|c| c.platform_id == platform_id && c.content_id == content_id))
     }
 
-    async fn get_content(&self, platform: &str, content_id: &str) -> DbResult<Option<StoredContent>> {
+    async fn get_content(
+        &self,
+        platform: &str,
+        content_id: &str,
+    ) -> DbResult<Option<StoredContent>> {
         let contents = self.contents.read().unwrap();
         let platform_id = self.platform_id(platform);
-        Ok(contents.values()
+        Ok(contents
+            .values()
             .find(|c| c.platform_id == platform_id && c.content_id == content_id)
             .cloned())
     }
@@ -399,17 +406,23 @@ impl ContentRepository for InMemoryRepository {
         Ok(contents.get(&id).cloned())
     }
 
-    async fn save_content(&self, content: &Content, campaign_id: Option<i32>, _task_id: Option<i32>) -> DbResult<ContentSaveResult> {
+    async fn save_content(
+        &self,
+        content: &Content,
+        campaign_id: Option<i32>,
+        _task_id: Option<i32>,
+    ) -> DbResult<ContentSaveResult> {
         let platform_id = self.platform_id(&content.platform);
-        
+
         // Check if content already exists
         let existing_id = {
             let contents = self.contents.read().unwrap();
-            contents.values()
+            contents
+                .values()
                 .find(|c| c.platform_id == platform_id && c.content_id == content.content_id)
                 .map(|c| c.id)
         };
-        
+
         if let Some(existing_id) = existing_id {
             // Update existing record
             let mut contents = self.contents.write().unwrap();
@@ -427,7 +440,7 @@ impl ContentRepository for InMemoryRepository {
                 is_new: false,
             });
         }
-        
+
         // Insert new record
         let id = self.get_next_content_id();
         let stored = StoredContent {
@@ -446,16 +459,18 @@ impl ContentRepository for InMemoryRepository {
             raw_data: content.raw_data.clone(),
             campaign_id,
         };
-        
+
         let mut contents = self.contents.write().unwrap();
         contents.insert(id, stored);
-        Ok(ContentSaveResult {
-            id,
-            is_new: true,
-        })
+        Ok(ContentSaveResult { id, is_new: true })
     }
 
-    async fn save_contents(&self, contents: &[Content], campaign_id: Option<i32>, task_id: Option<i32>) -> DbResult<Vec<ContentSaveResult>> {
+    async fn save_contents(
+        &self,
+        contents: &[Content],
+        campaign_id: Option<i32>,
+        task_id: Option<i32>,
+    ) -> DbResult<Vec<ContentSaveResult>> {
         let mut results = Vec::with_capacity(contents.len());
         for content in contents {
             results.push(self.save_content(content, campaign_id, task_id).await?);
@@ -484,13 +499,20 @@ impl ContentRepository for InMemoryRepository {
     async fn comment_exists(&self, platform: &str, comment_id: &str) -> DbResult<bool> {
         let comments = self.comments.read().unwrap();
         let platform_id = self.platform_id(platform);
-        Ok(comments.values().any(|c| c.platform_id == platform_id && c.comment_id == comment_id))
+        Ok(comments
+            .values()
+            .any(|c| c.platform_id == platform_id && c.comment_id == comment_id))
     }
 
-    async fn get_comment(&self, platform: &str, comment_id: &str) -> DbResult<Option<StoredComment>> {
+    async fn get_comment(
+        &self,
+        platform: &str,
+        comment_id: &str,
+    ) -> DbResult<Option<StoredComment>> {
         let comments = self.comments.read().unwrap();
         let platform_id = self.platform_id(platform);
-        Ok(comments.values()
+        Ok(comments
+            .values()
             .find(|c| c.platform_id == platform_id && c.comment_id == comment_id)
             .cloned())
     }
@@ -519,7 +541,7 @@ impl ContentRepository for InMemoryRepository {
             raw_data: comment.raw_data.clone(),
             status: CommentStatus::Pending as i16,
         };
-        
+
         let mut comments = self.comments.write().unwrap();
         comments.insert(id, stored);
         Ok(id)
@@ -533,19 +555,25 @@ impl ContentRepository for InMemoryRepository {
         Ok(ids)
     }
 
-    async fn get_pending_comments(&self, campaign_id: i32, limit: i32) -> DbResult<Vec<StoredComment>> {
+    async fn get_pending_comments(
+        &self,
+        campaign_id: i32,
+        limit: i32,
+    ) -> DbResult<Vec<StoredComment>> {
         let contents = self.contents.read().unwrap();
         let comments = self.comments.read().unwrap();
-        
-        let campaign_content_ids: Vec<i32> = contents.values()
+
+        let campaign_content_ids: Vec<i32> = contents
+            .values()
             .filter(|c| c.campaign_id == Some(campaign_id))
             .map(|c| c.id)
             .collect();
-        
-        Ok(comments.values()
+
+        Ok(comments
+            .values()
             .filter(|c| {
-                campaign_content_ids.contains(&c.content_id) &&
-                c.status == CommentStatus::Pending as i16
+                campaign_content_ids.contains(&c.content_id)
+                    && c.status == CommentStatus::Pending as i16
             })
             .take(limit as usize)
             .cloned()
@@ -568,21 +596,24 @@ impl ContentRepository for InMemoryRepository {
         suggestion: &ReplySuggestion,
     ) -> DbResult<i32> {
         let platform_id = self.platform_id(&comment.platform);
-        
+
         // Check if comment already exists
         let existing_id = {
             let comments = self.comments.read().unwrap();
-            comments.values()
+            comments
+                .values()
                 .find(|c| c.platform_id == platform_id && c.comment_id == comment.comment_id)
                 .map(|c| c.id)
         };
-        
+
         if let Some(existing_id) = existing_id {
             // Update with analysis
-            let _ = self.save_analysis(existing_id, campaign_id, suggestion).await?;
+            let _ = self
+                .save_analysis(existing_id, campaign_id, suggestion)
+                .await?;
             return Ok(existing_id);
         }
-        
+
         // Insert new comment with analysis
         let id = self.get_next_comment_id();
         let stored = StoredComment {
@@ -602,15 +633,15 @@ impl ContentRepository for InMemoryRepository {
             raw_data: comment.raw_data.clone(),
             status: CommentStatus::Pending as i16,
         };
-        
+
         {
             let mut comments = self.comments.write().unwrap();
             comments.insert(id, stored);
         }
-        
+
         // Save analysis
         let _ = self.save_analysis(id, campaign_id, suggestion).await?;
-        
+
         Ok(id)
     }
 
@@ -632,20 +663,22 @@ impl ContentRepository for InMemoryRepository {
             tokens_used: suggestion.tokens_used,
             model_name: suggestion.model.clone(),
         };
-        
+
         // Insert the analysis - drop lock before await
         {
             let mut analyses = self.analyses.write().unwrap();
             analyses.insert(id, stored);
         }
-        
-        self.update_comment_status(comment_id, CommentStatus::Completed).await?;
+
+        self.update_comment_status(comment_id, CommentStatus::Completed)
+            .await?;
         Ok(id)
     }
 
     async fn get_analysis(&self, comment_id: i32) -> DbResult<Option<StoredAnalysis>> {
         let analyses = self.analyses.read().unwrap();
-        Ok(analyses.values()
+        Ok(analyses
+            .values()
             .find(|a| a.comment_id == comment_id)
             .cloned())
     }
@@ -713,7 +746,11 @@ impl ProgressTracker for InMemoryRepository {
         Ok(())
     }
 
-    async fn update_task_progress(&self, task_id: i64, increment: i32) -> DbResult<TaskProgressUpdate> {
+    async fn update_task_progress(
+        &self,
+        task_id: i64,
+        increment: i32,
+    ) -> DbResult<TaskProgressUpdate> {
         let campaign_id;
         {
             let mut tasks = self.tasks.write().unwrap();
@@ -724,13 +761,16 @@ impl ProgressTracker for InMemoryRepository {
                 return Ok(TaskProgressUpdate::default());
             }
         }
-        
+
         // Check if campaign should stop
-        let should_stop = self.should_stop_campaign(campaign_id).await.unwrap_or(false);
-        
+        let should_stop = self
+            .should_stop_campaign(campaign_id)
+            .await
+            .unwrap_or(false);
+
         let tasks = self.tasks.read().unwrap();
         let progress = tasks.get(&task_id).map(|t| t.progress).unwrap_or(0);
-        
+
         Ok(TaskProgressUpdate {
             success: true,
             should_stop,
@@ -749,7 +789,8 @@ impl ProgressTracker for InMemoryRepository {
     }
 
     async fn complete_task(&self, task_id: i64) -> DbResult<()> {
-        self.update_task_status(task_id, TaskStatus::Completed).await?;
+        self.update_task_status(task_id, TaskStatus::Completed)
+            .await?;
         let mut tasks = self.tasks.write().unwrap();
         if let Some(task) = tasks.get_mut(&task_id) {
             task.progress = 100;
@@ -784,16 +825,21 @@ impl ProgressTracker for InMemoryRepository {
 
     async fn get_processed_count(&self, campaign_id: i32) -> DbResult<i32> {
         let campaigns = self.campaigns.read().unwrap();
-        Ok(campaigns.get(&campaign_id).map(|c| c.processed_comments).unwrap_or(0))
+        Ok(campaigns
+            .get(&campaign_id)
+            .map(|c| c.processed_comments)
+            .unwrap_or(0))
     }
-    
+
     async fn stop_campaign_gracefully(&self, campaign_id: i32) -> DbResult<CampaignStopResult> {
         // Check if there are active tasks
         let has_active_tasks = {
             let tasks = self.tasks.read().unwrap();
-            tasks.values().any(|t| t.campaign_id == campaign_id && !t.is_terminal())
+            tasks
+                .values()
+                .any(|t| t.campaign_id == campaign_id && !t.is_terminal())
         };
-        
+
         let mut campaigns = self.campaigns.write().unwrap();
         if let Some(campaign) = campaigns.get_mut(&campaign_id) {
             if has_active_tasks {
@@ -813,7 +859,7 @@ impl ProgressTracker for InMemoryRepository {
                 });
             }
         }
-        
+
         Ok(CampaignStopResult::default())
     }
 }
@@ -825,25 +871,25 @@ mod tests {
     #[tokio::test]
     async fn test_in_memory_content_repository() {
         let repo = InMemoryRepository::new();
-        
+
         let content = Content::new("tiktok", "v123")
             .with_author("testuser")
             .with_description("Test video");
-        
+
         // Save content - first save should be new
         let result = repo.save_content(&content, Some(1), Some(1)).await.unwrap();
         assert!(result.id > 0);
         assert!(result.is_new);
-        
+
         // Save same content again - should not be new
         let result2 = repo.save_content(&content, Some(1), Some(1)).await.unwrap();
         assert_eq!(result2.id, result.id);
         assert!(!result2.is_new);
-        
+
         // Check exists
         let exists = repo.content_exists("tiktok", "v123").await.unwrap();
         assert!(exists);
-        
+
         // Get content
         let stored = repo.get_content("tiktok", "v123").await.unwrap();
         assert!(stored.is_some());
@@ -853,13 +899,15 @@ mod tests {
     #[tokio::test]
     async fn test_mock_ai_analyzer() {
         let analyzer = MockAiAnalyzer::new();
-        
+
         let content = Content::new("tiktok", "v123");
-        let comment = Comment::new("tiktok", "c1", "v123")
-            .with_text("Great video!");
+        let comment = Comment::new("tiktok", "c1", "v123").with_text("Great video!");
         let context = AnalysisContext::new();
-        
-        let suggestion = analyzer.analyze_comment(&comment, &content, &context).await.unwrap();
+
+        let suggestion = analyzer
+            .analyze_comment(&comment, &content, &context)
+            .await
+            .unwrap();
         assert!(suggestion.reply_text.is_some());
     }
 }

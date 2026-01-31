@@ -15,28 +15,28 @@ use std::collections::HashMap;
 pub struct Content {
     /// Platform identifier (e.g., "tiktok", "instagram")
     pub platform: String,
-    
+
     /// Platform-specific content ID
     pub content_id: String,
-    
+
     /// Content author's username
     pub author: String,
-    
+
     /// Author's display name
     pub author_name: Option<String>,
-    
+
     /// Content description/caption
     pub description: String,
-    
+
     /// URL to the content
     pub url: Option<String>,
-    
+
     /// Engagement metrics
     pub engagement: Engagement,
-    
+
     /// Creation timestamp (Unix epoch)
     pub created_at: Option<i64>,
-    
+
     /// Raw platform-specific data for reference
     pub raw_data: Option<serde_json::Value>,
 }
@@ -118,43 +118,43 @@ impl Content {
 pub struct Comment {
     /// Platform identifier
     pub platform: String,
-    
+
     /// Platform-specific comment ID
     pub comment_id: String,
-    
+
     /// ID of the content this comment belongs to
     pub content_id: String,
-    
+
     /// Parent comment ID (if this is a reply)
     pub parent_id: Option<String>,
-    
+
     /// Comment author's username
     pub author: String,
-    
+
     /// Author's display name
     pub author_name: Option<String>,
-    
+
     /// Author's user ID
     pub author_uid: Option<String>,
-    
+
     /// Comment text content
     pub text: String,
-    
+
     /// Number of likes on this comment
     pub likes: i64,
-    
+
     /// Number of replies to this comment
     pub reply_count: i32,
-    
+
     /// Creation timestamp (Unix epoch)
     pub created_at: Option<i64>,
-    
+
     /// Detected language of the comment
     pub language: Option<String>,
-    
+
     /// Whether this is a reply to another comment
     pub is_reply: bool,
-    
+
     /// Raw platform-specific data
     pub raw_data: Option<serde_json::Value>,
 }
@@ -255,31 +255,31 @@ impl Comment {
 pub struct ReplySuggestion {
     /// The comment this reply is for
     pub comment_id: String,
-    
+
     /// Suggested reply text
     pub reply_text: Option<String>,
-    
+
     /// Suggested DM text
     pub dm_text: Option<String>,
-    
+
     /// Suggested post reply text
     pub post_reply_text: Option<String>,
-    
+
     /// Reason/explanation for the suggestion
     pub reason: Option<String>,
-    
+
     /// Confidence score (0.0 - 1.0)
     pub confidence: Option<f64>,
-    
+
     /// Intent classification
     pub intent: Option<CommentIntent>,
-    
+
     /// Sentiment analysis result
     pub sentiment: Option<Sentiment>,
-    
+
     /// Number of tokens used for generation
     pub tokens_used: Option<i32>,
-    
+
     /// Model used for generation
     pub model: Option<String>,
 }
@@ -399,7 +399,7 @@ impl Default for Sentiment {
 // ============================================================
 
 /// Concurrency configuration for task processing
-/// 
+///
 /// Can be customized per campaign/template or use global defaults.
 /// Uses Tokio's lightweight async tasks (similar to Go goroutines).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -407,29 +407,39 @@ pub struct ConcurrencyConfig {
     /// Maximum concurrent tasks to process simultaneously (default: 5)
     #[serde(default = "default_max_concurrent_tasks")]
     pub max_concurrent_tasks: usize,
-    
+
     /// Maximum concurrent videos to process per task (default: 5)
     #[serde(default = "default_max_concurrent_videos")]
     pub max_concurrent_videos: usize,
-    
+
     /// AI API call concurrency limit (default: 20)
     #[serde(default = "default_ai_concurrency")]
     pub ai_concurrency: usize,
-    
+
     /// TikHub API call concurrency limit (default: 3)
     #[serde(default = "default_tikhub_concurrency")]
     pub tikhub_concurrency: usize,
-    
+
     /// Minimum interval between AI API calls in milliseconds (default: 50)
     #[serde(default = "default_ai_min_interval_ms")]
     pub ai_min_interval_ms: u64,
 }
 
-fn default_max_concurrent_tasks() -> usize { 5 }
-fn default_max_concurrent_videos() -> usize { 5 }
-fn default_ai_concurrency() -> usize { 20 }
-fn default_tikhub_concurrency() -> usize { 3 }
-fn default_ai_min_interval_ms() -> u64 { 50 }
+fn default_max_concurrent_tasks() -> usize {
+    5
+}
+fn default_max_concurrent_videos() -> usize {
+    5
+}
+fn default_ai_concurrency() -> usize {
+    20
+}
+fn default_tikhub_concurrency() -> usize {
+    3
+}
+fn default_ai_min_interval_ms() -> u64 {
+    50
+}
 
 impl Default for ConcurrencyConfig {
     fn default() -> Self {
@@ -458,7 +468,7 @@ impl ConcurrencyConfig {
             ai_min_interval_ms: default_ai_min_interval_ms(),
         }
     }
-    
+
     /// Create from environment variables
     pub fn from_env() -> Self {
         Self {
@@ -484,31 +494,31 @@ impl ConcurrencyConfig {
                 .unwrap_or_else(default_ai_min_interval_ms),
         }
     }
-    
+
     /// Builder method: set max concurrent tasks
     pub fn with_max_concurrent_tasks(mut self, n: usize) -> Self {
         self.max_concurrent_tasks = n;
         self
     }
-    
+
     /// Builder method: set max concurrent videos
     pub fn with_max_concurrent_videos(mut self, n: usize) -> Self {
         self.max_concurrent_videos = n;
         self
     }
-    
+
     /// Builder method: set AI concurrency
     pub fn with_ai_concurrency(mut self, n: usize) -> Self {
         self.ai_concurrency = n;
         self
     }
-    
+
     /// Builder method: set TikHub concurrency
     pub fn with_tikhub_concurrency(mut self, n: usize) -> Self {
         self.tikhub_concurrency = n;
         self
     }
-    
+
     /// Builder method: set AI min interval
     pub fn with_ai_min_interval_ms(mut self, ms: u64) -> Self {
         self.ai_min_interval_ms = ms;
@@ -525,44 +535,44 @@ impl ConcurrencyConfig {
 pub struct TaskConfig {
     /// Campaign ID
     pub campaign_id: i32,
-    
+
     /// Platform to crawl
     pub platform: String,
-    
+
     /// Search keywords
     pub keywords: Vec<String>,
-    
+
     /// Target region code
     pub region: Option<String>,
-    
+
     /// Maximum number of videos to process
     pub max_videos: Option<i32>,
-    
+
     /// Maximum comments per video
     pub max_comments_per_video: Option<i32>,
-    
+
     /// Sort type for search results (TikTok: 0=relevance, 1=most_liked)
     pub sort_type: Option<u8>,
-    
+
     /// Publish time filter (TikTok: 0=all, 1=day, 7=week, 30=month, 90=3months, 180=6months)
     pub publish_time: Option<u8>,
-    
+
     /// Product/service description for AI context
     pub product_prompt: Option<String>,
-    
+
     /// Target audience description
     pub target_audience: Option<String>,
-    
+
     /// Reply strategy instructions
     pub reply_strategy: Option<String>,
-    
+
     /// DM strategy instructions
     pub dm_strategy: Option<String>,
-    
+
     /// Concurrency configuration (optional, uses global defaults if not set)
     #[serde(default)]
     pub concurrency: Option<ConcurrencyConfig>,
-    
+
     /// Additional configuration
     pub extra: HashMap<String, serde_json::Value>,
 }
@@ -587,12 +597,12 @@ impl TaskConfig {
             extra: HashMap::new(),
         }
     }
-    
+
     /// Get effective concurrency config (task-level or default)
     pub fn effective_concurrency(&self) -> ConcurrencyConfig {
         self.concurrency.clone().unwrap_or_default()
     }
-    
+
     /// Set concurrency configuration
     pub fn with_concurrency(mut self, config: ConcurrencyConfig) -> Self {
         self.concurrency = Some(config);
@@ -628,13 +638,13 @@ impl TaskConfig {
         self.max_comments_per_video = Some(max);
         self
     }
-    
+
     /// Set sort type (TikTok: 0=relevance, 1=most_liked)
     pub fn with_sort_type(mut self, sort_type: u8) -> Self {
         self.sort_type = Some(sort_type);
         self
     }
-    
+
     /// Set publish time filter (TikTok: 0=all, 1=day, 7=week, 30=month, 90=3months, 180=6months)
     pub fn with_publish_time(mut self, publish_time: u8) -> Self {
         self.publish_time = Some(publish_time);
@@ -651,22 +661,22 @@ impl TaskConfig {
 pub struct TaskResult {
     /// Task ID
     pub task_id: i64,
-    
+
     /// Whether the task succeeded
     pub success: bool,
-    
+
     /// Number of contents processed
     pub contents_processed: i32,
-    
+
     /// Number of comments processed
     pub comments_processed: i32,
-    
+
     /// Number of AI analyses generated
     pub analyses_generated: i32,
-    
+
     /// Error message if failed
     pub error: Option<String>,
-    
+
     /// Processing duration in milliseconds
     pub duration_ms: Option<u64>,
 }
@@ -699,12 +709,7 @@ impl TaskResult {
     }
 
     /// Update counts
-    pub fn with_counts(
-        mut self,
-        contents: i32,
-        comments: i32,
-        analyses: i32,
-    ) -> Self {
+    pub fn with_counts(mut self, contents: i32, comments: i32, analyses: i32) -> Self {
         self.contents_processed = contents;
         self.comments_processed = comments;
         self.analyses_generated = analyses;
@@ -727,19 +732,22 @@ impl TaskResult {
 pub struct SearchOptions {
     /// Search query/keyword
     pub query: String,
-    
+
+    /// Platform name (e.g., "tiktok", "instagram", "reddit", "twitter")
+    pub platform: Option<String>,
+
     /// Region code
     pub region: Option<String>,
-    
+
     /// Number of results to fetch
     pub count: u32,
-    
+
     /// Pagination offset
     pub offset: u32,
-    
+
     /// Sort type (platform-specific)
     pub sort_type: Option<u8>,
-    
+
     /// Time filter (platform-specific)
     pub publish_time: Option<u8>,
 }
@@ -748,12 +756,18 @@ impl SearchOptions {
     pub fn new(query: impl Into<String>) -> Self {
         Self {
             query: query.into(),
+            platform: None,
             region: None,
             count: 10,
             offset: 0,
             sort_type: None,
             publish_time: None,
         }
+    }
+
+    pub fn with_platform(mut self, platform: impl Into<String>) -> Self {
+        self.platform = Some(platform.into());
+        self
     }
 
     pub fn with_region(mut self, region: impl Into<String>) -> Self {
@@ -781,16 +795,16 @@ impl SearchOptions {
 pub enum KeywordType {
     /// Regular search keyword
     Search(String),
-    
+
     /// User's unique ID (e.g., @username)
     UserId(String),
-    
+
     /// User's secure ID (platform-specific)
     SecUserId(String),
-    
+
     /// Direct video/content ID
     ContentId(String),
-    
+
     /// Hashtag search
     Hashtag(String),
 }

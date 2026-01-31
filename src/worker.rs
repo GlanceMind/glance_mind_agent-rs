@@ -16,10 +16,10 @@ use std::time::Duration;
 use tokio::sync::Semaphore;
 use tracing::{debug, error, info, warn};
 
-use crate::adapters::redis::{RedisTaskConsumer, CrawlerTaskExt};
+use crate::adapters::redis::{CrawlerTaskExt, RedisTaskConsumer};
 use crate::concurrency::GlobalRateLimiters;
-use crate::domain::ConcurrencyConfig;
 use crate::domain::errors::QueueError;
+use crate::domain::ConcurrencyConfig;
 use crate::orchestrator::WorkflowOrchestrator;
 use crate::protocol_gen::CrawlerTask;
 
@@ -27,16 +27,16 @@ use crate::protocol_gen::CrawlerTask;
 pub struct MultiPlatformWorker {
     /// Task consumer (Redis)
     task_consumer: Arc<RedisTaskConsumer>,
-    
+
     /// Workflow orchestrator
     orchestrator: Arc<WorkflowOrchestrator>,
-    
+
     /// Configuration
     config: WorkerConfig,
-    
+
     /// Global rate limiters for API calls
     rate_limiters: GlobalRateLimiters,
-    
+
     /// Shutdown signal
     shutdown: tokio::sync::watch::Receiver<bool>,
 }
@@ -47,19 +47,19 @@ pub struct WorkerConfig {
     /// Number of concurrent tasks (legacy, use concurrency_config.max_concurrent_tasks)
     /// Kept for backward compatibility
     pub concurrency: usize,
-    
+
     /// Delay between poll attempts when queue is empty
     pub poll_delay_ms: u64,
-    
+
     /// Maximum retries for failed tasks
     pub max_retries: u32,
-    
+
     /// Retry delay in milliseconds
     pub retry_delay_ms: u64,
-    
+
     /// Whether to continue on individual task errors
     pub continue_on_error: bool,
-    
+
     /// Concurrency configuration for parallel processing
     pub concurrency_config: ConcurrencyConfig,
 }
@@ -88,7 +88,7 @@ impl WorkerConfig {
             ..Default::default()
         }
     }
-    
+
     /// Set concurrency config
     pub fn with_concurrency_config(mut self, config: ConcurrencyConfig) -> Self {
         self.concurrency = config.max_concurrent_tasks;
@@ -105,10 +105,10 @@ impl MultiPlatformWorker {
         config: WorkerConfig,
     ) -> (Self, tokio::sync::watch::Sender<bool>) {
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-        
+
         // Create global rate limiters from concurrency config
         let rate_limiters = GlobalRateLimiters::from_config(&config.concurrency_config);
-        
+
         info!(
             max_concurrent_tasks = config.concurrency_config.max_concurrent_tasks,
             max_concurrent_videos = config.concurrency_config.max_concurrent_videos,
@@ -116,7 +116,7 @@ impl MultiPlatformWorker {
             tikhub_concurrency = config.concurrency_config.tikhub_concurrency,
             "Initialized worker with concurrency configuration"
         );
-        
+
         let worker = Self {
             task_consumer,
             orchestrator,
@@ -124,10 +124,10 @@ impl MultiPlatformWorker {
             rate_limiters,
             shutdown: shutdown_rx,
         };
-        
+
         (worker, shutdown_tx)
     }
-    
+
     /// Get reference to global rate limiters
     pub fn rate_limiters(&self) -> &GlobalRateLimiters {
         &self.rate_limiters
@@ -169,7 +169,7 @@ impl MultiPlatformWorker {
                     let orchestrator = self.orchestrator.clone();
                     let consumer = self.task_consumer.clone();
                     let config = self.config.clone();
-                    
+
                     // Spawn task processing
                     tokio::spawn(async move {
                         let _permit = permit; // Hold permit until done
@@ -218,7 +218,8 @@ impl MultiPlatformWorker {
                         self.orchestrator.clone(),
                         self.task_consumer.clone(),
                         &self.config,
-                    ).await;
+                    )
+                    .await;
                 }
                 Err(QueueError::Empty) => {
                     // Timeout, just continue
@@ -246,7 +247,8 @@ impl MultiPlatformWorker {
             self.orchestrator.clone(),
             self.task_consumer.clone(),
             &self.config,
-        ).await;
+        )
+        .await;
     }
 }
 
@@ -278,7 +280,10 @@ async fn process_task(
             );
 
             // Acknowledge the task
-            if let Err(e) = consumer.ack(task_id, result.success, result.error.as_deref()).await {
+            if let Err(e) = consumer
+                .ack(task_id, result.success, result.error.as_deref())
+                .await
+            {
                 error!(task_id, error = %e, "Failed to acknowledge task");
             }
         }
@@ -326,13 +331,13 @@ impl WorkerBuilder {
         self.concurrency_config.max_concurrent_tasks = n;
         self
     }
-    
+
     /// Set full concurrency configuration
     pub fn concurrency_config(mut self, config: ConcurrencyConfig) -> Self {
         self.concurrency_config = config;
         self
     }
-    
+
     /// Load concurrency configuration from environment variables
     pub fn concurrency_from_env(mut self) -> Self {
         self.concurrency_config = ConcurrencyConfig::from_env();
@@ -345,30 +350,28 @@ impl WorkerBuilder {
     }
 
     pub fn build(self) -> Result<(MultiPlatformWorker, tokio::sync::watch::Sender<bool>), String> {
-        let redis_url = self.redis_url
+        let redis_url = self
+            .redis_url
             .or_else(|| std::env::var("REDIS_URL").ok())
             .ok_or("redis_url is required")?;
-        
+
         // Default queue name must match scheduler's queue
-        let queue_name = self.queue_name
+        let queue_name = self
+            .queue_name
             .unwrap_or_else(|| "crawler:task_queue".to_string());
-        
+
         let consumer = RedisTaskConsumer::new(&redis_url, &queue_name)
             .map_err(|e| format!("Failed to create Redis consumer: {}", e))?;
-        
-        let orchestrator = self.orchestrator
-            .ok_or("orchestrator is required")?;
-        
+
+        let orchestrator = self.orchestrator.ok_or("orchestrator is required")?;
+
         let config = WorkerConfig {
             concurrency: self.concurrency_config.max_concurrent_tasks,
             concurrency_config: self.concurrency_config,
             ..Default::default()
         };
-        
-        debug!(
-            ?config,
-            "Building worker with configuration"
-        );
+
+        debug!(?config, "Building worker with configuration");
 
         Ok(MultiPlatformWorker::new(
             Arc::new(consumer),
@@ -399,15 +402,15 @@ mod tests {
         assert_eq!(config.max_retries, 3);
         assert!(config.continue_on_error);
     }
-    
+
     #[test]
     fn test_worker_config_from_concurrency() {
         let cc = ConcurrencyConfig::default()
             .with_max_concurrent_tasks(10)
             .with_max_concurrent_videos(8);
-        
+
         let config = WorkerConfig::default().with_concurrency_config(cc);
-        
+
         assert_eq!(config.concurrency, 10);
         assert_eq!(config.concurrency_config.max_concurrent_tasks, 10);
         assert_eq!(config.concurrency_config.max_concurrent_videos, 8);

@@ -37,26 +37,26 @@ pub struct SearchItem {
 pub struct AwemeInfo {
     /// Unique video ID
     pub aweme_id: String,
-    
+
     /// Video description/caption
     #[serde(default)]
     pub desc: Option<String>,
-    
+
     /// Unix timestamp of creation
     pub create_time: Option<i64>,
-    
+
     /// Shareable URL
     pub share_url: Option<String>,
-    
+
     /// Video author information
     pub author: Option<Author>,
-    
+
     /// Engagement statistics
     pub statistics: Option<Statistics>,
-    
+
     /// Video details (duration, cover, etc.)
     pub video: Option<VideoDetail>,
-    
+
     /// Music information
     pub music: Option<MusicInfo>,
 }
@@ -66,22 +66,22 @@ pub struct AwemeInfo {
 pub struct Author {
     /// User ID
     pub uid: Option<String>,
-    
+
     /// Username (unique_id, e.g., @username)
     pub unique_id: Option<String>,
-    
+
     /// Display name
     pub nickname: Option<String>,
-    
+
     /// Secure user ID
     pub sec_uid: Option<String>,
-    
+
     /// Avatar URL
     pub avatar_thumb: Option<AvatarInfo>,
-    
+
     /// Verification status
     pub custom_verify: Option<String>,
-    
+
     /// Follower count
     pub follower_count: Option<i64>,
 }
@@ -96,19 +96,19 @@ pub struct AvatarInfo {
 pub struct Statistics {
     /// Like count
     pub digg_count: Option<i64>,
-    
+
     /// Comment count
     pub comment_count: Option<i64>,
-    
+
     /// Share count
     pub share_count: Option<i64>,
-    
+
     /// View/play count
     pub play_count: Option<i64>,
-    
+
     /// Collect/favorite count
     pub collect_count: Option<i64>,
-    
+
     /// Download count
     pub download_count: Option<i64>,
 }
@@ -118,19 +118,19 @@ pub struct Statistics {
 pub struct VideoDetail {
     /// Video duration in seconds
     pub duration: Option<i64>,
-    
+
     /// Video width
     pub width: Option<i32>,
-    
+
     /// Video height
     pub height: Option<i32>,
-    
+
     /// Cover image
     pub cover: Option<CoverInfo>,
-    
+
     /// Dynamic cover (animated)
     pub dynamic_cover: Option<CoverInfo>,
-    
+
     /// Play address
     pub play_addr: Option<PlayAddr>,
 }
@@ -183,32 +183,32 @@ pub struct CommentsData {
 pub struct TikTokComment {
     /// Comment ID
     pub cid: String,
-    
+
     /// Comment text content
     pub text: Option<String>,
-    
+
     /// Unix timestamp of creation
     pub create_time: Option<i64>,
-    
+
     /// Like count on this comment
     pub digg_count: Option<i64>,
-    
+
     /// Parent comment ID (if this is a reply)
     /// "0" means it's a top-level comment
     pub reply_id: Option<String>,
-    
+
     /// Number of replies to this comment
     pub reply_comment_total: Option<i32>,
-    
+
     /// Video ID this comment belongs to
     pub aweme_id: Option<String>,
-    
+
     /// Comment author
     pub user: Option<CommentUser>,
-    
+
     /// Whether this comment is pinned by author
     pub is_author_digged: Option<bool>,
-    
+
     /// Comment language
     pub comment_language: Option<String>,
 }
@@ -218,16 +218,16 @@ pub struct TikTokComment {
 pub struct CommentUser {
     /// User ID
     pub uid: Option<String>,
-    
+
     /// Username
     pub unique_id: Option<String>,
-    
+
     /// Display name
     pub nickname: Option<String>,
-    
+
     /// Avatar
     pub avatar_thumb: Option<AvatarInfo>,
-    
+
     /// Secure user ID
     pub sec_uid: Option<String>,
 }
@@ -250,13 +250,13 @@ pub struct UserVideosResponse {
 pub struct UserVideosData {
     /// List of videos
     pub aweme_list: Option<Vec<AwemeInfo>>,
-    
+
     /// Whether there are more videos
     pub has_more: Option<i32>,
-    
+
     /// Cursor for pagination
     pub max_cursor: Option<i64>,
-    
+
     /// Minimum cursor (for backward pagination)
     pub min_cursor: Option<i64>,
 }
@@ -302,13 +302,13 @@ impl SearchParams {
         self.offset = offset;
         self
     }
-    
+
     /// Set sort type (0=relevance, 1=most_liked)
     pub fn with_sort_type(mut self, sort_type: u8) -> Self {
         self.sort_type = sort_type;
         self
     }
-    
+
     /// Set publish time filter (0=all, 1=day, 7=week, 30=month, 90=3months, 180=6months)
     pub fn with_publish_time(mut self, publish_time: u8) -> Self {
         self.publish_time = publish_time;
@@ -317,10 +317,16 @@ impl SearchParams {
 }
 
 /// Comment fetch parameters
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct CommentParams {
     pub cursor: String,
     pub count: u32,
+}
+
+impl Default for CommentParams {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CommentParams {
@@ -401,22 +407,34 @@ impl AwemeInfo {
 
     /// Get like count
     pub fn likes(&self) -> i64 {
-        self.statistics.as_ref().and_then(|s| s.digg_count).unwrap_or(0)
+        self.statistics
+            .as_ref()
+            .and_then(|s| s.digg_count)
+            .unwrap_or(0)
     }
 
     /// Get comment count
     pub fn comments(&self) -> i64 {
-        self.statistics.as_ref().and_then(|s| s.comment_count).unwrap_or(0)
+        self.statistics
+            .as_ref()
+            .and_then(|s| s.comment_count)
+            .unwrap_or(0)
     }
 
     /// Get share count
     pub fn shares(&self) -> i64 {
-        self.statistics.as_ref().and_then(|s| s.share_count).unwrap_or(0)
+        self.statistics
+            .as_ref()
+            .and_then(|s| s.share_count)
+            .unwrap_or(0)
     }
 
     /// Get play/view count
     pub fn views(&self) -> i64 {
-        self.statistics.as_ref().and_then(|s| s.play_count).unwrap_or(0)
+        self.statistics
+            .as_ref()
+            .and_then(|s| s.play_count)
+            .unwrap_or(0)
     }
 }
 
@@ -428,7 +446,10 @@ impl TikTokComment {
 
     /// Check if this is a reply to another comment
     pub fn is_reply(&self) -> bool {
-        self.reply_id.as_deref().map(|id| id != "0").unwrap_or(false)
+        self.reply_id
+            .as_deref()
+            .map(|id| id != "0")
+            .unwrap_or(false)
     }
 
     /// Get commenter username

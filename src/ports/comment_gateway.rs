@@ -2,8 +2,8 @@
 
 use async_trait::async_trait;
 
-use crate::domain::Comment;
 use crate::domain::errors::GatewayResult;
+use crate::domain::Comment;
 
 /// Port for fetching comments from external platforms
 #[async_trait]
@@ -64,13 +64,13 @@ pub trait CommentGateway: Send + Sync {
 pub struct FetchCommentsOptions {
     /// Number of comments to fetch per request
     pub count: u32,
-    
+
     /// Pagination cursor
     pub cursor: Option<String>,
-    
+
     /// Sort order
     pub sort: CommentSort,
-    
+
     /// Whether to include replies
     pub include_replies: bool,
 }
@@ -133,13 +133,13 @@ pub enum CommentSort {
 pub struct FetchCommentsResult {
     /// Fetched comments
     pub comments: Vec<Comment>,
-    
+
     /// Whether there are more comments available
     pub has_more: bool,
-    
+
     /// Cursor for fetching next page
     pub next_cursor: Option<String>,
-    
+
     /// Total number of comments (if known)
     pub total: Option<i64>,
 }

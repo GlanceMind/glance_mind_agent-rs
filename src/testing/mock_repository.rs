@@ -2,17 +2,19 @@
 
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::sync::RwLock;
 use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::RwLock;
 
-use crate::domain::{Content, Comment, ReplySuggestion};
 use crate::domain::errors::{DbError, DbResult};
+use crate::domain::{Comment, Content, ReplySuggestion};
 use crate::ports::{
-    ContentRepository, PromptRepository, ProgressTracker,
-    content_repository::{ContentSaveResult, StoredContent, StoredComment, StoredAnalysis, CommentStatus},
-    prompt_repository::{CampaignConfig, PlatformConfig},
-    progress_tracker::{CampaignStopResult, TaskInfo, TaskProgressUpdate, TaskStatus},
     ai_analyzer::AnalysisContext,
+    content_repository::{
+        CommentStatus, ContentSaveResult, StoredAnalysis, StoredComment, StoredContent,
+    },
+    progress_tracker::{CampaignStopResult, TaskInfo, TaskProgressUpdate, TaskStatus},
+    prompt_repository::{CampaignConfig, PlatformConfig},
+    ContentRepository, ProgressTracker, PromptRepository,
 };
 
 /// Mock repository implementing all repository ports
@@ -21,25 +23,25 @@ pub struct MockRepository {
     contents: RwLock<HashMap<i32, StoredContent>>,
     content_by_platform_id: RwLock<HashMap<(i32, String), i32>>,
     next_content_id: AtomicI32,
-    
+
     // Comment storage
     comments: RwLock<HashMap<i32, StoredComment>>,
     comment_by_platform_id: RwLock<HashMap<(i32, String), i32>>,
     next_comment_id: AtomicI32,
-    
+
     // Analysis storage
     analyses: RwLock<HashMap<i32, StoredAnalysis>>,
     next_analysis_id: AtomicI32,
-    
+
     // Campaign storage
     campaigns: RwLock<HashMap<i32, CampaignConfig>>,
-    
+
     // Task storage
     tasks: RwLock<HashMap<i64, TaskInfo>>,
-    
+
     // Platform storage
     platforms: RwLock<HashMap<i32, PlatformConfig>>,
-    
+
     // Error simulation
     error_mode: RwLock<Option<MockDbError>>,
 }
@@ -70,27 +72,30 @@ impl MockRepository {
             platforms: RwLock::new(HashMap::new()),
             error_mode: RwLock::new(None),
         };
-        
+
         // Initialize default platforms
         repo.init_default_platforms();
-        
+
         repo
     }
 
     fn init_default_platforms(&self) {
         use crate::config::platform::{global_registry, PlatformLookup};
-        
+
         let mut platforms = self.platforms.write().unwrap();
         let registry = global_registry();
-        
+
         // Load platforms from global registry (initialized from database at startup)
         for platform_info in registry.all_platforms() {
-            platforms.insert(platform_info.id, PlatformConfig {
-                id: platform_info.id,
-                name: platform_info.name.clone(),
-                display_name: platform_info.display_name.clone(),
-                is_active: platform_info.is_active,
-            });
+            platforms.insert(
+                platform_info.id,
+                PlatformConfig {
+                    id: platform_info.id,
+                    name: platform_info.name.clone(),
+                    display_name: platform_info.display_name.clone(),
+                    is_active: platform_info.is_active,
+                },
+            );
         }
     }
 
@@ -129,7 +134,9 @@ impl MockRepository {
     fn check_error(&self) -> DbResult<()> {
         let mode = self.error_mode.read().unwrap();
         match mode.as_ref() {
-            Some(MockDbError::Connection) => Err(DbError::Connection("Mock connection error".into())),
+            Some(MockDbError::Connection) => {
+                Err(DbError::Connection("Mock connection error".into()))
+            }
             Some(MockDbError::NotFound) => Err(DbError::NotFound("Mock not found".into())),
             Some(MockDbError::Duplicate) => Err(DbError::Duplicate("Mock duplicate".into())),
             Some(MockDbError::Constraint) => Err(DbError::Constraint("Mock constraint".into())),
@@ -139,7 +146,7 @@ impl MockRepository {
 
     fn platform_id(&self, platform: &str) -> i32 {
         use crate::config::platform::{global_registry, PlatformLookup};
-        
+
         global_registry().get_id(platform).unwrap_or(0)
     }
 }
@@ -159,7 +166,11 @@ impl ContentRepository for MockRepository {
         Ok(idx.contains_key(&(pid, content_id.to_string())))
     }
 
-    async fn get_content(&self, platform: &str, content_id: &str) -> DbResult<Option<StoredContent>> {
+    async fn get_content(
+        &self,
+        platform: &str,
+        content_id: &str,
+    ) -> DbResult<Option<StoredContent>> {
         self.check_error()?;
         let pid = self.platform_id(platform);
         let idx = self.content_by_platform_id.read().unwrap();
@@ -176,16 +187,21 @@ impl ContentRepository for MockRepository {
         Ok(contents.get(&id).cloned())
     }
 
-    async fn save_content(&self, content: &Content, campaign_id: Option<i32>, task_id: Option<i32>) -> DbResult<ContentSaveResult> {
+    async fn save_content(
+        &self,
+        content: &Content,
+        campaign_id: Option<i32>,
+        _task_id: Option<i32>,
+    ) -> DbResult<ContentSaveResult> {
         self.check_error()?;
         let pid = self.platform_id(&content.platform);
-        
+
         // Check if content already exists (ON CONFLICT simulation)
         let existing_id = {
             let idx = self.content_by_platform_id.read().unwrap();
             idx.get(&(pid, content.content_id.clone())).copied()
         };
-        
+
         if let Some(existing_id) = existing_id {
             // Content exists - update it (matching ON CONFLICT DO UPDATE behavior)
             {
@@ -202,13 +218,13 @@ impl ContentRepository for MockRepository {
             }
             return Ok(ContentSaveResult {
                 id: existing_id,
-                is_new: false,  // Existing record was updated
+                is_new: false, // Existing record was updated
             });
         }
-        
+
         // New content - insert
         let id = self.next_content_id.fetch_add(1, Ordering::SeqCst);
-        
+
         let stored = StoredContent {
             id,
             platform_id: pid,
@@ -225,7 +241,7 @@ impl ContentRepository for MockRepository {
             raw_data: content.raw_data.clone(),
             campaign_id,
         };
-        
+
         {
             let mut contents = self.contents.write().unwrap();
             contents.insert(id, stored);
@@ -234,14 +250,19 @@ impl ContentRepository for MockRepository {
             let mut idx = self.content_by_platform_id.write().unwrap();
             idx.insert((pid, content.content_id.clone()), id);
         }
-        
+
         Ok(ContentSaveResult {
             id,
-            is_new: true,  // New record was inserted
+            is_new: true, // New record was inserted
         })
     }
 
-    async fn save_contents(&self, contents: &[Content], campaign_id: Option<i32>, task_id: Option<i32>) -> DbResult<Vec<ContentSaveResult>> {
+    async fn save_contents(
+        &self,
+        contents: &[Content],
+        campaign_id: Option<i32>,
+        task_id: Option<i32>,
+    ) -> DbResult<Vec<ContentSaveResult>> {
         let mut results = Vec::with_capacity(contents.len());
         for content in contents {
             results.push(self.save_content(content, campaign_id, task_id).await?);
@@ -275,7 +296,11 @@ impl ContentRepository for MockRepository {
         Ok(idx.contains_key(&(pid, comment_id.to_string())))
     }
 
-    async fn get_comment(&self, platform: &str, comment_id: &str) -> DbResult<Option<StoredComment>> {
+    async fn get_comment(
+        &self,
+        platform: &str,
+        comment_id: &str,
+    ) -> DbResult<Option<StoredComment>> {
         self.check_error()?;
         let pid = self.platform_id(platform);
         let idx = self.comment_by_platform_id.read().unwrap();
@@ -296,7 +321,7 @@ impl ContentRepository for MockRepository {
         self.check_error()?;
         let id = self.next_comment_id.fetch_add(1, Ordering::SeqCst);
         let pid = self.platform_id(&comment.platform);
-        
+
         let stored = StoredComment {
             id,
             platform_id: pid,
@@ -314,7 +339,7 @@ impl ContentRepository for MockRepository {
             raw_data: comment.raw_data.clone(),
             status: CommentStatus::Pending as i16,
         };
-        
+
         {
             let mut comments = self.comments.write().unwrap();
             comments.insert(id, stored);
@@ -323,7 +348,7 @@ impl ContentRepository for MockRepository {
             let mut idx = self.comment_by_platform_id.write().unwrap();
             idx.insert((pid, comment.comment_id.clone()), id);
         }
-        
+
         Ok(id)
     }
 
@@ -335,22 +360,26 @@ impl ContentRepository for MockRepository {
         Ok(ids)
     }
 
-    async fn get_pending_comments(&self, campaign_id: i32, limit: i32) -> DbResult<Vec<StoredComment>> {
+    async fn get_pending_comments(
+        &self,
+        campaign_id: i32,
+        limit: i32,
+    ) -> DbResult<Vec<StoredComment>> {
         self.check_error()?;
         let contents = self.contents.read().unwrap();
         let comments = self.comments.read().unwrap();
-        
+
         let campaign_content_ids: Vec<i32> = contents
             .values()
             .filter(|c| c.campaign_id == Some(campaign_id))
             .map(|c| c.id)
             .collect();
-        
+
         Ok(comments
             .values()
             .filter(|c| {
-                campaign_content_ids.contains(&c.content_id) &&
-                c.status == CommentStatus::Pending as i16
+                campaign_content_ids.contains(&c.content_id)
+                    && c.status == CommentStatus::Pending as i16
             })
             .take(limit as usize)
             .cloned()
@@ -375,30 +404,32 @@ impl ContentRepository for MockRepository {
     ) -> DbResult<i32> {
         self.check_error()?;
         let pid = self.platform_id(&comment.platform);
-        
+
         // Check if comment already exists
         let existing_id = {
             let idx = self.comment_by_platform_id.read().unwrap();
             idx.get(&(pid, comment.comment_id.clone())).copied()
         };
-        
+
         if let Some(existing_id) = existing_id {
             // Update existing comment with analysis
             {
                 let mut comments = self.comments.write().unwrap();
                 if let Some(stored) = comments.get_mut(&existing_id) {
-                    stored.status = CommentStatus::Pending as i16;  // 0 for user review
+                    stored.status = CommentStatus::Pending as i16; // 0 for user review
                 }
             }
-            
+
             // Save/update analysis
-            let analysis_id = self.save_analysis(existing_id, campaign_id, suggestion).await?;
+            let _analysis_id = self
+                .save_analysis(existing_id, campaign_id, suggestion)
+                .await?;
             return Ok(existing_id);
         }
-        
+
         // Insert new comment with analysis
         let id = self.next_comment_id.fetch_add(1, Ordering::SeqCst);
-        
+
         let stored = StoredComment {
             id,
             platform_id: pid,
@@ -414,9 +445,9 @@ impl ContentRepository for MockRepository {
             comment_created_at: comment.created_at,
             is_reply: comment.is_reply,
             raw_data: comment.raw_data.clone(),
-            status: CommentStatus::Pending as i16,  // 0 for user review
+            status: CommentStatus::Pending as i16, // 0 for user review
         };
-        
+
         {
             let mut comments = self.comments.write().unwrap();
             comments.insert(id, stored);
@@ -425,10 +456,10 @@ impl ContentRepository for MockRepository {
             let mut idx = self.comment_by_platform_id.write().unwrap();
             idx.insert((pid, comment.comment_id.clone()), id);
         }
-        
+
         // Save analysis
         let _ = self.save_analysis(id, campaign_id, suggestion).await?;
-        
+
         Ok(id)
     }
 
@@ -440,7 +471,7 @@ impl ContentRepository for MockRepository {
     ) -> DbResult<i32> {
         self.check_error()?;
         let id = self.next_analysis_id.fetch_add(1, Ordering::SeqCst);
-        
+
         let stored = StoredAnalysis {
             id,
             comment_id,
@@ -452,22 +483,26 @@ impl ContentRepository for MockRepository {
             tokens_used: suggestion.tokens_used,
             model_name: suggestion.model.clone(),
         };
-        
+
         {
             let mut analyses = self.analyses.write().unwrap();
             analyses.insert(id, stored);
         }
-        
+
         // Update comment status to completed (with analysis)
-        self.update_comment_status(comment_id, CommentStatus::Completed).await?;
-        
+        self.update_comment_status(comment_id, CommentStatus::Completed)
+            .await?;
+
         Ok(id)
     }
 
     async fn get_analysis(&self, comment_id: i32) -> DbResult<Option<StoredAnalysis>> {
         self.check_error()?;
         let analyses = self.analyses.read().unwrap();
-        Ok(analyses.values().find(|a| a.comment_id == comment_id).cloned())
+        Ok(analyses
+            .values()
+            .find(|a| a.comment_id == comment_id)
+            .cloned())
     }
 }
 
@@ -532,9 +567,13 @@ impl ProgressTracker for MockRepository {
         Ok(())
     }
 
-    async fn update_task_progress(&self, task_id: i64, increment: i32) -> DbResult<TaskProgressUpdate> {
+    async fn update_task_progress(
+        &self,
+        task_id: i64,
+        increment: i32,
+    ) -> DbResult<TaskProgressUpdate> {
         self.check_error()?;
-        
+
         let (campaign_id, progress) = {
             let mut tasks = self.tasks.write().unwrap();
             if let Some(t) = tasks.get_mut(&task_id) {
@@ -544,18 +583,21 @@ impl ProgressTracker for MockRepository {
                 (None, 0)
             }
         }; // Lock released here before await
-        
+
         let mut result = TaskProgressUpdate::default();
-        
+
         if let Some(campaign_id) = campaign_id {
             result.success = true;
             result.new_process_count = progress;
             result.new_actual_consumption = progress as f64 * 1.5; // Simulated unit price
-            
+
             // Check if campaign is stopping
-            result.should_stop = self.should_stop_campaign(campaign_id).await.unwrap_or(false);
+            result.should_stop = self
+                .should_stop_campaign(campaign_id)
+                .await
+                .unwrap_or(false);
         }
-        
+
         Ok(result)
     }
 
@@ -570,7 +612,8 @@ impl ProgressTracker for MockRepository {
     }
 
     async fn complete_task(&self, task_id: i64) -> DbResult<()> {
-        self.update_task_status(task_id, TaskStatus::Completed).await?;
+        self.update_task_status(task_id, TaskStatus::Completed)
+            .await?;
         let mut tasks = self.tasks.write().unwrap();
         if let Some(t) = tasks.get_mut(&task_id) {
             t.progress = 100;
@@ -606,24 +649,28 @@ impl ProgressTracker for MockRepository {
 
     async fn get_processed_count(&self, campaign_id: i32) -> DbResult<i32> {
         let campaigns = self.campaigns.read().unwrap();
-        Ok(campaigns.get(&campaign_id).map(|c| c.processed_comments).unwrap_or(0))
+        Ok(campaigns
+            .get(&campaign_id)
+            .map(|c| c.processed_comments)
+            .unwrap_or(0))
     }
-    
+
     async fn stop_campaign_gracefully(&self, campaign_id: i32) -> DbResult<CampaignStopResult> {
         self.check_error()?;
-        
+
         // Check if there are any active tasks (before locking campaigns)
         let has_active_tasks = {
             let tasks = self.tasks.read().unwrap();
-            tasks.values()
+            tasks
+                .values()
                 .any(|t| t.campaign_id == campaign_id && !t.is_terminal())
         };
-        
+
         let mut campaigns = self.campaigns.write().unwrap();
-        
+
         if let Some(c) = campaigns.get_mut(&campaign_id) {
             use crate::ports::prompt_repository::CampaignStatus;
-            
+
             if has_active_tasks {
                 // Set to STOPPING state
                 c.status = CampaignStatus::Stopping;
@@ -642,7 +689,7 @@ impl ProgressTracker for MockRepository {
                 });
             }
         }
-        
+
         Ok(CampaignStopResult::default())
     }
 }
@@ -656,27 +703,30 @@ mod tests {
     #[tokio::test]
     async fn test_mock_repository_content() {
         let repo = MockRepository::new();
-        
+
         let content = Content::new("tiktok", "v123")
             .with_author("testuser")
             .with_engagement(Engagement {
-                likes: 100, comments: 10, shares: 5, views: 1000,
+                likes: 100,
+                comments: 10,
+                shares: 5,
+                views: 1000,
             });
-        
+
         // Save content - first save should be new
         let result = repo.save_content(&content, Some(1), Some(1)).await.unwrap();
         assert!(result.id > 0);
         assert!(result.is_new);
-        
+
         // Save same content again - should not be new
         let result2 = repo.save_content(&content, Some(1), Some(1)).await.unwrap();
         assert_eq!(result2.id, result.id);
         assert!(!result2.is_new);
-        
+
         // Check exists
         assert!(repo.content_exists("tiktok", "v123").await.unwrap());
         assert!(!repo.content_exists("tiktok", "v456").await.unwrap());
-        
+
         // Get content
         let stored = repo.get_content("tiktok", "v123").await.unwrap().unwrap();
         assert_eq!(stored.content_id, "v123");
@@ -686,18 +736,18 @@ mod tests {
     #[tokio::test]
     async fn test_mock_repository_comments() {
         let repo = MockRepository::new();
-        
+
         // First save a content
         let content = Content::new("tiktok", "v123");
         let content_result = repo.save_content(&content, Some(1), Some(1)).await.unwrap();
         let content_id = content_result.id;
-        
+
         // Save comment
         let comment = Comment::new("tiktok", "c1", "v123")
             .with_author("commenter")
             .with_text("Great video!");
         let comment_id = repo.save_comment(&comment, content_id).await.unwrap();
-        
+
         // Check
         assert!(repo.comment_exists("tiktok", "c1").await.unwrap());
         let stored = repo.get_comment_by_id(comment_id).await.unwrap().unwrap();
@@ -707,7 +757,7 @@ mod tests {
     #[tokio::test]
     async fn test_mock_repository_campaign() {
         let repo = MockRepository::new();
-        
+
         let campaign = CampaignConfig {
             id: 1,
             user_id: 1,
@@ -722,12 +772,12 @@ mod tests {
             max_comments: Some(100),
             processed_comments: 0,
         };
-        
+
         repo.add_campaign(campaign);
-        
+
         let stored = repo.get_campaign(1).await.unwrap().unwrap();
         assert_eq!(stored.name, "Test Campaign");
-        
+
         let ctx = repo.get_analysis_context(1).await.unwrap().unwrap();
         assert_eq!(ctx.product_prompt, Some("Fitness app".to_string()));
     }

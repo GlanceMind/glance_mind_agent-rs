@@ -6,15 +6,15 @@
 //! Task structures are defined in the protocol module (from glance_mind_protocol).
 //! Platform mappings are loaded from the global registry (initialized at startup).
 
-use redis::{AsyncCommands, Client, aio::ConnectionManager};
+use redis::{aio::ConnectionManager, AsyncCommands, Client};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use crate::config::platform::{global_registry, PlatformLookup};
 use crate::domain::errors::{QueueError, QueueResult};
 use crate::protocol_gen::{
-    CrawlerTask, CrawlerTaskMeta, CrawlerTaskSpec, 
-    TaskConfig as ProtocolTaskConfig, TaskFilters, Platform,
+    CrawlerTask, CrawlerTaskMeta, CrawlerTaskSpec, Platform, TaskConfig as ProtocolTaskConfig,
+    TaskFilters,
 };
 
 // ============================================================
@@ -28,11 +28,11 @@ pub struct TikTokSearchOptions {
     /// Region code (GLOBAL means default US)
     #[serde(default)]
     pub region: Option<String>,
-    
+
     /// Sort type: "0" = relevance, "1" = most_liked
     #[serde(default)]
     pub sort_type: Option<String>,
-    
+
     /// Publish time filter: "0"=all, "1"=day, "7"=week, "30"=month, "90"=3months, "180"=6months
     #[serde(default)]
     pub publish_time: Option<String>,
@@ -43,12 +43,12 @@ impl TikTokSearchOptions {
     pub fn sort_type_u8(&self) -> Option<u8> {
         self.sort_type.as_ref().and_then(|s| s.parse().ok())
     }
-    
+
     /// Parse publish_time string to u8
     pub fn publish_time_u8(&self) -> Option<u8> {
         self.publish_time.as_ref().and_then(|s| s.parse().ok())
     }
-    
+
     /// Get effective region (GLOBAL maps to US)
     pub fn effective_region(&self) -> Option<String> {
         self.region.as_ref().map(|r| {
@@ -88,20 +88,26 @@ fn parse_search_options(search_options: Option<&str>) -> SearchOptionsWrapper {
                     opts
                 }
                 Err(e) => {
-                    warn!("Failed to parse search_options JSON: {} - input: {:?}", e, s);
+                    warn!(
+                        "Failed to parse search_options JSON: {} - input: {:?}",
+                        e, s
+                    );
                     SearchOptionsWrapper::default()
                 }
             }
         }
         _ => {
-            info!("No search_options provided (value={:?}), using defaults", search_options);
+            info!(
+                "No search_options provided (value={:?}), using defaults",
+                search_options
+            );
             SearchOptionsWrapper::default()
         }
     }
 }
 
 /// Redis task consumer for the agent
-/// 
+///
 /// Uses ConnectionManager for automatic reconnection on connection failures.
 pub struct RedisTaskConsumer {
     client: Client,
@@ -114,9 +120,8 @@ pub struct RedisTaskConsumer {
 impl RedisTaskConsumer {
     /// Create a new Redis task consumer
     pub fn new(redis_url: &str, queue_name: &str) -> Result<Self, QueueError> {
-        let client = Client::open(redis_url)
-            .map_err(|e| QueueError::Connection(e.to_string()))?;
-        
+        let client = Client::open(redis_url).map_err(|e| QueueError::Connection(e.to_string()))?;
+
         Ok(Self {
             client,
             conn_manager: None,
@@ -128,13 +133,13 @@ impl RedisTaskConsumer {
 
     /// Create from environment variables
     pub fn from_env() -> Result<Self, QueueError> {
-        let redis_url = std::env::var("REDIS_URL")
-            .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-        
+        let redis_url =
+            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+
         // Default queue name must match scheduler's queue: crawler:task_queue
-        let queue_name = std::env::var("AGENT_QUEUE_NAME")
-            .unwrap_or_else(|_| "crawler:task_queue".to_string());
-        
+        let queue_name =
+            std::env::var("AGENT_QUEUE_NAME").unwrap_or_else(|_| "crawler:task_queue".to_string());
+
         Self::new(&redis_url, &queue_name)
     }
 
@@ -143,26 +148,31 @@ impl RedisTaskConsumer {
         self.timeout_secs = secs;
         self
     }
-    
+
     /// Initialize the connection manager (call once before using)
-    /// 
+    ///
     /// ConnectionManager provides automatic reconnection on failures.
     pub async fn init(&mut self) -> QueueResult<()> {
         info!("Initializing Redis connection manager...");
         let mut manager = ConnectionManager::new(self.client.clone())
             .await
-            .map_err(|e| QueueError::Connection(format!("Failed to create connection manager: {}", e)))?;
-        
+            .map_err(|e| {
+                QueueError::Connection(format!("Failed to create connection manager: {}", e))
+            })?;
+
         // Verify the connection with a PING command
         let pong: String = redis::cmd("PING")
             .query_async(&mut manager)
             .await
             .map_err(|e| QueueError::Connection(format!("Redis PING failed: {}", e)))?;
-        
+
         if pong != "PONG" {
-            return Err(QueueError::Connection(format!("Unexpected PING response: {}", pong)));
+            return Err(QueueError::Connection(format!(
+                "Unexpected PING response: {}",
+                pong
+            )));
         }
-        
+
         self.conn_manager = Some(manager);
         info!("Redis connection manager initialized and verified (PING OK)");
         Ok(())
@@ -170,9 +180,11 @@ impl RedisTaskConsumer {
 
     /// Get a connection (uses ConnectionManager with auto-reconnect)
     async fn get_conn(&self) -> QueueResult<ConnectionManager> {
-        self.conn_manager
-            .clone()
-            .ok_or_else(|| QueueError::Connection("Connection manager not initialized. Call init() first.".to_string()))
+        self.conn_manager.clone().ok_or_else(|| {
+            QueueError::Connection(
+                "Connection manager not initialized. Call init() first.".to_string(),
+            )
+        })
     }
 
     /// Consume a task from the queue (blocking)
@@ -194,7 +206,7 @@ impl RedisTaskConsumer {
             Some((_queue, data)) => {
                 let task: CrawlerTask = serde_json::from_str(&data)
                     .map_err(|e| QueueError::Deserialization(e.to_string()))?;
-                
+
                 let task_id = task.meta.as_ref().map(|m| m.task_id).unwrap_or(0);
                 debug!(task_id, "Consumed task from queue");
                 Ok(task)
@@ -207,7 +219,8 @@ impl RedisTaskConsumer {
     pub async fn try_consume(&self) -> QueueResult<Option<CrawlerTask>> {
         let mut conn = self.get_conn().await?;
 
-        let data: Option<String> = conn.rpop(&self.queue_name, None)
+        let data: Option<String> = conn
+            .rpop(&self.queue_name, None)
             .await
             .map_err(|e| QueueError::Connection(e.to_string()))?;
 
@@ -232,8 +245,8 @@ impl RedisTaskConsumer {
             timestamp: chrono::Utc::now().to_rfc3339(),
         };
 
-        let data = serde_json::to_string(&result)
-            .map_err(|e| QueueError::Serialization(e.to_string()))?;
+        let data =
+            serde_json::to_string(&result).map_err(|e| QueueError::Serialization(e.to_string()))?;
 
         // Push result to result queue
         conn.lpush::<_, _, ()>(&self.result_queue, &data)
@@ -247,11 +260,12 @@ impl RedisTaskConsumer {
     /// Get queue length
     pub async fn queue_length(&self) -> QueueResult<usize> {
         let mut conn = self.get_conn().await?;
-        
-        let len: usize = conn.llen(&self.queue_name)
+
+        let len: usize = conn
+            .llen(&self.queue_name)
             .await
             .map_err(|e| QueueError::Connection(e.to_string()))?;
-        
+
         Ok(len)
     }
 
@@ -259,9 +273,7 @@ impl RedisTaskConsumer {
     pub async fn health_check(&self) -> bool {
         match self.get_conn().await {
             Ok(mut conn) => {
-                let result: Result<String, _> = redis::cmd("PING")
-                    .query_async(&mut conn)
-                    .await;
+                let result: Result<String, _> = redis::cmd("PING").query_async(&mut conn).await;
                 result.is_ok()
             }
             Err(_) => false,
@@ -290,28 +302,28 @@ pub struct TaskResult {
 pub trait CrawlerTaskExt {
     /// Get task ID
     fn task_id(&self) -> i64;
-    
+
     /// Get campaign ID
     fn campaign_id(&self) -> i32;
-    
+
     /// Get platform ID
     fn platform_id(&self) -> i32;
-    
+
     /// Get platform name as String (looked up from global registry)
     fn platform_name(&self) -> String;
-    
+
     /// Get keywords
     fn keywords(&self) -> Vec<String>;
-    
+
     /// Get region
     fn region(&self) -> Option<String>;
-    
+
     /// Get max count
     fn max_count(&self) -> i32;
-    
+
     /// Get raw search_options JSON string
     fn search_options(&self) -> Option<&str>;
-    
+
     /// Convert to domain TaskConfig
     fn to_domain_task_config(&self, campaign_id: i32) -> crate::domain::TaskConfig;
 }
@@ -320,7 +332,7 @@ impl CrawlerTaskExt for CrawlerTask {
     fn task_id(&self) -> i64 {
         self.meta.as_ref().map(|m| m.task_id).unwrap_or(0)
     }
-    
+
     fn campaign_id(&self) -> i32 {
         self.meta.as_ref().map(|m| m.campaign_id).unwrap_or(0)
     }
@@ -339,66 +351,68 @@ impl CrawlerTaskExt for CrawlerTask {
     }
 
     fn keywords(&self) -> Vec<String> {
-        self.config.as_ref()
+        self.config
+            .as_ref()
             .map(|c| c.keywords.clone())
             .unwrap_or_default()
     }
 
     fn region(&self) -> Option<String> {
-        self.config.as_ref()
+        self.config
+            .as_ref()
             .and_then(|c| c.filters.as_ref())
             .and_then(|f| f.region.clone())
     }
 
     fn max_count(&self) -> i32 {
-        self.config.as_ref()
-            .map(|c| c.max_count)
-            .unwrap_or(10)
+        self.config.as_ref().map(|c| c.max_count).unwrap_or(10)
     }
-    
+
     /// Get raw search_options JSON string
     fn search_options(&self) -> Option<&str> {
-        self.config.as_ref()
+        self.config
+            .as_ref()
             .and_then(|c| c.search_options.as_deref())
     }
 
     fn to_domain_task_config(&self, campaign_id: i32) -> crate::domain::TaskConfig {
         let max_count = self.max_count();
         let platform_name = self.platform_name();
-        
+
         info!(
             "Building TaskConfig: campaign_id={}, platform={}, max_count={}, raw_search_options={:?}",
             campaign_id, platform_name, max_count, self.search_options()
         );
-        
+
         // Parse search_options JSON to extract platform-specific parameters
         let search_opts = parse_search_options(self.search_options());
-        
+
         // Build base config
         let mut config = crate::domain::TaskConfig::new(campaign_id, &platform_name)
             .with_keywords(self.keywords())
             .with_max_videos(max_count)
             .with_max_comments_per_video(200);
-        
+
         // Apply platform-specific search options
         if platform_name.eq_ignore_ascii_case("tiktok") {
             if let Some(tiktok_opts) = search_opts.tiktok {
                 // Region: priority -> search_options > filters > default "US"
-                let region = tiktok_opts.effective_region()
+                let region = tiktok_opts
+                    .effective_region()
                     .or_else(|| self.region())
                     .unwrap_or_else(|| "US".to_string());
                 config = config.with_region(region);
-                
+
                 // Sort type from search_options
                 if let Some(sort_type) = tiktok_opts.sort_type_u8() {
                     config = config.with_sort_type(sort_type);
                 }
-                
+
                 // Publish time from search_options
                 if let Some(publish_time) = tiktok_opts.publish_time_u8() {
                     config = config.with_publish_time(publish_time);
                 }
-                
+
                 info!(
                     "Applied TikTok search_options: region={:?}, sort_type={:?}, publish_time={:?}",
                     config.region, config.sort_type, config.publish_time
@@ -415,7 +429,7 @@ impl CrawlerTaskExt for CrawlerTask {
             config = config.with_region(region.clone());
             debug!("Non-TikTok platform, using filters.region={}", region);
         }
-        
+
         config
     }
 }
@@ -444,7 +458,7 @@ impl CrawlerTaskBuilder {
             max_count: 10,
         }
     }
-    
+
     /// Set campaign ID
     pub fn campaign_id(mut self, id: i32) -> Self {
         self.campaign_id = id;
@@ -522,7 +536,7 @@ mod tests {
     #[test]
     fn test_crawler_task_ext_methods() {
         init_test_registry();
-        
+
         let task = CrawlerTaskBuilder::new(123)
             .platform(Platform::Tiktok)
             .keywords(vec!["fitness".to_string(), "workout".to_string()])
@@ -541,7 +555,7 @@ mod tests {
     #[test]
     fn test_crawler_task_to_domain_config() {
         init_test_registry();
-        
+
         let task = CrawlerTaskBuilder::new(1)
             .platform(Platform::Tiktok)
             .keywords(vec!["fitness".to_string()])
@@ -560,7 +574,7 @@ mod tests {
     #[test]
     fn test_crawler_task_deserialization() {
         init_test_registry();
-        
+
         // Protocol format JSON
         let json = r#"{
             "meta": {
@@ -603,7 +617,7 @@ mod tests {
         assert!(task.meta.is_some());
         assert!(task.spec.is_some());
         assert!(task.config.is_some());
-        
+
         assert_eq!(task.task_id(), 456);
         assert_eq!(task.platform_id(), Platform::Instagram as i32);
     }
@@ -622,56 +636,56 @@ mod tests {
         assert!(json.contains("true"));
         assert!(json.contains("Completed"));
     }
-    
+
     #[test]
     fn test_parse_search_options_tiktok() {
         // Test parsing TikTok search options from campaign configuration
         let json = r#"{"tiktok":{"region":"GLOBAL","sort_type":"1","publish_time":"7"}}"#;
-        
+
         let opts = super::parse_search_options(Some(json));
-        
+
         assert!(opts.tiktok.is_some());
         let tiktok = opts.tiktok.unwrap();
-        
+
         // GLOBAL should map to US
         assert_eq!(tiktok.effective_region(), Some("US".to_string()));
         assert_eq!(tiktok.sort_type_u8(), Some(1)); // most_liked
         assert_eq!(tiktok.publish_time_u8(), Some(7)); // last week
     }
-    
+
     #[test]
     fn test_parse_search_options_with_region() {
         let json = r#"{"tiktok":{"region":"JP","sort_type":"0","publish_time":"30"}}"#;
-        
+
         let opts = super::parse_search_options(Some(json));
         let tiktok = opts.tiktok.unwrap();
-        
+
         // Non-GLOBAL region should be preserved
         assert_eq!(tiktok.effective_region(), Some("JP".to_string()));
         assert_eq!(tiktok.sort_type_u8(), Some(0)); // relevance
         assert_eq!(tiktok.publish_time_u8(), Some(30)); // last month
     }
-    
+
     #[test]
     fn test_parse_search_options_empty() {
         let opts = super::parse_search_options(None);
         assert!(opts.tiktok.is_none());
-        
+
         let opts = super::parse_search_options(Some("{}"));
         assert!(opts.tiktok.is_none());
     }
-    
+
     #[test]
     fn test_parse_search_options_invalid_json() {
         // Invalid JSON should return default
         let opts = super::parse_search_options(Some("not json"));
         assert!(opts.tiktok.is_none());
     }
-    
+
     #[test]
     fn test_crawler_task_with_search_options() {
         init_test_registry();
-        
+
         // Task with search_options
         let json = r#"{
             "meta": {
@@ -695,10 +709,10 @@ mod tests {
                 "search_options": "{\"tiktok\":{\"region\":\"GLOBAL\",\"sort_type\":\"1\",\"publish_time\":\"7\"}}"
             }
         }"#;
-        
+
         let task: CrawlerTask = serde_json::from_str(json).unwrap();
         let config = task.to_domain_task_config(16);
-        
+
         // Verify search options are parsed and applied
         assert_eq!(config.campaign_id, 16);
         assert_eq!(config.platform, "tiktok");

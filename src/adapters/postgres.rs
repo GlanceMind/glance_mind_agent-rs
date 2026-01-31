@@ -1,7 +1,7 @@
 //! PostgreSQL Adapter - Implements repository ports using Diesel
 //!
 //! This adapter uses the production database schema from glance_mind_rust.
-//! 
+//!
 //! Aligns with Python glance_mind_agent for:
 //! - Task progress updates via stored procedures
 //! - Content save with ON CONFLICT deduplication
@@ -17,7 +17,9 @@ use crate::domain::errors::{DbError, DbResult};
 use crate::domain::{Comment, Content, ReplySuggestion};
 use crate::ports::{
     ai_analyzer::AnalysisContext,
-    content_repository::{CommentStatus, ContentSaveResult, StoredAnalysis, StoredComment, StoredContent},
+    content_repository::{
+        CommentStatus, ContentSaveResult, StoredAnalysis, StoredComment, StoredContent,
+    },
     progress_tracker::{CampaignStopResult, TaskInfo, TaskProgressUpdate, TaskStatus},
     prompt_repository::{CampaignConfig, CampaignStatus, PlatformConfig},
     ContentRepository, ProgressTracker, PromptRepository,
@@ -101,6 +103,7 @@ impl PostgresAdapter {
     }
 
     /// Get platform ID from name using global registry
+    #[allow(dead_code)]
     fn platform_id(&self, platform: &str) -> i32 {
         use crate::config::platform::{global_registry, PlatformLookup};
 
@@ -161,7 +164,12 @@ impl ContentRepository for PostgresAdapter {
         Ok(result.map(|v| self.convert_video_to_content(&v)))
     }
 
-    async fn save_content(&self, content: &Content, campaign_id: Option<i32>, task_id: Option<i32>) -> DbResult<ContentSaveResult> {
+    async fn save_content(
+        &self,
+        content: &Content,
+        campaign_id: Option<i32>,
+        task_id: Option<i32>,
+    ) -> DbResult<ContentSaveResult> {
         let mut conn = self.conn()?;
 
         // Use the provided task_id directly (passed from orchestrator)
@@ -191,7 +199,7 @@ impl ContentRepository for PostgresAdapter {
                 author_unique_id = EXCLUDED.author_unique_id,
                 url = EXCLUDED.url
             RETURNING id, (xmax = 0) AS inserted
-            "#
+            "#,
         )
         .bind::<Integer, _>(task_id_value)
         .bind::<Text, _>(&content.content_id)
@@ -341,9 +349,9 @@ impl ContentRepository for PostgresAdapter {
         }
         Ok(ids)
     }
-    
+
     /// Save comment with AI analysis in one operation (matching Python agent's save_comments_and_analysis)
-    /// 
+    ///
     /// Uses ON CONFLICT for atomic UPSERT to safely handle concurrent inserts.
     /// This is essential for parallel video processing where the same comment
     /// might be processed by multiple concurrent tasks.
@@ -355,13 +363,12 @@ impl ContentRepository for PostgresAdapter {
         suggestion: &ReplySuggestion,
     ) -> DbResult<i32> {
         let mut conn = self.conn()?;
-        
+
         // Parse create_time to NaiveDateTime if available
-        let create_time = comment.created_at.and_then(|ts| {
-            chrono::DateTime::from_timestamp(ts, 0)
-                .map(|dt| dt.naive_utc())
-        });
-        
+        let create_time = comment
+            .created_at
+            .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0).map(|dt| dt.naive_utc()));
+
         // Use ON CONFLICT to atomically handle duplicate comments
         // Unique constraint: (campaign_id, comment_id) - same comment in same campaign is upserted
         let id: i32 = diesel::sql_query(
@@ -381,7 +388,7 @@ impl ContentRepository for PostgresAdapter {
                 status = 0,
                 updated_at = NOW()
             RETURNING id
-            "#
+            "#,
         )
         .bind::<Integer, _>(campaign_id)
         .bind::<Text, _>(&comment.comment_id)
@@ -418,7 +425,10 @@ impl ContentRepository for PostgresAdapter {
             .load(&mut conn)
             .map_err(DbError::from)?;
 
-        Ok(results.iter().map(|c| self.convert_agent_comment(c)).collect())
+        Ok(results
+            .iter()
+            .map(|c| self.convert_agent_comment(c))
+            .collect())
     }
 
     async fn update_comment_status(&self, id: i32, status: CommentStatus) -> DbResult<()> {
@@ -461,7 +471,7 @@ impl ContentRepository for PostgresAdapter {
             .map_err(DbError::from)?;
 
         debug!(comment_id, "Saved AI analysis to comment");
-        Ok(comment_id)  // Return comment_id as the "analysis id"
+        Ok(comment_id) // Return comment_id as the "analysis id"
     }
 
     async fn get_analysis(&self, comment_id: i32) -> DbResult<Option<StoredAnalysis>> {
@@ -477,7 +487,10 @@ impl ContentRepository for PostgresAdapter {
 
         Ok(result.and_then(|c| {
             // Only return if analysis exists
-            if c.suggested_reply.is_some() || c.suggested_dm.is_some() || c.suggested_reply_post.is_some() {
+            if c.suggested_reply.is_some()
+                || c.suggested_dm.is_some()
+                || c.suggested_reply_post.is_some()
+            {
                 Some(StoredAnalysis {
                     id: c.id,
                     comment_id: c.id,
@@ -517,7 +530,7 @@ impl PromptRepository for PostgresAdapter {
             Some(c) => {
                 // Get templates for prompts
                 let templates = self.get_campaign_templates(campaign_id).await?;
-                
+
                 // Use weighted random selection (matching Python agent behavior)
                 // Python: random.choices(population, weights=weights, k=1)[0]
                 let selected_template = if templates.is_empty() {
@@ -532,7 +545,7 @@ impl PromptRepository for PostgresAdapter {
                         let mut random_point = rng.gen_range(0..total_weight);
                         let mut selected: Option<&models::CampaignTemplate> = None;
                         for template in &templates {
-                            let weight = template.weight.max(1);  // Ensure at least 1
+                            let weight = template.weight.max(1); // Ensure at least 1
                             if random_point < weight {
                                 selected = Some(template);
                                 break;
@@ -554,7 +567,8 @@ impl PromptRepository for PostgresAdapter {
                     // Get strategies from template (weighted random selection)
                     reply_strategy: selected_template.and_then(|t| t.reply_prompt.clone()),
                     dm_strategy: selected_template.and_then(|t| t.dm_prompt.clone()),
-                    reply_post_strategy: selected_template.and_then(|t| t.reply_post_prompt.clone()),
+                    reply_post_strategy: selected_template
+                        .and_then(|t| t.reply_post_prompt.clone()),
                     // Note: max_comments limit is handled by Scheduler's budget mechanism.
                     // Agent should not use total_scanned for limit checking because:
                     // 1. Scheduler adds page_size to total_scanned when reserving budget
@@ -659,8 +673,8 @@ impl PromptRepository for PostgresAdapter {
 #[async_trait]
 impl ProgressTracker for PostgresAdapter {
     async fn get_task(&self, task_id: i64) -> DbResult<Option<TaskInfo>> {
-        use schema::gm_crawler_tasks::dsl;
         use schema::gm_campaigns::dsl as camp_dsl;
+        use schema::gm_crawler_tasks::dsl;
 
         let mut conn = self.conn()?;
 
@@ -678,11 +692,11 @@ impl ProgressTracker for PostgresAdapter {
                     .first(&mut conn)
                     .optional()
                     .map_err(DbError::from)?;
-                
+
                 let platform_id = campaign.map(|c| c.platform_id).unwrap_or(0);
-                let keywords = t.keywords.map(|v| serde_json::Value::Array(
-                    v.into_iter().map(serde_json::Value::String).collect()
-                ));
+                let keywords = t.keywords.map(|v| {
+                    serde_json::Value::Array(v.into_iter().map(serde_json::Value::String).collect())
+                });
 
                 Ok(Some(TaskInfo {
                     id: t.id as i64,
@@ -705,7 +719,7 @@ impl ProgressTracker for PostgresAdapter {
 
         let status_str = match status {
             TaskStatus::Pending => "pending",
-            TaskStatus::Running => "processing",  // Must match fn_update_task_progress check: ('pending', 'processing')
+            TaskStatus::Running => "processing", // Must match fn_update_task_progress check: ('pending', 'processing')
             TaskStatus::Completed => "completed",
             TaskStatus::Failed => "failed",
         };
@@ -719,7 +733,11 @@ impl ProgressTracker for PostgresAdapter {
         Ok(())
     }
 
-    async fn update_task_progress(&self, task_id: i64, increment: i32) -> DbResult<TaskProgressUpdate> {
+    async fn update_task_progress(
+        &self,
+        task_id: i64,
+        increment: i32,
+    ) -> DbResult<TaskProgressUpdate> {
         let mut conn = self.conn()?;
 
         // Call fn_update_task_progress stored procedure (matching Python agent)
@@ -742,18 +760,20 @@ impl ProgressTracker for PostgresAdapter {
                 new_actual_consumption = %r.new_actual_consumption,
                 "Task progress updated via stored procedure"
             );
-            
+
             if r.should_stop {
                 warn!(task_id, "⚠️ Campaign is STOPPING, should stop processing");
             }
         }
 
-        Ok(result.map(|r| TaskProgressUpdate {
-            success: r.success,
-            should_stop: r.should_stop,
-            new_process_count: r.new_process_count,
-            new_actual_consumption: r.new_actual_consumption.to_string().parse().unwrap_or(0.0),
-        }).unwrap_or_default())
+        Ok(result
+            .map(|r| TaskProgressUpdate {
+                success: r.success,
+                should_stop: r.should_stop,
+                new_process_count: r.new_process_count,
+                new_actual_consumption: r.new_actual_consumption.to_string().parse().unwrap_or(0.0),
+            })
+            .unwrap_or_default())
     }
 
     async fn set_task_error(&self, task_id: i64, _error: &str) -> DbResult<()> {
@@ -778,18 +798,20 @@ impl ProgressTracker for PostgresAdapter {
         // 1. Update task status to 'completed'
         // 2. Call fn_settle_task_consumption to settle the budget
         // 3. Check if campaign should be stopped
-        let result: Option<(bool, String)> = diesel::sql_query(
-            "SELECT success, campaign_status FROM fn_complete_task($1, $2)"
-        )
-        .bind::<diesel::sql_types::Integer, _>(task_id as i32)
-        .bind::<diesel::sql_types::Text, _>("completed")
-        .get_result::<TaskCompleteResult>(&mut conn)
-        .optional()
-        .map_err(DbError::from)?
-        .map(|r| (r.success, r.campaign_status));
+        let result: Option<(bool, String)> =
+            diesel::sql_query("SELECT success, campaign_status FROM fn_complete_task($1, $2)")
+                .bind::<diesel::sql_types::Integer, _>(task_id as i32)
+                .bind::<diesel::sql_types::Text, _>("completed")
+                .get_result::<TaskCompleteResult>(&mut conn)
+                .optional()
+                .map_err(DbError::from)?
+                .map(|r| (r.success, r.campaign_status));
 
         if let Some((success, campaign_status)) = result {
-            debug!(task_id, success, campaign_status, "Task completed via stored procedure");
+            debug!(
+                task_id,
+                success, campaign_status, "Task completed via stored procedure"
+            );
         }
 
         Ok(())
@@ -812,7 +834,12 @@ impl ProgressTracker for PostgresAdapter {
 
                 // Check campaign status
                 let result = self.should_stop_campaign(t.campaign_id).await?;
-                tracing::debug!(task_id, campaign_id = t.campaign_id, should_stop = result, "Campaign stop check");
+                tracing::debug!(
+                    task_id,
+                    campaign_id = t.campaign_id,
+                    should_stop = result,
+                    "Campaign stop check"
+                );
                 Ok(result)
             }
             None => {
@@ -839,7 +866,7 @@ impl ProgressTracker for PostgresAdapter {
         let campaign = self.get_campaign(campaign_id).await?;
         Ok(campaign.map(|c| c.processed_comments).unwrap_or(0))
     }
-    
+
     async fn stop_campaign_gracefully(&self, campaign_id: i32) -> DbResult<CampaignStopResult> {
         let mut conn = self.conn()?;
 
@@ -862,18 +889,23 @@ impl ProgressTracker for PostgresAdapter {
                         "✅ Campaign marked as STOPPED"
                     );
                 } else {
-                    info!(campaign_id, "✅ Campaign marked as STOPPING (waiting for active tasks)");
+                    info!(
+                        campaign_id,
+                        "✅ Campaign marked as STOPPING (waiting for active tasks)"
+                    );
                 }
             } else {
                 warn!(campaign_id, "❌ Failed to stop campaign");
             }
         }
 
-        Ok(result.map(|r| CampaignStopResult {
-            success: r.success,
-            immediate_stopped: r.immediate_stopped,
-            refunded_amount: r.refunded_amount.to_string().parse().unwrap_or(0.0),
-        }).unwrap_or_default())
+        Ok(result
+            .map(|r| CampaignStopResult {
+                success: r.success,
+                immediate_stopped: r.immediate_stopped,
+                refunded_amount: r.refunded_amount.to_string().parse().unwrap_or(0.0),
+            })
+            .unwrap_or_default())
     }
 }
 
@@ -921,7 +953,10 @@ impl PostgresAdapter {
         }
     }
 
-    async fn get_campaign_templates(&self, campaign_id: i32) -> DbResult<Vec<models::CampaignTemplate>> {
+    async fn get_campaign_templates(
+        &self,
+        campaign_id: i32,
+    ) -> DbResult<Vec<models::CampaignTemplate>> {
         use schema::gm_campaign_templates::dsl;
 
         let mut conn = self.conn()?;
@@ -935,6 +970,7 @@ impl PostgresAdapter {
         Ok(templates)
     }
 
+    #[allow(dead_code)]
     async fn get_active_task_id(&self, campaign_id: i32) -> DbResult<i32> {
         use schema::gm_crawler_tasks::dsl;
 
@@ -969,6 +1005,7 @@ impl PostgresAdapter {
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
 
     #[test]

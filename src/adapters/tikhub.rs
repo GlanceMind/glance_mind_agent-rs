@@ -5,13 +5,15 @@
 
 use async_trait::async_trait;
 
-use crate::domain::{Content, Comment, KeywordType, SearchOptions, Engagement};
 use crate::domain::errors::{GatewayError, GatewayResult};
+use crate::domain::{Comment, Content, Engagement, KeywordType, SearchOptions};
 use crate::ports::{
-    ContentGateway, CommentGateway,
     comment_gateway::{FetchCommentsOptions, FetchCommentsResult},
+    CommentGateway, ContentGateway,
 };
-use crate::tikhub::{TikHubClient, TikHubError, TikHubRetryConfig, SearchParams, UserVideoParams, CommentParams};
+use crate::tikhub::{
+    CommentParams, SearchParams, TikHubClient, TikHubError, TikHubRetryConfig, UserVideoParams,
+};
 
 /// TikHub adapter implementing ContentGateway and CommentGateway
 pub struct TikHubAdapter {
@@ -31,15 +33,18 @@ impl TikHubAdapter {
     }
 
     /// Create with API key and optional base URL
-    pub fn with_api_key(api_key: impl Into<String>, base_url: Option<String>) -> Result<Self, TikHubError> {
+    pub fn with_api_key(
+        api_key: impl Into<String>,
+        base_url: Option<String>,
+    ) -> Result<Self, TikHubError> {
         let base = base_url.unwrap_or_else(|| "https://api.tikhub.io".to_string());
         let client = TikHubClient::new(api_key, base)?;
         Ok(Self { client })
     }
-    
+
     /// Create with custom retry configuration
     pub fn with_retry_config(
-        api_key: impl Into<String>, 
+        api_key: impl Into<String>,
         base_url: Option<String>,
         retry_config: TikHubRetryConfig,
     ) -> Result<Self, TikHubError> {
@@ -64,47 +69,35 @@ impl TikHubAdapter {
             TikHubError::MissingApiKey => {
                 GatewayError::AuthFailed("TikHub API key not configured".into())
             }
-            
+
             // Retryable errors
             TikHubError::RateLimited { retry_after_secs } => {
                 GatewayError::RateLimited { retry_after_secs }
             }
-            TikHubError::ServerError { status, message } => {
-                GatewayError::Api { 
-                    code: status as i32, 
-                    message: format!("Server error: {}", message) 
-                }
-            }
-            TikHubError::NetworkError { message } => {
-                GatewayError::Network(message)
-            }
-            
+            TikHubError::ServerError { status, message } => GatewayError::Api {
+                code: status as i32,
+                message: format!("Server error: {}", message),
+            },
+            TikHubError::NetworkError { message } => GatewayError::Network(message),
+
             // Skippable errors
             TikHubError::BadRequest { message } => {
                 GatewayError::InvalidParams(format!("Bad request: {}", message))
             }
-            TikHubError::NotFound { message } => {
-                GatewayError::NotFound(message)
-            }
-            TikHubError::EmptyData => {
-                GatewayError::EmptyResponse
-            }
-            
+            TikHubError::NotFound { message } => GatewayError::NotFound(message),
+            TikHubError::EmptyData => GatewayError::EmptyResponse,
+
             // Other errors
-            TikHubError::ParseError(msg) => {
-                GatewayError::ParseError(msg)
-            }
-            TikHubError::InvalidParam(msg) => {
-                GatewayError::InvalidParams(msg)
-            }
+            TikHubError::ParseError(msg) => GatewayError::ParseError(msg),
+            TikHubError::InvalidParam(msg) => GatewayError::InvalidParams(msg),
         }
     }
-    
+
     /// Check if the TikHub error is fatal (should stop the entire task)
     pub fn is_fatal_error(err: &TikHubError) -> bool {
         err.is_fatal()
     }
-    
+
     /// Check if the TikHub error is skippable (can continue with next item)
     pub fn is_skippable_error(err: &TikHubError) -> bool {
         err.is_skippable()
@@ -162,17 +155,17 @@ impl ContentGateway for TikHubAdapter {
         if let Some(ref region) = options.region {
             params = params.with_region(region);
         }
-        
+
         // Set sort type if specified (0=relevance, 1=most_liked)
         if let Some(sort_type) = options.sort_type {
             params = params.with_sort_type(sort_type);
         }
-        
+
         // Set publish time filter if specified (0=all, 1=day, 7=week, 30=month, 90=3months, 180=6months)
         if let Some(publish_time) = options.publish_time {
             params = params.with_publish_time(publish_time);
         }
-        
+
         tracing::debug!(
             keyword = %options.query,
             region = ?options.region,
@@ -183,7 +176,8 @@ impl ContentGateway for TikHubAdapter {
         );
 
         // Use retry-enabled search
-        let response = self.client
+        let response = self
+            .client
             .search_videos_with_retry(&params)
             .await
             .map_err(Self::convert_error)?;
@@ -204,15 +198,13 @@ impl ContentGateway for TikHubAdapter {
                 opts.query = query.clone();
                 self.search(&opts).await
             }
-            KeywordType::UserId(user_id) => {
-                self.fetch_user_content(user_id, options.count).await
-            }
+            KeywordType::UserId(user_id) => self.fetch_user_content(user_id, options.count).await,
             KeywordType::SecUserId(sec_uid) => {
-                let params = UserVideoParams::by_sec_user_id(sec_uid)
-                    .with_count(options.count);
+                let params = UserVideoParams::by_sec_user_id(sec_uid).with_count(options.count);
 
                 // Use retry-enabled fetch
-                let response = self.client
+                let response = self
+                    .client
                     .fetch_user_videos_with_retry(&params)
                     .await
                     .map_err(Self::convert_error)?;
@@ -220,25 +212,19 @@ impl ContentGateway for TikHubAdapter {
                 let videos = TikHubClient::extract_user_videos(&response);
                 Ok(videos.iter().map(|v| Self::convert_content(v)).collect())
             }
-            KeywordType::ContentId(content_id) => {
-                match self.fetch_by_id(content_id).await? {
-                    Some(content) => Ok(vec![content]),
-                    None => Ok(vec![]),
-                }
-            }
+            KeywordType::ContentId(content_id) => match self.fetch_by_id(content_id).await? {
+                Some(content) => Ok(vec![content]),
+                None => Ok(vec![]),
+            },
         }
     }
 
-    async fn fetch_user_content(
-        &self,
-        user_id: &str,
-        count: u32,
-    ) -> GatewayResult<Vec<Content>> {
-        let params = UserVideoParams::by_unique_id(user_id)
-            .with_count(count);
+    async fn fetch_user_content(&self, user_id: &str, count: u32) -> GatewayResult<Vec<Content>> {
+        let params = UserVideoParams::by_unique_id(user_id).with_count(count);
 
         // Use retry-enabled fetch
-        let response = self.client
+        let response = self
+            .client
             .fetch_user_videos_with_retry(&params)
             .await
             .map_err(Self::convert_error)?;
@@ -251,7 +237,10 @@ impl ContentGateway for TikHubAdapter {
         // TikHub doesn't have a direct video-by-ID endpoint for app API
         // We would need to use a different endpoint or return NotFound
         // For now, we'll return NotFound as a placeholder
-        Err(GatewayError::NotFound(format!("Direct video fetch not supported for ID: {}", content_id)))
+        Err(GatewayError::NotFound(format!(
+            "Direct video fetch not supported for ID: {}",
+            content_id
+        )))
     }
 
     fn platform(&self) -> &str {
@@ -267,13 +256,14 @@ impl CommentGateway for TikHubAdapter {
         options: &FetchCommentsOptions,
     ) -> GatewayResult<FetchCommentsResult> {
         let cursor = options.cursor.as_deref().unwrap_or("0");
-        
+
         let params = CommentParams::new()
             .with_cursor(cursor)
             .with_count(options.count);
-        
+
         // Use retry-enabled fetch
-        let response = self.client
+        let response = self
+            .client
             .fetch_comments_with_retry(content_id, &params)
             .await
             .map_err(Self::convert_error)?;
@@ -285,7 +275,10 @@ impl CommentGateway for TikHubAdapter {
             .collect();
 
         let data = response.data.as_ref();
-        let has_more = data.and_then(|d| d.has_more).map(|h| h == 1).unwrap_or(false);
+        let has_more = data
+            .and_then(|d| d.has_more)
+            .map(|h| h == 1)
+            .unwrap_or(false);
         let next_cursor = data.and_then(|d| d.cursor).map(|c| c.to_string());
         let total = data.and_then(|d| d.total);
 
@@ -304,7 +297,8 @@ impl CommentGateway for TikHubAdapter {
         content_id: &str,
         max_count: u32,
     ) -> GatewayResult<Vec<Comment>> {
-        let comments = self.client
+        let comments = self
+            .client
             .fetch_all_comments(content_id, max_count)
             .await
             .map_err(Self::convert_error)?;

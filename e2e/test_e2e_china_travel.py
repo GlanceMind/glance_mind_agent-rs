@@ -12,7 +12,8 @@ import pytest
 from conftest import (
     E2E_USER_ID, E2E_CAMPAIGN_ID, E2E_TIMEOUT,
     wait_for_condition, get_campaign_status, get_task_status, get_wallet_balance,
-    get_any_completed_task, get_completed_task_count
+    get_any_completed_task, get_completed_task_count,
+    get_task_details, get_all_tasks, verify_task_lifecycle
 )
 
 
@@ -240,10 +241,55 @@ class TestChinaTravelE2E:
         print(f"[OK] Wallet updated correctly")
     
     # =========================================================================
-    # Test 9: Final Summary
+    # Test 9: Verify Task Lifecycle (NEW)
     # =========================================================================
     
-    def test_09_summary(self, db_conn, e2e_config):
+    def test_09_verify_task_lifecycle(self, db_conn, e2e_config):
+        """Verify task went through proper lifecycle with all fields populated."""
+        campaign_id = e2e_config["campaign_id"]
+        
+        # Get the first completed task
+        completed_task = get_any_completed_task(db_conn, campaign_id)
+        assert completed_task is not None, "No completed task found"
+        
+        task_id = completed_task[0]
+        task_details = get_task_details(db_conn, task_id)
+        
+        print(f"\n[INFO] Task {task_id} Details:")
+        print(f"  - Status: {task_details['status']}")
+        print(f"  - Process Count: {task_details['process_count']}/{task_details['max_count']}")
+        print(f"  - Reserved Amount: {task_details['reserved_amount']}")
+        print(f"  - Actual Consumption: {task_details['actual_consumption']}")
+        print(f"  - Settled At: {task_details['settled_at']}")
+        print(f"  - Keywords: {task_details['keywords']}")
+        
+        # Verify lifecycle
+        is_valid, errors = verify_task_lifecycle(task_details)
+        
+        if not is_valid:
+            for error in errors:
+                print(f"  [ERROR] {error}")
+            pytest.fail(f"Task lifecycle validation failed: {errors}")
+        
+        print(f"[OK] Task lifecycle validation passed")
+        
+        # Verify only one task was created (due to long interval)
+        all_tasks = get_all_tasks(db_conn, campaign_id)
+        print(f"[INFO] Total tasks created: {len(all_tasks)}")
+        
+        # Should have at most 2 tasks (one might be pending if scheduler runs again)
+        assert len(all_tasks) <= 2, f"Expected at most 2 tasks, got {len(all_tasks)}"
+        
+        # The first task should be completed
+        first_task_status = all_tasks[0][1]
+        assert first_task_status == "completed", f"First task should be completed, got {first_task_status}"
+        print(f"[OK] First task completed as expected")
+    
+    # =========================================================================
+    # Test 10: Final Summary
+    # =========================================================================
+    
+    def test_10_summary(self, db_conn, e2e_config):
         """Print final test summary."""
         campaign_id = e2e_config["campaign_id"]
         user_id = e2e_config["user_id"]

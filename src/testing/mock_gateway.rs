@@ -4,11 +4,11 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-use crate::domain::{Content, Comment, KeywordType, SearchOptions};
 use crate::domain::errors::{GatewayError, GatewayResult};
+use crate::domain::{Comment, Content, KeywordType, SearchOptions};
 use crate::ports::{
-    ContentGateway, CommentGateway,
     comment_gateway::{FetchCommentsOptions, FetchCommentsResult},
+    CommentGateway, ContentGateway,
 };
 
 /// Mock content gateway for testing
@@ -108,7 +108,9 @@ impl MockContentGateway {
         let mode = self.error_mode.read().unwrap();
         match mode.as_ref() {
             Some(MockError::Network) => Err(GatewayError::Network("Mock network error".into())),
-            Some(MockError::RateLimit) => Err(GatewayError::RateLimited { retry_after_secs: Some(60) }),
+            Some(MockError::RateLimit) => Err(GatewayError::RateLimited {
+                retry_after_secs: Some(60),
+            }),
             Some(MockError::NotFound) => Err(GatewayError::NotFound("Mock not found".into())),
             Some(MockError::Auth) => Err(GatewayError::AuthFailed("Mock auth error".into())),
             None => Ok(()),
@@ -133,7 +135,7 @@ impl ContentGateway for MockContentGateway {
 
         let search = self.search_results.read().unwrap();
         let key = options.query.to_lowercase();
-        
+
         Ok(search
             .get(&key)
             .cloned()
@@ -159,12 +161,10 @@ impl ContentGateway for MockContentGateway {
             KeywordType::UserId(uid) | KeywordType::SecUserId(uid) => {
                 self.fetch_user_content(uid, options.count).await
             }
-            KeywordType::ContentId(cid) => {
-                match self.fetch_by_id(cid).await? {
-                    Some(c) => Ok(vec![c]),
-                    None => Ok(vec![]),
-                }
-            }
+            KeywordType::ContentId(cid) => match self.fetch_by_id(cid).await? {
+                Some(c) => Ok(vec![c]),
+                None => Ok(vec![]),
+            },
         }
     }
 
@@ -247,7 +247,9 @@ impl MockCommentGateway {
         let mode = self.error_mode.read().unwrap();
         match mode.as_ref() {
             Some(MockError::Network) => Err(GatewayError::Network("Mock network error".into())),
-            Some(MockError::RateLimit) => Err(GatewayError::RateLimited { retry_after_secs: Some(60) }),
+            Some(MockError::RateLimit) => Err(GatewayError::RateLimited {
+                retry_after_secs: Some(60),
+            }),
             Some(MockError::NotFound) => Err(GatewayError::NotFound("Mock not found".into())),
             Some(MockError::Auth) => Err(GatewayError::AuthFailed("Mock auth error".into())),
             None => Ok(()),
@@ -276,11 +278,8 @@ impl CommentGateway for MockCommentGateway {
 
         let comments = self.comments.read().unwrap();
         let all = comments.get(content_id).cloned().unwrap_or_default();
-        
-        let fetched: Vec<Comment> = all
-            .into_iter()
-            .take(options.count as usize)
-            .collect();
+
+        let fetched: Vec<Comment> = all.into_iter().take(options.count as usize).collect();
 
         Ok(FetchCommentsResult {
             comments: fetched,
@@ -333,21 +332,21 @@ mod tests {
     #[tokio::test]
     async fn test_mock_content_gateway_search() {
         let gateway = MockContentGateway::new();
-        
+
         // Add test content
         let content = Content::new("mock", "v123")
             .with_author("testuser")
             .with_description("Test video about fitness");
-        
+
         gateway.add_search_results("fitness", vec![content.clone()]);
 
         // Search
         let opts = SearchOptions::new("fitness");
         let results = gateway.search(&opts).await.unwrap();
-        
+
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].content_id, "v123");
-        
+
         // Check call tracking
         let calls = gateway.get_calls();
         assert_eq!(calls.len(), 1);
@@ -360,19 +359,22 @@ mod tests {
 
         let opts = SearchOptions::new("test");
         let result = gateway.search(&opts).await;
-        
+
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), GatewayError::RateLimited { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            GatewayError::RateLimited { .. }
+        ));
     }
 
     #[tokio::test]
     async fn test_mock_comment_gateway() {
         let gateway = MockCommentGateway::new();
-        
+
         let comment = Comment::new("mock", "c1", "v123")
             .with_author("user1")
             .with_text("Great video!");
-        
+
         gateway.add_comment("v123", comment);
 
         let comments = gateway.fetch_all_comments("v123", 10).await.unwrap();

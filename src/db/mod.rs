@@ -3,8 +3,8 @@
 //! Provides typed database access for the agent.
 
 mod connection;
-pub mod schema;
 pub mod models;
+pub mod schema;
 
-pub use connection::{DbPool, establish_connection, establish_pool};
+pub use connection::{establish_connection, establish_pool, DbPool};
 pub use models::*;

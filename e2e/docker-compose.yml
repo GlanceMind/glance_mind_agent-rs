@@ -120,6 +120,7 @@ services:
       E2E_CAMPAIGN_ID: ${E2E_CAMPAIGN_ID}
       E2E_TIMEOUT: ${E2E_TIMEOUT}
       PYTHONUNBUFFERED: "1"
+      TEST_FILE: ${TEST_FILE:-test_e2e_china_travel.py}
     depends_on:
       postgres:
         condition: service_healthy
@@ -138,9 +139,9 @@ services:
         echo "=== Installing dependencies ==="
         pip install --no-cache-dir psycopg2-binary redis pytest tenacity python-dotenv
         echo "=== Waiting for services to stabilize ==="
-        sleep 10
-        echo "=== Running E2E tests ==="
-        pytest test_e2e_china_travel.py -v --tb=short -s
+        sleep 5
+        echo "=== Test runner ready (use docker compose exec to run tests) ==="
+        tail -f /dev/null
 
 networks:
   e2e-network:

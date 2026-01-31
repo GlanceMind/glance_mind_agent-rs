@@ -14,16 +14,16 @@
 //! ## Inbound Ports (driving)
 //! - Task consumption is handled by adapters directly (Redis consumer)
 
-pub mod content_gateway;
-pub mod comment_gateway;
 pub mod ai_analyzer;
+pub mod comment_gateway;
+pub mod content_gateway;
 pub mod content_repository;
-pub mod prompt_repository;
 pub mod progress_tracker;
+pub mod prompt_repository;
 
-pub use content_gateway::ContentGateway;
-pub use comment_gateway::CommentGateway;
 pub use ai_analyzer::AiAnalyzer;
+pub use comment_gateway::CommentGateway;
+pub use content_gateway::ContentGateway;
 pub use content_repository::ContentRepository;
-pub use prompt_repository::PromptRepository;
 pub use progress_tracker::ProgressTracker;
+pub use prompt_repository::PromptRepository;

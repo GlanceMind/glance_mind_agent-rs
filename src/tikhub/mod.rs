@@ -1,13 +1,30 @@
 //! TikHub API Client
 //!
-//! Provides typed access to TikHub API for TikTok data retrieval with
-//! robust error handling and automatic retry.
+//! Provides typed access to TikHub API for TikTok, Instagram, Reddit, and Twitter
+//! data retrieval with robust error handling and automatic retry.
 //!
 //! ## Supported Endpoints
 //!
+//! ### TikTok
 //! - `/api/v1/tiktok/app/v3/fetch_video_search_result` - Search videos by keyword
 //! - `/api/v1/tiktok/web/fetch_post_comment` - Fetch video comments
 //! - `/api/v1/tiktok/app/v3/fetch_user_post_videos` - Fetch user's videos
+//!
+//! ### Instagram
+//! - `/api/v1/instagram/v2/fetch_hashtag_posts` - Search posts by hashtag
+//! - `/api/v1/instagram/v2/search_reels` - Search Reels
+//! - `/api/v1/instagram/v2/fetch_user_posts` - Fetch user's posts
+//! - `/api/v1/instagram/v2/fetch_post_comments` - Fetch post comments
+//!
+//! ### Reddit
+//! - `/api/v1/reddit/app/fetch_dynamic_search` - Search posts
+//! - `/api/v1/reddit/app/fetch_post_comments` - Fetch post comments
+//! - `/api/v1/reddit/app/fetch_user_posts` - Fetch user's posts
+//!
+//! ### Twitter
+//! - `/api/v1/twitter/web/fetch_search_timeline` - Search tweets
+//! - `/api/v1/twitter/web/fetch_user_post_tweet` - Get user tweets
+//! - `/api/v1/twitter/web/fetch_post_comments` - Get tweet comments/replies
 //!
 //! ## Error Handling
 //!
@@ -23,33 +40,36 @@
 //! ## Example
 //!
 //! ```no_run
-//! use glance_mind_agent_rs::tikhub::{TikHubClient, SearchParams};
+//! use glance_mind_agent_rs::tikhub::{TikHubClient, SearchParams, HashtagSearchParams};
 //!
 //! #[tokio::main]
 //! async fn main() {
 //!     let client = TikHubClient::from_env().unwrap();
 //!     
-//!     // Search with automatic retry
+//!     // TikTok: Search with automatic retry
 //!     let response = client
 //!         .search_videos_with_retry(&SearchParams::new("travel"))
 //!         .await
 //!         .unwrap();
 //!     
-//!     // Fetch comments with partial data recovery
-//!     let result = client
-//!         .fetch_all_comments_safe("7327061675382260482", 300)
-//!         .await;
-//!     
-//!     if result.is_partial {
-//!         println!("Warning: Only got {} comments due to error", result.data.len());
-//!     }
+//!     // Instagram: Search hashtag posts
+//!     let instagram_response = client
+//!         .search_hashtag_posts_with_retry(&HashtagSearchParams::new("fitness"))
+//!         .await
+//!         .unwrap();
 //! }
 //! ```
 
-mod types;
 mod client;
 mod error;
+mod instagram_types;
+mod reddit_types;
+mod twitter_types;
+mod types;
 
-pub use types::*;
 pub use client::TikHubClient;
-pub use error::{TikHubError, TikHubRetryConfig, PartialFetchResult};
+pub use error::{PartialFetchResult, TikHubError, TikHubRetryConfig};
+pub use instagram_types::*;
+pub use reddit_types::*;
+pub use twitter_types::*;
+pub use types::*;

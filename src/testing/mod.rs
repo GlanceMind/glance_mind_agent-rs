@@ -7,15 +7,15 @@
 //! - MockRepository: In-memory database mock
 //! - TestFixtures: Pre-built test data
 
-pub mod mock_gateway;
-pub mod mock_ai;
-pub mod mock_repository;
 pub mod fixtures;
+pub mod mock_ai;
+pub mod mock_gateway;
+pub mod mock_repository;
 
-pub use mock_gateway::{MockContentGateway, MockCommentGateway};
-pub use mock_ai::MockAiAnalyzer;
-pub use mock_repository::MockRepository;
 pub use fixtures::TestFixtures;
+pub use mock_ai::MockAiAnalyzer;
+pub use mock_gateway::{MockCommentGateway, MockContentGateway};
+pub use mock_repository::MockRepository;
 
 /// Create a complete mock environment for testing
 pub struct MockEnvironment {
@@ -29,7 +29,7 @@ impl MockEnvironment {
     /// Create a new mock environment with default test data
     pub fn new() -> Self {
         let fixtures = TestFixtures::default();
-        
+
         let content_gateway = std::sync::Arc::new(MockContentGateway::new());
         let comment_gateway = std::sync::Arc::new(MockCommentGateway::new());
         let ai_analyzer = std::sync::Arc::new(MockAiAnalyzer::new());

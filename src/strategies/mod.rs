@@ -4,12 +4,24 @@
 //! - Keyword parsing (user IDs, hashtags, search terms)
 //! - Search option building (region, sort type)
 //! - Prompt formatting for AI analysis
+//!
+//! Supported platforms:
+//! - TikTok
+//! - Instagram
+//! - Reddit
+//! - Twitter
 
+pub mod instagram;
+pub mod reddit;
 pub mod tiktok;
+pub mod twitter;
 
-use crate::domain::{Content, Comment, KeywordType, SearchOptions, TaskConfig};
+use crate::domain::{Comment, Content, KeywordType, SearchOptions, TaskConfig};
 
+pub use instagram::InstagramStrategy;
+pub use reddit::RedditStrategy;
 pub use tiktok::TikTokStrategy;
+pub use twitter::TwitterStrategy;
 
 /// Platform strategy trait defining platform-specific behavior
 pub trait PlatformStrategy: Send + Sync {
@@ -87,12 +99,16 @@ impl StrategyRegistry {
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
         registry.register(Box::new(TikTokStrategy::new()));
+        registry.register(Box::new(InstagramStrategy::new()));
+        registry.register(Box::new(RedditStrategy::new()));
+        registry.register(Box::new(TwitterStrategy::new()));
         registry
     }
 
     /// Register a platform strategy
     pub fn register(&mut self, strategy: Box<dyn PlatformStrategy>) {
-        self.strategies.insert(strategy.name().to_string(), strategy);
+        self.strategies
+            .insert(strategy.name().to_string(), strategy);
     }
 
     /// Get a strategy by platform name
@@ -127,12 +143,28 @@ mod tests {
     #[test]
     fn test_strategy_registry() {
         let registry = StrategyRegistry::with_defaults();
-        
+
+        // Check all platforms are registered
         assert!(registry.get("tiktok").is_some());
-        assert!(registry.get("instagram").is_none());
-        
+        assert!(registry.get("instagram").is_some());
+        assert!(registry.get("reddit").is_some());
+        assert!(registry.get("twitter").is_some());
+
+        // Check platform IDs (must match actual platform_id() implementations)
+        let reddit = registry.get_by_id(1);
+        assert!(reddit.is_some());
+        assert_eq!(reddit.unwrap().name(), "reddit");
+
         let tiktok = registry.get_by_id(2);
         assert!(tiktok.is_some());
         assert_eq!(tiktok.unwrap().name(), "tiktok");
+
+        let instagram = registry.get_by_id(4);
+        assert!(instagram.is_some());
+        assert_eq!(instagram.unwrap().name(), "instagram");
+
+        let twitter = registry.get_by_id(5);
+        assert!(twitter.is_some());
+        assert_eq!(twitter.unwrap().name(), "twitter");
     }
 }

@@ -203,7 +203,7 @@ fn default_platform() -> String {
 }
 
 /// Optimized response structure: campaign config extracted, comments as array
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
 pub struct DeviceCommentsResponse {
     /// Campaign configuration (returned once)
     pub campaign: CampaignConfig,
@@ -214,7 +214,7 @@ pub struct DeviceCommentsResponse {
 }
 
 /// Campaign auto-interaction configuration
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
 pub struct CampaignConfig {
     pub campaign_id: i32,
     pub auto_like: bool,
@@ -613,7 +613,6 @@ pub struct AiTaskInput {
     pub version: i32,
 
     // === Content Generation Input ===
-
     /// Video generation base prompt (from AiPubInput.video_prompt)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub video_prompt: Option<String>,
@@ -623,7 +622,6 @@ pub struct AiTaskInput {
     pub content_prompt: Option<String>,
 
     // === Video Generation Input ===
-
     /// AI model name (e.g., "veo-3.1", "sora-1.0")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -695,7 +693,6 @@ pub struct AiTaskResult {
     pub version: i32,
 
     // === Content Generation Result ===
-
     /// Number of content variations generated
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_count: Option<i32>,
@@ -709,7 +706,6 @@ pub struct AiTaskResult {
     pub content_variations: Vec<ContentVariation>,
 
     // === Video Generation Result ===
-
     /// Generated video URL
     #[serde(skip_serializing_if = "Option::is_none")]
     pub video_url: Option<String>,
@@ -719,7 +715,6 @@ pub struct AiTaskResult {
     pub video_duration: Option<f32>,
 
     // === Common Fields ===
-
     /// Timestamp when task completed (ISO 8601 format)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generated_at: Option<String>,
@@ -820,7 +815,7 @@ impl AiTaskResult {
 /// - Video content: Set both `video_prompt` (for video AI) and `content_prompt` (for text/captions)
 /// - Text-only content: Only set `content_prompt`
 /// - Legacy API calls: Only set `prompt` (both tasks will use this)
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
 pub struct AiPubInput {
     /// Video generation prompt - describes the visual content, scenes, transitions, and style
     /// Used by video AI models (e.g., Sora, Veo) to generate video content
@@ -845,18 +840,6 @@ pub struct AiPubInput {
     /// Overrides default_images for specific accounts
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account_images: Option<std::collections::HashMap<String, AiPubImageConfig>>,
-}
-
-impl Default for AiPubInput {
-    fn default() -> Self {
-        Self {
-            video_prompt: String::new(),
-            content_prompt: String::new(),
-            prompt: String::new(),
-            default_images: None,
-            account_images: None,
-        }
-    }
 }
 
 impl AiPubInput {
@@ -1011,20 +994,6 @@ impl AiPubTaskContent {
 // Default implementations
 // ============================================================
 
-impl Default for CampaignConfig {
-    fn default() -> Self {
-        Self {
-            campaign_id: 0,
-            auto_like: false,
-            auto_follow: false,
-            auto_dm: false,
-            auto_reply_comments: false,
-            auto_reply_post: false,
-            profile_name: None,
-        }
-    }
-}
-
 impl Default for Pagination {
     fn default() -> Self {
         Self {
@@ -1032,16 +1001,6 @@ impl Default for Pagination {
             page: 1,
             per_page: 20,
             total_pages: 0,
-        }
-    }
-}
-
-impl Default for DeviceCommentsResponse {
-    fn default() -> Self {
-        Self {
-            campaign: CampaignConfig::default(),
-            comments: Vec::new(),
-            pagination: Pagination::default(),
         }
     }
 }

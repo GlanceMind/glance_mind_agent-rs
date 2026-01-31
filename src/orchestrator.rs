@@ -14,27 +14,23 @@
 //! - Stop signals are propagated to cancel remaining work
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use futures::stream::{self, StreamExt};
 use tracing::{debug, error, info, warn};
 
-use crate::domain::{
-    Content, Comment, TaskConfig, TaskResult, KeywordType,
-};
 use crate::domain::errors::{WorkflowError, WorkflowResult};
+use crate::domain::{Comment, Content, KeywordType, TaskConfig, TaskResult};
 use crate::ports::{
-    ContentGateway, CommentGateway, AiAnalyzer,
-    ContentRepository, PromptRepository, ProgressTracker,
-    ai_analyzer::AnalysisContext,
-    progress_tracker::TaskStatus,
+    ai_analyzer::AnalysisContext, progress_tracker::TaskStatus, AiAnalyzer, CommentGateway,
+    ContentGateway, ContentRepository, ProgressTracker, PromptRepository,
 };
 use crate::strategies::PlatformStrategy;
 
 /// Result of processing a single video
-/// 
+///
 /// Used internally for parallel video processing to collect results
 /// before aggregating counts and updating progress.
 #[derive(Debug)]
@@ -59,24 +55,24 @@ enum VideoProcessResult {
 
 /// Workflow orchestrator that coordinates task processing
 pub struct WorkflowOrchestrator {
-    /// Content gateway (fetch videos/posts)
-    content_gateway: Arc<dyn ContentGateway>,
-    
-    /// Comment gateway (fetch comments)
-    comment_gateway: Arc<dyn CommentGateway>,
-    
+    /// Content gateways per platform (fetch videos/posts)
+    content_gateways: HashMap<String, Arc<dyn ContentGateway>>,
+
+    /// Comment gateways per platform (fetch comments)
+    comment_gateways: HashMap<String, Arc<dyn CommentGateway>>,
+
     /// AI analyzer (generate reply suggestions)
     ai_analyzer: Arc<dyn AiAnalyzer>,
-    
+
     /// Content repository (persist data)
     content_repo: Arc<dyn ContentRepository>,
-    
+
     /// Prompt repository (campaign config)
     prompt_repo: Arc<dyn PromptRepository>,
-    
+
     /// Progress tracker (task status)
     progress_tracker: Arc<dyn ProgressTracker>,
-    
+
     /// Platform strategies
     strategies: HashMap<String, Arc<dyn PlatformStrategy>>,
 
@@ -89,13 +85,13 @@ pub struct WorkflowOrchestrator {
 pub struct OrchestratorConfig {
     /// Default max videos per keyword
     pub max_videos_per_keyword: u32,
-    
+
     /// Default max comments per video
     pub max_comments_per_video: u32,
-    
+
     /// Batch size for AI analysis
     pub ai_batch_size: usize,
-    
+
     /// Whether to continue on individual errors
     pub continue_on_error: bool,
 }
@@ -114,8 +110,8 @@ impl Default for OrchestratorConfig {
 
 /// Builder for WorkflowOrchestrator
 pub struct OrchestratorBuilder {
-    content_gateway: Option<Arc<dyn ContentGateway>>,
-    comment_gateway: Option<Arc<dyn CommentGateway>>,
+    content_gateways: HashMap<String, Arc<dyn ContentGateway>>,
+    comment_gateways: HashMap<String, Arc<dyn CommentGateway>>,
     ai_analyzer: Option<Arc<dyn AiAnalyzer>>,
     content_repo: Option<Arc<dyn ContentRepository>>,
     prompt_repo: Option<Arc<dyn PromptRepository>>,
@@ -128,8 +124,8 @@ impl OrchestratorBuilder {
     /// Create a new builder
     pub fn new() -> Self {
         Self {
-            content_gateway: None,
-            comment_gateway: None,
+            content_gateways: HashMap::new(),
+            comment_gateways: HashMap::new(),
             ai_analyzer: None,
             content_repo: None,
             prompt_repo: None,
@@ -139,15 +135,23 @@ impl OrchestratorBuilder {
         }
     }
 
-    /// Set the content gateway
-    pub fn content_gateway(mut self, gateway: Arc<dyn ContentGateway>) -> Self {
-        self.content_gateway = Some(gateway);
+    /// Add a content gateway for a specific platform
+    pub fn add_content_gateway(
+        mut self,
+        platform: impl Into<String>,
+        gateway: Arc<dyn ContentGateway>,
+    ) -> Self {
+        self.content_gateways.insert(platform.into(), gateway);
         self
     }
 
-    /// Set the comment gateway
-    pub fn comment_gateway(mut self, gateway: Arc<dyn CommentGateway>) -> Self {
-        self.comment_gateway = Some(gateway);
+    /// Add a comment gateway for a specific platform
+    pub fn add_comment_gateway(
+        mut self,
+        platform: impl Into<String>,
+        gateway: Arc<dyn CommentGateway>,
+    ) -> Self {
+        self.comment_gateways.insert(platform.into(), gateway);
         self
     }
 
@@ -177,7 +181,8 @@ impl OrchestratorBuilder {
 
     /// Add a platform strategy
     pub fn add_strategy(mut self, strategy: Arc<dyn PlatformStrategy>) -> Self {
-        self.strategies.insert(strategy.name().to_string(), strategy);
+        self.strategies
+            .insert(strategy.name().to_string(), strategy);
         self
     }
 
@@ -189,13 +194,21 @@ impl OrchestratorBuilder {
 
     /// Build the orchestrator
     pub fn build(self) -> Result<WorkflowOrchestrator, &'static str> {
+        if self.content_gateways.is_empty() {
+            return Err("at least one content_gateway is required");
+        }
+        if self.comment_gateways.is_empty() {
+            return Err("at least one comment_gateway is required");
+        }
         Ok(WorkflowOrchestrator {
-            content_gateway: self.content_gateway.ok_or("content_gateway is required")?,
-            comment_gateway: self.comment_gateway.ok_or("comment_gateway is required")?,
+            content_gateways: self.content_gateways,
+            comment_gateways: self.comment_gateways,
             ai_analyzer: self.ai_analyzer.ok_or("ai_analyzer is required")?,
             content_repo: self.content_repo.ok_or("content_repository is required")?,
             prompt_repo: self.prompt_repo.ok_or("prompt_repository is required")?,
-            progress_tracker: self.progress_tracker.ok_or("progress_tracker is required")?,
+            progress_tracker: self
+                .progress_tracker
+                .ok_or("progress_tracker is required")?,
             strategies: self.strategies,
             config: self.config,
         })
@@ -215,14 +228,39 @@ impl WorkflowOrchestrator {
     }
 
     /// Process a crawler task
-    pub async fn process_task(&self, task_id: i64, task_config: TaskConfig) -> WorkflowResult<TaskResult> {
+    pub async fn process_task(
+        &self,
+        task_id: i64,
+        task_config: TaskConfig,
+    ) -> WorkflowResult<TaskResult> {
         let start_time = Instant::now();
         info!(task_id, platform = %task_config.platform, "Starting task processing");
 
         // Get the platform strategy
-        let strategy = self.strategies
+        let strategy = self
+            .strategies
             .get(&task_config.platform)
             .ok_or_else(|| WorkflowError::UnsupportedPlatform(task_config.platform.clone()))?;
+
+        // Get platform-specific gateways
+        let content_gateway = self
+            .content_gateways
+            .get(&task_config.platform)
+            .ok_or_else(|| {
+                WorkflowError::UnsupportedPlatform(format!(
+                    "No content gateway for platform: {}",
+                    task_config.platform
+                ))
+            })?;
+        let comment_gateway = self
+            .comment_gateways
+            .get(&task_config.platform)
+            .ok_or_else(|| {
+                WorkflowError::UnsupportedPlatform(format!(
+                    "No comment gateway for platform: {}",
+                    task_config.platform
+                ))
+            })?;
 
         // Update task status to running
         self.progress_tracker
@@ -231,7 +269,8 @@ impl WorkflowOrchestrator {
             .map_err(WorkflowError::Database)?;
 
         // Get analysis context from campaign
-        let analysis_context = self.prompt_repo
+        let analysis_context = self
+            .prompt_repo
             .get_analysis_context(task_config.campaign_id)
             .await
             .map_err(WorkflowError::Database)?
@@ -248,7 +287,12 @@ impl WorkflowOrchestrator {
 
         for (i, keyword) in keywords.iter().enumerate() {
             // Check if we should stop (campaign stopped or task cancelled)
-            if self.progress_tracker.should_stop(task_id).await.map_err(WorkflowError::Database)? {
+            if self
+                .progress_tracker
+                .should_stop(task_id)
+                .await
+                .map_err(WorkflowError::Database)?
+            {
                 info!(task_id, "Task stop requested, stopping early");
                 break;
             }
@@ -260,13 +304,18 @@ impl WorkflowOrchestrator {
             // Parse and process the keyword
             let parsed_keyword = strategy.parse_keyword(keyword);
 
-            match self.process_keyword(
-                task_id,
-                &task_config,
-                strategy.as_ref(),
-                &parsed_keyword,
-                &analysis_context,
-            ).await {
+            match self
+                .process_keyword(
+                    task_id,
+                    &task_config,
+                    strategy.as_ref(),
+                    &parsed_keyword,
+                    &analysis_context,
+                    content_gateway,
+                    comment_gateway,
+                )
+                .await
+            {
                 Ok((contents, comments, analyses)) => {
                     total_contents += contents;
                     total_comments += comments;
@@ -295,14 +344,16 @@ impl WorkflowOrchestrator {
             } else {
                 // Partial success
                 self.progress_tracker.complete_task(task_id).await.ok();
-                TaskResult::success(task_id)
-                    .with_counts(total_contents, total_comments, total_analyses)
+                TaskResult::success(task_id).with_counts(
+                    total_contents,
+                    total_comments,
+                    total_analyses,
+                )
             }
         } else {
             // Complete success
             self.progress_tracker.complete_task(task_id).await.ok();
-            TaskResult::success(task_id)
-                .with_counts(total_contents, total_comments, total_analyses)
+            TaskResult::success(task_id).with_counts(total_contents, total_comments, total_analyses)
         };
 
         let result = result.with_duration(duration_ms);
@@ -320,9 +371,10 @@ impl WorkflowOrchestrator {
     }
 
     /// Process a single keyword
-    /// 
+    ///
     /// Videos are processed in parallel using Tokio async tasks (similar to Go goroutines).
     /// Concurrency is controlled by `max_concurrent_videos` in the task config.
+    #[allow(clippy::too_many_arguments)]
     async fn process_keyword(
         &self,
         task_id: i64,
@@ -330,23 +382,35 @@ impl WorkflowOrchestrator {
         strategy: &dyn PlatformStrategy,
         keyword: &KeywordType,
         analysis_context: &AnalysisContext,
+        content_gateway: &Arc<dyn ContentGateway>,
+        comment_gateway: &Arc<dyn CommentGateway>,
     ) -> WorkflowResult<(i32, i32, i32)> {
         // Fetch content based on keyword type
-        let contents = self.fetch_content(config, strategy, keyword).await?;
+        let contents = self
+            .fetch_content(config, strategy, keyword, content_gateway)
+            .await?;
         info!(task_id, keyword = %keyword.value(), count = contents.len(), "Fetched content");
-        
+
         // Check if search returned zero results (matching Python agent behavior)
         // For keyword searches, empty results trigger campaign end
         if contents.is_empty() {
             warn!(task_id, keyword = %keyword.value(), "Keyword search returned zero results");
-            
+
             // Only trigger campaign stop for keyword/hashtag searches (matching Python agent)
             // User profile fetches just skip silently
             if matches!(keyword, KeywordType::Search(_) | KeywordType::Hashtag(_)) {
-                info!(task_id, campaign_id = config.campaign_id, "🛑 Marking campaign as ENDED (search exhausted)");
-                
+                info!(
+                    task_id,
+                    campaign_id = config.campaign_id,
+                    "🛑 Marking campaign as ENDED (search exhausted)"
+                );
+
                 // Call stop_campaign_gracefully (matching Python agent's mark_campaign_as_ended)
-                match self.progress_tracker.stop_campaign_gracefully(config.campaign_id).await {
+                match self
+                    .progress_tracker
+                    .stop_campaign_gracefully(config.campaign_id)
+                    .await
+                {
                     Ok(result) => {
                         if result.success {
                             if result.immediate_stopped {
@@ -370,7 +434,7 @@ impl WorkflowOrchestrator {
                     }
                 }
             }
-            
+
             // Return early with zero counts
             return Ok((0, 0, 0));
         }
@@ -378,7 +442,7 @@ impl WorkflowOrchestrator {
         // Process videos in parallel using buffer_unordered
         let concurrency = config.effective_concurrency();
         let max_concurrent_videos = concurrency.max_concurrent_videos;
-        
+
         info!(
             task_id,
             keyword = %keyword.value(),
@@ -389,25 +453,35 @@ impl WorkflowOrchestrator {
 
         // Shared stop flag for cancelling remaining work
         let stop_flag = Arc::new(AtomicBool::new(false));
-        
+
         // Process videos concurrently
+        let comment_gateway = comment_gateway.clone();
         let results: Vec<_> = stream::iter(contents.into_iter().enumerate())
             .map(|(idx, content)| {
                 let config = config.clone();
                 let ctx = analysis_context.clone();
                 let stop_flag = stop_flag.clone();
-                
+                let comment_gateway = comment_gateway.clone();
+
                 async move {
                     // Check stop flag before processing
                     if stop_flag.load(Ordering::Relaxed) {
-                        debug!(task_id, content_idx = idx, "Skipping video due to stop signal");
+                        debug!(
+                            task_id,
+                            content_idx = idx,
+                            "Skipping video due to stop signal"
+                        );
                         return VideoProcessResult::Skipped;
                     }
-                    
+
                     // Check database stop signal
                     match self.progress_tracker.should_stop(task_id).await {
                         Ok(true) => {
-                            info!(task_id, content_idx = idx, "Stopping due to campaign stop signal");
+                            info!(
+                                task_id,
+                                content_idx = idx,
+                                "Stopping due to campaign stop signal"
+                            );
                             stop_flag.store(true, Ordering::Relaxed);
                             return VideoProcessResult::Stopped;
                         }
@@ -416,43 +490,54 @@ impl WorkflowOrchestrator {
                             warn!(task_id, error = %e, "Failed to check stop status");
                         }
                     }
-                    
+
                     // Process the video
-                    match self.process_content(task_id, &config, strategy, &content, &ctx).await {
-                        Ok((is_new, comments, analyses)) => {
-                            VideoProcessResult::Success {
-                                content_id: content.content_id.clone(),
-                                is_new,
-                                comments,
-                                analyses,
-                            }
-                        }
-                        Err(e) => {
-                            VideoProcessResult::Error {
-                                content_id: content.content_id.clone(),
-                                error: e,
-                            }
-                        }
+                    match self
+                        .process_content(
+                            task_id,
+                            &config,
+                            strategy,
+                            &content,
+                            &ctx,
+                            &comment_gateway,
+                        )
+                        .await
+                    {
+                        Ok((is_new, comments, analyses)) => VideoProcessResult::Success {
+                            content_id: content.content_id.clone(),
+                            is_new,
+                            comments,
+                            analyses,
+                        },
+                        Err(e) => VideoProcessResult::Error {
+                            content_id: content.content_id.clone(),
+                            error: e,
+                        },
                     }
                 }
             })
             .buffer_unordered(max_concurrent_videos)
             .collect()
             .await;
-        
+
         // Aggregate results and update progress sequentially
         // (Progress updates must be sequential to maintain correct counts)
         let mut contents_count = 0;
         let mut comments_count = 0;
         let mut analyses_count = 0;
         let mut stopped = false;
-        
+
         for result in results {
             match result {
-                VideoProcessResult::Success { content_id, is_new, comments, analyses } => {
+                VideoProcessResult::Success {
+                    content_id,
+                    is_new,
+                    comments,
+                    analyses,
+                } => {
                     if is_new {
                         contents_count += 1;
-                        
+
                         // Update progress for new videos
                         match self.progress_tracker.update_task_progress(task_id, 1).await {
                             Ok(progress_update) => {
@@ -463,7 +548,7 @@ impl WorkflowOrchestrator {
                                     new_consumption = progress_update.new_actual_consumption,
                                     "Task progress updated"
                                 );
-                                
+
                                 if progress_update.should_stop {
                                     warn!(task_id, "⚠️ Campaign is STOPPING");
                                     stopped = true;
@@ -493,7 +578,7 @@ impl WorkflowOrchestrator {
                 }
             }
         }
-        
+
         if stopped {
             info!(task_id, keyword = %keyword.value(), "Video processing stopped early");
         }
@@ -507,18 +592,17 @@ impl WorkflowOrchestrator {
         config: &TaskConfig,
         strategy: &dyn PlatformStrategy,
         keyword: &KeywordType,
+        content_gateway: &Arc<dyn ContentGateway>,
     ) -> WorkflowResult<Vec<Content>> {
         let search_options = strategy.build_search_options(config, keyword);
 
         let contents = match keyword {
-            KeywordType::UserId(user_id) | KeywordType::SecUserId(user_id) => {
-                self.content_gateway
-                    .fetch_user_content(user_id, search_options.count)
-                    .await
-                    .map_err(WorkflowError::Gateway)?
-            }
+            KeywordType::UserId(user_id) | KeywordType::SecUserId(user_id) => content_gateway
+                .fetch_user_content(user_id, search_options.count)
+                .await
+                .map_err(WorkflowError::Gateway)?,
             KeywordType::ContentId(content_id) => {
-                match self.content_gateway.fetch_by_id(content_id).await {
+                match content_gateway.fetch_by_id(content_id).await {
                     Ok(Some(content)) => vec![content],
                     Ok(None) => {
                         warn!(content_id = %content_id, "Content not found");
@@ -527,19 +611,17 @@ impl WorkflowOrchestrator {
                     Err(e) => return Err(WorkflowError::Gateway(e)),
                 }
             }
-            KeywordType::Search(_) | KeywordType::Hashtag(_) => {
-                self.content_gateway
-                    .search(&search_options)
-                    .await
-                    .map_err(WorkflowError::Gateway)?
-            }
+            KeywordType::Search(_) | KeywordType::Hashtag(_) => content_gateway
+                .search(&search_options)
+                .await
+                .map_err(WorkflowError::Gateway)?,
         };
 
         Ok(contents)
     }
 
     /// Process a single content item (video/post)
-    /// 
+    ///
     /// Returns (is_new, comments_saved, analyses_count) matching Python agent behavior:
     /// - is_new: Whether this was a new video (for progress tracking)
     /// - comments_saved: Number of comments with AI suggestions saved
@@ -548,21 +630,23 @@ impl WorkflowOrchestrator {
         &self,
         task_id: i64,
         config: &TaskConfig,
-        strategy: &dyn PlatformStrategy,
+        _strategy: &dyn PlatformStrategy,
         content: &Content,
         analysis_context: &AnalysisContext,
+        comment_gateway: &Arc<dyn CommentGateway>,
     ) -> WorkflowResult<(bool, i32, i32)> {
         // ========== Step 1: Save video metadata ==========
         // Save content with ON CONFLICT - database unique constraint (task_id, video_id) handles duplicates
         // Returns is_new flag based on whether INSERT or UPDATE occurred
-        let save_result = self.content_repo
+        let save_result = self
+            .content_repo
             .save_content(content, Some(config.campaign_id), Some(task_id as i32))
             .await
             .map_err(WorkflowError::Database)?;
-        
+
         let content_db_id = save_result.id;
         let is_new = save_result.is_new;
-        
+
         if is_new {
             info!(
                 task_id,
@@ -587,7 +671,7 @@ impl WorkflowOrchestrator {
             .map(|m| m as u32)
             .unwrap_or(self.config.max_comments_per_video);
 
-        let comments = match self.comment_gateway
+        let comments = match comment_gateway
             .fetch_all_comments(&content.content_id, max_comments)
             .await
         {
@@ -600,7 +684,7 @@ impl WorkflowOrchestrator {
                     error = %e,
                     "Failed to fetch comments, skipping AI analysis"
                 );
-                return Ok((true, 0, 0));  // is_new=true, but no comments processed
+                return Ok((true, 0, 0)); // is_new=true, but no comments processed
             }
         };
 
@@ -610,7 +694,7 @@ impl WorkflowOrchestrator {
             count = comments.len(),
             "Fetched comments"
         );
-        
+
         // Check minimum comment count (matching Python agent: "if len(comments_raw) < 5: continue")
         if comments.len() < 5 {
             info!(
@@ -619,7 +703,7 @@ impl WorkflowOrchestrator {
                 count = comments.len(),
                 "Insufficient comments (< 5), skipping AI analysis"
             );
-            return Ok((true, 0, 0));  // is_new=true, but no AI analysis needed
+            return Ok((true, 0, 0)); // is_new=true, but no AI analysis needed
         }
 
         // Create comment lookup map (matching Python agent)
@@ -633,11 +717,12 @@ impl WorkflowOrchestrator {
         // (matching Python agent's save_comments_and_analysis behavior)
         let mut analyses_count = 0;
         let mut comments_saved = 0;
-        
+
         for chunk in comments.chunks(self.config.ai_batch_size) {
             let comments_to_analyze: Vec<Comment> = chunk.to_vec();
 
-            match self.ai_analyzer
+            match self
+                .ai_analyzer
                 .analyze_batch(&comments_to_analyze, content, analysis_context)
                 .await
             {
@@ -648,7 +733,8 @@ impl WorkflowOrchestrator {
                         // Match suggestion to original comment by comment_id
                         if let Some(comment) = comment_map.get(&suggestion.comment_id) {
                             // Save comment with analysis in one operation
-                            match self.content_repo
+                            match self
+                                .content_repo
                                 .save_comment_with_analysis(
                                     comment,
                                     content_db_id,
@@ -689,7 +775,7 @@ impl WorkflowOrchestrator {
                 }
             }
         }
-        
+
         info!(
             task_id,
             content_id = %content.content_id,

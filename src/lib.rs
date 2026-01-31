@@ -19,81 +19,84 @@
 pub mod config;
 
 // Core layers
+pub mod adapters;
 pub mod domain;
+pub mod orchestrator;
+pub mod platform;
 pub mod ports;
 pub mod strategies;
-pub mod platform;
-pub mod orchestrator;
-pub mod adapters;
 pub mod worker;
 
 // Testing utilities
 pub mod testing;
 
 // Infrastructure
-pub mod tikhub;
-pub mod fixtures;
-pub mod protocol_gen;
+pub mod concurrency;
 pub mod db;
 pub mod error;
-pub mod concurrency;
+pub mod fixtures;
+pub mod protocol_gen;
+pub mod tikhub;
 
 // Re-exports for convenience
 pub use error::{Error, Result};
-pub use tikhub::TikHubClient;
 pub use fixtures::{FixtureGenerator, FixtureLoader};
+pub use tikhub::TikHubClient;
 
 // Config re-exports (platform registry loaded from database)
+pub use config::platform::{global_registry, init_global_registry};
 pub use config::{PlatformInfo, PlatformLookup, PlatformRegistry};
-pub use config::platform::{init_global_registry, global_registry};
 
 // Domain re-exports
 pub use domain::{
-    Content, Comment, ReplySuggestion, Engagement,
-    CommentIntent, Sentiment, TaskConfig, TaskResult,
-    SearchOptions, KeywordType, ConcurrencyConfig,
+    Comment, CommentIntent, ConcurrencyConfig, Content, Engagement, KeywordType, ReplySuggestion,
+    SearchOptions, Sentiment, TaskConfig, TaskResult,
 };
 
 // Concurrency re-exports
-pub use concurrency::{RateLimiter, AiRateLimiter, TikHubRateLimiter, GlobalRateLimiters};
+pub use concurrency::{AiRateLimiter, GlobalRateLimiters, RateLimiter, TikHubRateLimiter};
 pub use domain::errors::{
-    WorkflowError, GatewayError, AiError, DbError, QueueError,
-    WorkflowResult, GatewayResult, AiResult, DbResult, QueueResult,
+    AiError, AiResult, DbError, DbResult, GatewayError, GatewayResult, QueueError, QueueResult,
+    WorkflowError, WorkflowResult,
 };
 
 // Ports re-exports
 pub use ports::{
-    ContentGateway, CommentGateway, AiAnalyzer,
-    ContentRepository, PromptRepository, ProgressTracker,
+    AiAnalyzer, CommentGateway, ContentGateway, ContentRepository, ProgressTracker,
+    PromptRepository,
 };
 
 // Strategy re-exports
-pub use strategies::{PlatformStrategy, StrategyRegistry, TikTokStrategy};
+pub use strategies::{
+    InstagramStrategy, PlatformStrategy, RedditStrategy, StrategyRegistry, TikTokStrategy,
+    TwitterStrategy,
+};
 
 // Orchestrator re-exports
-pub use orchestrator::{WorkflowOrchestrator, OrchestratorBuilder, OrchestratorConfig};
+pub use orchestrator::{OrchestratorBuilder, OrchestratorConfig, WorkflowOrchestrator};
 
 // Adapter re-exports
-pub use adapters::{TikHubAdapter, OpenAiAdapter, PostgresAdapter, FixtureMockAdapter};
-pub use adapters::{RedisTaskConsumer, CrawlerTaskExt, CrawlerTaskBuilder};
 pub use adapters::redis::TaskResult as RedisTaskResult;
+pub use adapters::{CrawlerTaskBuilder, CrawlerTaskExt, RedisTaskConsumer};
+pub use adapters::{FixtureMockAdapter, OpenAiAdapter, PostgresAdapter, TikHubAdapter};
+pub use adapters::{InstagramAdapter, RedditAdapter, TwitterAdapter};
+pub use adapters::{MultiPlatformCommentGateway, MultiPlatformContentGateway};
 
 // Protocol re-exports (task types from glance_mind_protocol)
 pub use protocol_gen::{
-    CrawlerTask, CrawlerTaskMeta, CrawlerTaskSpec,
+    CrawlerTask, CrawlerTaskMeta, CrawlerTaskSpec, Platform as ProtocolPlatform,
     TaskConfig as ProtocolTaskConfig, TaskFilters,
-    Platform as ProtocolPlatform,
 };
 
 // Worker re-exports
-pub use worker::{MultiPlatformWorker, WorkerConfig, WorkerBuilder};
+pub use worker::{MultiPlatformWorker, WorkerBuilder, WorkerConfig};
 
 // Platform re-exports (Platform trait, not to be confused with PlatformRegistry from config)
-pub use platform::{Platform as PlatformTrait, TikTokPlatform, TikTokConfig};
 pub use platform::registry::PlatformRegistry as PlatformInstanceRegistry;
+pub use platform::{Platform as PlatformTrait, TikTokConfig, TikTokPlatform};
 
 // Testing re-exports (for integration tests)
 pub use testing::{
-    MockContentGateway, MockCommentGateway, MockAiAnalyzer, MockRepository,
-    TestFixtures, MockEnvironment,
+    MockAiAnalyzer, MockCommentGateway, MockContentGateway, MockEnvironment, MockRepository,
+    TestFixtures,
 };

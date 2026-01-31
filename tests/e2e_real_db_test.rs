@@ -28,32 +28,45 @@ use async_trait::async_trait;
 use diesel::prelude::*;
 
 use glance_mind_agent_rs::{
-    // Domain
-    Content, Comment, TaskConfig, ReplySuggestion, Engagement,
-    // Ports
-    ContentGateway, CommentGateway, AiAnalyzer,
-    ContentRepository, PromptRepository, ProgressTracker,
-    // Orchestrator
-    WorkflowOrchestrator, OrchestratorConfig,
-    // Strategies
-    TikTokStrategy,
-    // Adapters
-    PostgresAdapter, RedisTaskConsumer, CrawlerTaskBuilder,
-    // Config
-    PlatformRegistry, init_global_registry,
-    // Protocol types
-    protocol_gen::Platform,
     // Domain errors
-    domain::errors::{GatewayResult, AiResult},
+    domain::errors::{AiResult, GatewayResult},
+    init_global_registry,
     // Port types
     ports::ai_analyzer::AnalysisContext,
+    // Protocol types
+    protocol_gen::Platform,
+    AiAnalyzer,
+    Comment,
+    CommentGateway,
+    // Domain
+    Content,
+    // Ports
+    ContentGateway,
+    ContentRepository,
+    CrawlerTaskBuilder,
+    Engagement,
+    OrchestratorConfig,
+    // Config
+    PlatformRegistry,
+    // Adapters
+    PostgresAdapter,
+    ProgressTracker,
+    PromptRepository,
+    RedisTaskConsumer,
+    ReplySuggestion,
+    TaskConfig,
+    // Strategies
+    TikTokStrategy,
+    // Orchestrator
+    WorkflowOrchestrator,
 };
 
 // ============================================================
 // Test Configuration
 // ============================================================
 
-const TEST_DATABASE_URL: &str = "postgresql://glancemind:testpassword@localhost:5433/glancemind_test";
+const TEST_DATABASE_URL: &str =
+    "postgresql://glancemind:testpassword@localhost:5433/glancemind_test";
 const TEST_REDIS_URL: &str = "redis://localhost:6380";
 const TEST_QUEUE_NAME: &str = "gm:agent:test:tasks";
 
@@ -77,7 +90,10 @@ impl MockTikHubAdapter {
         let video = Content::new("tiktok", "china_travel_video_001")
             .with_author("china_travel_guide")
             .with_author_name("中国旅游达人")
-            .with_description("探索中国最美的地方！从长城到桂林，带你看遍中国🇨🇳 #中国旅游 #travel #china".to_string())
+            .with_description(
+                "探索中国最美的地方！从长城到桂林，带你看遍中国🇨🇳 #中国旅游 #travel #china"
+                    .to_string(),
+            )
             .with_url("https://tiktok.com/@china_guide/video/001")
             .with_engagement(Engagement {
                 likes: 50000,
@@ -114,8 +130,8 @@ impl MockTikHubAdapter {
 }
 
 use glance_mind_agent_rs::{
-    SearchOptions, KeywordType,
     ports::comment_gateway::{FetchCommentsOptions, FetchCommentsResult},
+    KeywordType, SearchOptions,
 };
 
 #[async_trait]
@@ -133,11 +149,7 @@ impl ContentGateway for MockTikHubAdapter {
         Ok(vec![self.video.clone()])
     }
 
-    async fn fetch_user_content(
-        &self,
-        _user_id: &str,
-        _count: u32,
-    ) -> GatewayResult<Vec<Content>> {
+    async fn fetch_user_content(&self, _user_id: &str, _count: u32) -> GatewayResult<Vec<Content>> {
         Ok(vec![self.video.clone()])
     }
 
@@ -347,7 +359,8 @@ async fn check_test_infrastructure() -> bool {
 /// Setup test campaign in database
 fn setup_test_campaign(conn: &mut PgConnection) -> Result<(), diesel::result::Error> {
     // Insert test campaign for "中国旅游"
-    diesel::sql_query(format!(r#"
+    diesel::sql_query(format!(
+        r#"
         INSERT INTO gm_campaigns (
             id, user_id, name, platform_id, status, 
             product_prompt, max_comments, processed_comments
@@ -358,8 +371,10 @@ fn setup_test_campaign(conn: &mut PgConnection) -> Result<(), diesel::result::Er
             name = EXCLUDED.name,
             status = 1,
             processed_comments = 0
-    "#, TEST_CAMPAIGN_ID, TEST_USER_ID))
-        .execute(conn)?;
+    "#,
+        TEST_CAMPAIGN_ID, TEST_USER_ID
+    ))
+    .execute(conn)?;
 
     Ok(())
 }
@@ -444,8 +459,8 @@ async fn test_china_travel_campaign_e2e() {
     // Build orchestrator
     println!("🏗️  Building orchestrator...");
     let orchestrator = WorkflowOrchestrator::builder()
-        .content_gateway(tikhub.clone() as Arc<dyn ContentGateway>)
-        .comment_gateway(tikhub as Arc<dyn CommentGateway>)
+        .add_content_gateway("tiktok", tikhub.clone() as Arc<dyn ContentGateway>)
+        .add_comment_gateway("tiktok", tikhub as Arc<dyn CommentGateway>)
         .ai_analyzer(ai as Arc<dyn AiAnalyzer>)
         .content_repository(postgres.clone() as Arc<dyn ContentRepository>)
         .prompt_repository(postgres.clone() as Arc<dyn PromptRepository>)
@@ -469,14 +484,25 @@ async fn test_china_travel_campaign_e2e() {
 
     // Run workflow
     println!("\n🚀 Running workflow for '中国旅游'...\n");
-    let result = orchestrator.process_task(TEST_CAMPAIGN_ID as i64, task_config).await;
+    let result = orchestrator
+        .process_task(TEST_CAMPAIGN_ID as i64, task_config)
+        .await;
 
     match &result {
         Ok(task_result) => {
             println!("✅ Workflow completed successfully!");
-            println!("   - Contents processed: {}", task_result.contents_processed);
-            println!("   - Comments processed: {}", task_result.comments_processed);
-            println!("   - AI analyses generated: {}", task_result.analyses_generated);
+            println!(
+                "   - Contents processed: {}",
+                task_result.contents_processed
+            );
+            println!(
+                "   - Comments processed: {}",
+                task_result.comments_processed
+            );
+            println!(
+                "   - AI analyses generated: {}",
+                task_result.analyses_generated
+            );
             if let Some(ref err) = task_result.error {
                 println!("   - Error: {}", err);
             }
@@ -495,7 +521,7 @@ async fn test_china_travel_campaign_e2e() {
         .count()
         .get_result(&mut conn)
         .expect("Failed to query content");
-    
+
     println!("   Content records: {}", content_count);
     assert_eq!(content_count, 1, "Expected 1 video to be saved");
 
@@ -553,9 +579,15 @@ async fn test_china_travel_campaign_e2e() {
 
     println!("\n   Saved content:");
     println!("     Video ID: {}", saved_content.0);
-    println!("     Author: {}", saved_content.1.as_deref().unwrap_or("N/A"));
+    println!(
+        "     Author: {}",
+        saved_content.1.as_deref().unwrap_or("N/A")
+    );
     let desc_preview = saved_content.2.as_deref().unwrap_or("N/A");
-    println!("     Description: {}...", &desc_preview[..50.min(desc_preview.len())]);
+    println!(
+        "     Description: {}...",
+        &desc_preview[..50.min(desc_preview.len())]
+    );
 
     // Final summary
     println!("\n========================================");
@@ -599,7 +631,10 @@ async fn test_redis_task_queue_integration() {
     // Create Redis consumer and initialize connection
     let mut consumer = RedisTaskConsumer::new(TEST_REDIS_URL, TEST_QUEUE_NAME)
         .expect("Failed to create Redis consumer");
-    consumer.init().await.expect("Failed to initialize Redis connection");
+    consumer
+        .init()
+        .await
+        .expect("Failed to initialize Redis connection");
 
     // Create a test task (simulating scheduler)
     let task = CrawlerTaskBuilder::new(TEST_CAMPAIGN_ID as i64)
@@ -612,10 +647,13 @@ async fn test_redis_task_queue_integration() {
     // Publish task to queue
     println!("📤 Publishing task to Redis queue...");
     let task_json = serde_json::to_string(&task).expect("Failed to serialize task");
-    
+
     let client = redis::Client::open(TEST_REDIS_URL).expect("Failed to create Redis client");
-    let mut conn = client.get_multiplexed_async_connection().await.expect("Failed to connect to Redis");
-    
+    let mut conn = client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("Failed to connect to Redis");
+
     let _: () = redis::cmd("LPUSH")
         .arg(TEST_QUEUE_NAME)
         .arg(&task_json)
@@ -636,7 +674,7 @@ async fn test_redis_task_queue_integration() {
             println!("   Task ID: {}", consumed_task.task_id());
             println!("   Platform: {}", consumed_task.platform_name());
             println!("   Keywords: {:?}", consumed_task.keywords());
-            
+
             assert_eq!(consumed_task.task_id(), TEST_CAMPAIGN_ID as i64);
             assert_eq!(consumed_task.platform_name(), "tiktok");
         }

@@ -2,8 +2,8 @@
 
 use async_trait::async_trait;
 
-use crate::domain::{Content, SearchOptions, KeywordType};
 use crate::domain::errors::GatewayResult;
+use crate::domain::{Content, KeywordType, SearchOptions};
 
 /// Port for fetching content (videos, posts) from external platforms
 #[async_trait]
@@ -44,11 +44,7 @@ pub trait ContentGateway: Send + Sync {
     ///
     /// # Returns
     /// * `GatewayResult<Vec<Content>>` - List of user's content
-    async fn fetch_user_content(
-        &self,
-        user_id: &str,
-        count: u32,
-    ) -> GatewayResult<Vec<Content>>;
+    async fn fetch_user_content(&self, user_id: &str, count: u32) -> GatewayResult<Vec<Content>>;
 
     /// Fetch a specific content item by ID
     ///
@@ -68,16 +64,16 @@ pub trait ContentGateway: Send + Sync {
 pub struct UserContentOptions {
     /// User's unique ID (e.g., @username)
     pub user_id: Option<String>,
-    
+
     /// User's secure/internal ID (platform-specific)
     pub sec_user_id: Option<String>,
-    
+
     /// Maximum number of items to fetch
     pub count: u32,
-    
+
     /// Pagination cursor
     pub cursor: Option<i64>,
-    
+
     /// Sort type (platform-specific)
     pub sort_type: Option<u8>,
 }

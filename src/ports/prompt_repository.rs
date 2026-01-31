@@ -35,37 +35,37 @@ pub trait PromptRepository: Send + Sync {
 pub struct CampaignConfig {
     /// Campaign ID
     pub id: i32,
-    
+
     /// User ID who owns this campaign
     pub user_id: i32,
-    
+
     /// Campaign name
     pub name: String,
-    
+
     /// Platform ID
     pub platform_id: i32,
-    
+
     /// Current status
     pub status: CampaignStatus,
-    
+
     /// Target audience description
     pub target_audience: Option<String>,
-    
+
     /// Product/service prompt
     pub product_prompt: Option<String>,
-    
+
     /// Reply strategy instructions
     pub reply_strategy: Option<String>,
-    
+
     /// DM strategy instructions
     pub dm_strategy: Option<String>,
-    
+
     /// Reply post strategy instructions
     pub reply_post_strategy: Option<String>,
-    
+
     /// Maximum comments to process
     pub max_comments: Option<i32>,
-    
+
     /// Comments already processed
     pub processed_comments: i32,
 }
@@ -74,28 +74,28 @@ impl CampaignConfig {
     /// Convert to AnalysisContext for AI
     pub fn to_analysis_context(&self) -> AnalysisContext {
         let mut ctx = AnalysisContext::new();
-        
+
         if let Some(ref prompt) = self.product_prompt {
             ctx = ctx.with_product_prompt(prompt.clone());
         }
-        
+
         if let Some(ref audience) = self.target_audience {
             ctx = ctx.with_target_audience(audience.clone());
         }
-        
+
         if let Some(ref strategy) = self.reply_strategy {
             ctx = ctx.with_reply_strategy(strategy.clone());
         }
-        
+
         if let Some(ref dm_strat) = self.dm_strategy {
             ctx = ctx.with_dm_strategy(dm_strat.clone());
             ctx = ctx.enable_dm();
         }
-        
+
         if self.reply_post_strategy.is_some() {
             ctx = ctx.enable_post_reply();
         }
-        
+
         ctx
     }
 
@@ -110,7 +110,8 @@ impl CampaignConfig {
 
     /// Get remaining comments to process
     pub fn remaining_comments(&self) -> Option<i32> {
-        self.max_comments.map(|max| (max - self.processed_comments).max(0))
+        self.max_comments
+            .map(|max| (max - self.processed_comments).max(0))
     }
 }
 
@@ -172,13 +173,13 @@ impl CampaignStatus {
 pub struct PlatformConfig {
     /// Platform ID
     pub id: i32,
-    
+
     /// Platform internal name (e.g., "tiktok")
     pub name: String,
-    
+
     /// Platform display name (e.g., "TikTok")
     pub display_name: String,
-    
+
     /// Whether the platform is enabled
     pub is_active: bool,
 }

@@ -13,11 +13,10 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use glance_mind_agent_rs::{
-    TikHubAdapter, OpenAiAdapter, PostgresAdapter, RedisTaskConsumer,
-    WorkflowOrchestrator, TikTokStrategy,
-    MultiPlatformWorker, WorkerConfig,
-    AiAnalyzer, // For health_check method
-    PlatformRegistry, init_global_registry,
+    init_global_registry, AiAnalyzer, CommentGateway, ContentGateway, InstagramAdapter,
+    InstagramStrategy, MultiPlatformWorker, OpenAiAdapter, PlatformRegistry, PostgresAdapter,
+    RedditAdapter, RedditStrategy, RedisTaskConsumer, TikHubAdapter, TikTokStrategy,
+    TwitterAdapter, TwitterStrategy, WorkerConfig, WorkflowOrchestrator,
 };
 
 #[derive(Parser)]
@@ -56,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,glance_mind_agent_rs=debug"))
+                .unwrap_or_else(|_| EnvFilter::new("info,glance_mind_agent_rs=debug")),
         )
         .init();
 
@@ -72,7 +71,8 @@ async fn main() -> anyhow::Result<()> {
     info!("");
 
     // Get database URL
-    let database_url = cli.database_url
+    let database_url = cli
+        .database_url
         .or_else(|| std::env::var("DATABASE_URL").ok())
         .ok_or_else(|| anyhow::anyhow!("DATABASE_URL is required"))?;
 
@@ -87,24 +87,94 @@ async fn main() -> anyhow::Result<()> {
     init_global_registry(platform_registry);
     info!("Platform registry initialized");
 
-    // Create adapters
+    // Create adapters for all platforms
     info!("Creating adapters...");
 
-    // TikHub adapter
-    let tikhub_adapter = match TikHubAdapter::from_env() {
-        Ok(adapter) => Arc::new(adapter) as Arc<dyn glance_mind_agent_rs::ContentGateway>,
+    // TikTok adapter
+    let tiktok_content = match TikHubAdapter::from_env() {
+        Ok(adapter) => Arc::new(adapter) as Arc<dyn ContentGateway>,
         Err(e) => {
-            error!("Failed to create TikHub adapter: {}", e);
-            return Err(anyhow::anyhow!("TikHub adapter initialization failed: {}", e));
+            error!("Failed to create TikTok adapter: {}", e);
+            return Err(anyhow::anyhow!(
+                "TikTok adapter initialization failed: {}",
+                e
+            ));
+        }
+    };
+    let tiktok_comment = match TikHubAdapter::from_env() {
+        Ok(adapter) => Arc::new(adapter) as Arc<dyn CommentGateway>,
+        Err(e) => {
+            error!("Failed to create TikTok comment adapter: {}", e);
+            return Err(anyhow::anyhow!(
+                "TikTok adapter initialization failed: {}",
+                e
+            ));
         }
     };
 
-    // Also use TikHub for comments
-    let comment_adapter = match TikHubAdapter::from_env() {
-        Ok(adapter) => Arc::new(adapter) as Arc<dyn glance_mind_agent_rs::CommentGateway>,
+    // Instagram adapter
+    let instagram_content = match InstagramAdapter::from_env() {
+        Ok(adapter) => Arc::new(adapter) as Arc<dyn ContentGateway>,
         Err(e) => {
-            error!("Failed to create TikHub comment adapter: {}", e);
-            return Err(anyhow::anyhow!("TikHub adapter initialization failed: {}", e));
+            error!("Failed to create Instagram adapter: {}", e);
+            return Err(anyhow::anyhow!(
+                "Instagram adapter initialization failed: {}",
+                e
+            ));
+        }
+    };
+    let instagram_comment = match InstagramAdapter::from_env() {
+        Ok(adapter) => Arc::new(adapter) as Arc<dyn CommentGateway>,
+        Err(e) => {
+            error!("Failed to create Instagram comment adapter: {}", e);
+            return Err(anyhow::anyhow!(
+                "Instagram adapter initialization failed: {}",
+                e
+            ));
+        }
+    };
+
+    // Reddit adapter
+    let reddit_content = match RedditAdapter::from_env() {
+        Ok(adapter) => Arc::new(adapter) as Arc<dyn ContentGateway>,
+        Err(e) => {
+            error!("Failed to create Reddit adapter: {}", e);
+            return Err(anyhow::anyhow!(
+                "Reddit adapter initialization failed: {}",
+                e
+            ));
+        }
+    };
+    let reddit_comment = match RedditAdapter::from_env() {
+        Ok(adapter) => Arc::new(adapter) as Arc<dyn CommentGateway>,
+        Err(e) => {
+            error!("Failed to create Reddit comment adapter: {}", e);
+            return Err(anyhow::anyhow!(
+                "Reddit adapter initialization failed: {}",
+                e
+            ));
+        }
+    };
+
+    // Twitter adapter
+    let twitter_content = match TwitterAdapter::from_env() {
+        Ok(adapter) => Arc::new(adapter) as Arc<dyn ContentGateway>,
+        Err(e) => {
+            error!("Failed to create Twitter adapter: {}", e);
+            return Err(anyhow::anyhow!(
+                "Twitter adapter initialization failed: {}",
+                e
+            ));
+        }
+    };
+    let twitter_comment = match TwitterAdapter::from_env() {
+        Ok(adapter) => Arc::new(adapter) as Arc<dyn CommentGateway>,
+        Err(e) => {
+            error!("Failed to create Twitter comment adapter: {}", e);
+            return Err(anyhow::anyhow!(
+                "Twitter adapter initialization failed: {}",
+                e
+            ));
         }
     };
 
@@ -113,7 +183,10 @@ async fn main() -> anyhow::Result<()> {
         Ok(adapter) => Arc::new(adapter) as Arc<dyn glance_mind_agent_rs::AiAnalyzer>,
         Err(e) => {
             error!("Failed to create OpenAI adapter: {}", e);
-            return Err(anyhow::anyhow!("OpenAI adapter initialization failed: {}", e));
+            return Err(anyhow::anyhow!(
+                "OpenAI adapter initialization failed: {}",
+                e
+            ));
         }
     };
 
@@ -122,20 +195,36 @@ async fn main() -> anyhow::Result<()> {
         Ok(adapter) => Arc::new(adapter),
         Err(e) => {
             error!("Failed to create PostgreSQL adapter: {}", e);
-            return Err(anyhow::anyhow!("PostgreSQL adapter initialization failed: {}", e));
+            return Err(anyhow::anyhow!(
+                "PostgreSQL adapter initialization failed: {}",
+                e
+            ));
         }
     };
 
-    // Build orchestrator
+    // Build orchestrator with platform-specific gateways
     info!("Building orchestrator...");
     let orchestrator = WorkflowOrchestrator::builder()
-        .content_gateway(tikhub_adapter)
-        .comment_gateway(comment_adapter)
+        // Content gateways per platform
+        .add_content_gateway("tiktok", tiktok_content)
+        .add_content_gateway("instagram", instagram_content)
+        .add_content_gateway("reddit", reddit_content)
+        .add_content_gateway("twitter", twitter_content)
+        // Comment gateways per platform
+        .add_comment_gateway("tiktok", tiktok_comment)
+        .add_comment_gateway("instagram", instagram_comment)
+        .add_comment_gateway("reddit", reddit_comment)
+        .add_comment_gateway("twitter", twitter_comment)
+        // Common services
         .ai_analyzer(ai_adapter)
         .content_repository(postgres_adapter.clone())
         .prompt_repository(postgres_adapter.clone())
         .progress_tracker(postgres_adapter)
+        // Platform strategies
         .add_strategy(Arc::new(TikTokStrategy::new()))
+        .add_strategy(Arc::new(InstagramStrategy::new()))
+        .add_strategy(Arc::new(RedditStrategy::new()))
+        .add_strategy(Arc::new(TwitterStrategy::new()))
         .build()
         .map_err(|e| anyhow::anyhow!("Failed to build orchestrator: {}", e))?;
 
@@ -145,11 +234,13 @@ async fn main() -> anyhow::Result<()> {
     info!("Connecting to Redis...");
     let mut task_consumer = RedisTaskConsumer::new(&cli.redis_url, &cli.queue_name)
         .map_err(|e| anyhow::anyhow!("Failed to create Redis consumer: {}", e))?;
-    
+
     // Initialize the connection manager (required before use)
-    task_consumer.init().await
+    task_consumer
+        .init()
+        .await
         .map_err(|e| anyhow::anyhow!("Failed to initialize Redis connection: {}", e))?;
-    
+
     let task_consumer = Arc::new(task_consumer);
 
     // Create worker configuration
@@ -159,11 +250,8 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Create worker
-    let (mut worker, shutdown_tx) = MultiPlatformWorker::new(
-        task_consumer,
-        orchestrator,
-        worker_config,
-    );
+    let (mut worker, shutdown_tx) =
+        MultiPlatformWorker::new(task_consumer, orchestrator, worker_config);
 
     // Setup shutdown handler
     let shutdown_tx_clone = shutdown_tx.clone();
@@ -229,19 +317,17 @@ async fn run_health_check(redis_url: &str, database_url: &str) -> anyhow::Result
     // Check OpenAI
     info!("  Checking OpenAI API...");
     match OpenAiAdapter::from_env() {
-        Ok(adapter) => {
-            match adapter.health_check().await {
-                Ok(true) => info!("  ✅ OpenAI: OK"),
-                Ok(false) => {
-                    error!("  ❌ OpenAI: API not responding");
-                    return Err(anyhow::anyhow!("OpenAI health check failed"));
-                }
-                Err(e) => {
-                    error!("  ❌ OpenAI: {}", e);
-                    return Err(anyhow::anyhow!("OpenAI health check failed: {}", e));
-                }
+        Ok(adapter) => match adapter.health_check().await {
+            Ok(true) => info!("  ✅ OpenAI: OK"),
+            Ok(false) => {
+                error!("  ❌ OpenAI: API not responding");
+                return Err(anyhow::anyhow!("OpenAI health check failed"));
             }
-        }
+            Err(e) => {
+                error!("  ❌ OpenAI: {}", e);
+                return Err(anyhow::anyhow!("OpenAI health check failed: {}", e));
+            }
+        },
         Err(e) => {
             error!("  ❌ OpenAI: {}", e);
             return Err(anyhow::anyhow!("OpenAI health check failed: {}", e));
@@ -306,7 +392,7 @@ async fn load_platform_registry(database_url: &str) -> anyhow::Result<PlatformRe
                 tracing::warn!("No platforms found in database, using defaults");
                 return Ok(PlatformRegistry::with_defaults());
             }
-            
+
             let count = platforms.len();
             let registry = PlatformRegistry::from_records(platforms);
             info!("Loaded {} platforms from database", count);
