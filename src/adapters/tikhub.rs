@@ -194,9 +194,8 @@ impl ContentGateway for TikHubAdapter {
     ) -> GatewayResult<Vec<Content>> {
         match keyword {
             KeywordType::Search(query) | KeywordType::Hashtag(query) => {
-                let mut opts = options.clone();
-                opts.query = query.clone();
-                self.search(&opts).await
+                // Use with_query to create modified options
+                self.search(&options.with_query(query)).await
             }
             KeywordType::UserId(user_id) => self.fetch_user_content(user_id, options.count).await,
             KeywordType::SecUserId(sec_uid) => {

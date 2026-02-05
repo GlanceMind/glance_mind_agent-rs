@@ -1,0 +1,97 @@
+# =============================================================================
+# GlanceMind Agent-rs Development Environment
+# =============================================================================
+# Development setup with Redis + Scheduler + Agent-rs
+# Uses host.docker.internal to connect to host machine's PostgreSQL
+#
+# Usage:
+#   docker compose -f docker-compose.dev.yml up -d --build
+#   or
+#   make dev
+#
+# Prerequisites:
+#   - PostgreSQL running on host machine (localhost:5432)
+#   - .env file with required API keys
+# =============================================================================
+
+services:
+  # ===========================================================================
+  # Redis Task Queue
+  # ===========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: dev-redis
+    command: redis-server --appendonly no --save ""
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - dev-network
+
+  # ===========================================================================
+  # GlanceMind Scheduler
+  # ===========================================================================
+  scheduler:
+    build:
+      context: ../glance_mind_worker/glance_mind_scheduler
+      dockerfile: Dockerfile
+    container_name: dev-scheduler
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-aihub_user}:${POSTGRES_PASSWORD:-aihub_password}@host.docker.internal:5432/${POSTGRES_DB:-aihub_db}
+      REDIS_URL: redis://redis:6379
+      RUST_LOG: ${RUST_LOG:-info,glance_mind_scheduler=debug}
+      LAOZHANG_API_KEY: ${LAOZHANG_API_KEY:-}
+      CHAT_API_KEY: ${CHAT_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - dev-network
+    restart: on-failure
+
+  # ===========================================================================
+  # GlanceMind Agent-rs
+  # ===========================================================================
+  agent-rs:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dev-agent-rs
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-aihub_user}:${POSTGRES_PASSWORD:-aihub_password}@host.docker.internal:5432/${POSTGRES_DB:-aihub_db}
+      REDIS_URL: redis://redis:6379
+      AGENT_QUEUE_NAME: ${AGENT_QUEUE_NAME:-crawler:task_queue}
+      AGENT_WORKERS: ${AGENT_WORKERS:-2}
+      # TikHub API
+      TIKHUB_API_KEY: ${TIKHUB_API_KEY}
+      TIKHUB_BASE_URL: ${TIKHUB_BASE_URL:-https://api.tikhub.io}
+      # AI API Configuration
+      AGENT_API_KEY: ${AGENT_API_KEY:-${OPENAI_API_KEY}}
+      AGENT_BASE_URL: ${AGENT_BASE_URL:-${OPENAI_BASE_URL:-https://api.siliconflow.cn/v1}}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-${AGENT_API_KEY}}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-${AGENT_BASE_URL:-https://api.siliconflow.cn/v1}}
+      AI_MODEL: ${AI_MODEL:-deepseek-ai/DeepSeek-V3}
+      RUST_LOG: ${RUST_LOG:-info,glance_mind_agent_rs=debug}
+      # Concurrency settings
+      AGENT_MAX_CONCURRENT_TASKS: ${AGENT_MAX_CONCURRENT_TASKS:-5}
+      AGENT_MAX_CONCURRENT_VIDEOS: ${AGENT_MAX_CONCURRENT_VIDEOS:-5}
+      AGENT_AI_CONCURRENCY: ${AGENT_AI_CONCURRENCY:-20}
+      AGENT_TIKHUB_CONCURRENCY: ${AGENT_TIKHUB_CONCURRENCY:-3}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - dev-network
+    restart: on-failure
+
+networks:
+  dev-network:
+    driver: bridge

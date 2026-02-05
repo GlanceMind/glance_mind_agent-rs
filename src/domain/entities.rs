@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::str::FromStr;
+use tracing::warn;
 
 // ============================================================
 // Content Entity
@@ -52,6 +54,7 @@ pub struct Engagement {
 
 impl Content {
     /// Create a new Content instance
+    #[must_use]
     pub fn new(platform: impl Into<String>, content_id: impl Into<String>) -> Self {
         Self {
             platform: platform.into(),
@@ -161,6 +164,7 @@ pub struct Comment {
 
 impl Comment {
     /// Create a new Comment instance
+    #[must_use]
     pub fn new(
         platform: impl Into<String>,
         comment_id: impl Into<String>,
@@ -286,6 +290,7 @@ pub struct ReplySuggestion {
 
 impl ReplySuggestion {
     /// Create a new ReplySuggestion
+    #[must_use]
     pub fn new(comment_id: impl Into<String>) -> Self {
         Self {
             comment_id: comment_id.into(),
@@ -441,6 +446,28 @@ fn default_ai_min_interval_ms() -> u64 {
     50
 }
 
+/// Parse an environment variable with warning on invalid values
+///
+/// If the environment variable is set but cannot be parsed, logs a warning
+/// and returns the default value.
+fn parse_env_with_warning<T: FromStr>(env_var: &str, default: T) -> T {
+    match std::env::var(env_var) {
+        Ok(value) => match value.parse() {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                warn!(
+                    env_var = %env_var,
+                    value = %value,
+                    default = ?std::any::type_name::<T>(),
+                    "Invalid environment variable value, using default"
+                );
+                default
+            }
+        },
+        Err(_) => default,
+    }
+}
+
 impl Default for ConcurrencyConfig {
     fn default() -> Self {
         Self {
@@ -470,28 +497,31 @@ impl ConcurrencyConfig {
     }
 
     /// Create from environment variables
+    ///
+    /// If an environment variable is set but cannot be parsed, a warning is logged
+    /// and the default value is used.
     pub fn from_env() -> Self {
         Self {
-            max_concurrent_tasks: std::env::var("AGENT_MAX_CONCURRENT_TASKS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or_else(default_max_concurrent_tasks),
-            max_concurrent_videos: std::env::var("AGENT_MAX_CONCURRENT_VIDEOS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or_else(default_max_concurrent_videos),
-            ai_concurrency: std::env::var("AGENT_AI_CONCURRENCY")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or_else(default_ai_concurrency),
-            tikhub_concurrency: std::env::var("AGENT_TIKHUB_CONCURRENCY")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or_else(default_tikhub_concurrency),
-            ai_min_interval_ms: std::env::var("AGENT_AI_MIN_INTERVAL_MS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or_else(default_ai_min_interval_ms),
+            max_concurrent_tasks: parse_env_with_warning(
+                "AGENT_MAX_CONCURRENT_TASKS",
+                default_max_concurrent_tasks(),
+            ),
+            max_concurrent_videos: parse_env_with_warning(
+                "AGENT_MAX_CONCURRENT_VIDEOS",
+                default_max_concurrent_videos(),
+            ),
+            ai_concurrency: parse_env_with_warning(
+                "AGENT_AI_CONCURRENCY",
+                default_ai_concurrency(),
+            ),
+            tikhub_concurrency: parse_env_with_warning(
+                "AGENT_TIKHUB_CONCURRENCY",
+                default_tikhub_concurrency(),
+            ),
+            ai_min_interval_ms: parse_env_with_warning(
+                "AGENT_AI_MIN_INTERVAL_MS",
+                default_ai_min_interval_ms(),
+            ),
         }
     }
 
@@ -579,6 +609,7 @@ pub struct TaskConfig {
 
 impl TaskConfig {
     /// Create a new TaskConfig
+    #[must_use]
     pub fn new(campaign_id: i32, platform: impl Into<String>) -> Self {
         Self {
             campaign_id,
@@ -753,6 +784,7 @@ pub struct SearchOptions {
 }
 
 impl SearchOptions {
+    #[must_use]
     pub fn new(query: impl Into<String>) -> Self {
         Self {
             query: query.into(),
@@ -783,6 +815,19 @@ impl SearchOptions {
     pub fn with_offset(mut self, offset: u32) -> Self {
         self.offset = offset;
         self
+    }
+
+    /// Create a copy with a different query (efficient for modifying just the query)
+    pub fn with_query(&self, query: impl Into<String>) -> Self {
+        Self {
+            query: query.into(),
+            platform: self.platform.clone(),
+            region: self.region.clone(),
+            count: self.count,
+            offset: self.offset,
+            sort_type: self.sort_type,
+            publish_time: self.publish_time,
+        }
     }
 }
 

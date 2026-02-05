@@ -5,8 +5,26 @@
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, SemaphorePermit};
-use tracing::{debug, trace};
+use thiserror::Error;
+use tokio::sync::{AcquireError, Mutex, OwnedSemaphorePermit, Semaphore, SemaphorePermit};
+use tracing::{debug, error, trace};
+
+/// Error returned when rate limiter operations fail
+#[derive(Error, Debug)]
+pub enum RateLimitError {
+    /// Semaphore was closed (should not happen in normal operation)
+    #[error("Rate limiter semaphore closed unexpectedly")]
+    SemaphoreClosed,
+}
+
+/// Result type for rate limiter operations
+pub type RateLimitResult<T> = std::result::Result<T, RateLimitError>;
+
+impl From<AcquireError> for RateLimitError {
+    fn from(_: AcquireError) -> Self {
+        RateLimitError::SemaphoreClosed
+    }
+}
 
 /// Rate limiter for API calls with both concurrency and interval control
 ///
@@ -75,9 +93,22 @@ impl RateLimiter {
     /// This method will:
     /// 1. Wait for a semaphore permit (if at concurrency limit)
     /// 2. Enforce minimum interval between calls (if configured)
+    ///
+    /// # Panics
+    ///
+    /// Panics if the semaphore is closed (should not happen in normal operation).
+    /// Use `try_acquire_safe` for a non-panicking version.
     pub async fn acquire(&self) -> SemaphorePermit<'_> {
+        self.acquire_safe().await.unwrap_or_else(|e| {
+            error!(name = %self.name, error = %e, "Rate limiter semaphore closed unexpectedly");
+            panic!("Rate limiter semaphore closed: {}", e)
+        })
+    }
+
+    /// Acquire a permit safely, returning a Result instead of panicking
+    pub async fn acquire_safe(&self) -> RateLimitResult<SemaphorePermit<'_>> {
         // First, acquire the semaphore permit
-        let permit = self.semaphore.acquire().await.expect("Semaphore closed");
+        let permit = self.semaphore.acquire().await?;
 
         // Then, enforce minimum interval
         if self.min_interval_ms > 0 {
@@ -103,7 +134,7 @@ impl RateLimiter {
             "Rate limiter: permit acquired"
         );
 
-        permit
+        Ok(permit)
     }
 
     /// Try to acquire a permit without waiting
@@ -114,13 +145,20 @@ impl RateLimiter {
     }
 
     /// Acquire an owned permit (can be moved across tasks)
+    ///
+    /// # Panics
+    ///
+    /// Panics if the semaphore is closed. Use `acquire_owned_safe` for a non-panicking version.
     pub async fn acquire_owned(self: &Arc<Self>) -> OwnedSemaphorePermit {
-        let permit = self
-            .semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("Semaphore closed");
+        self.acquire_owned_safe().await.unwrap_or_else(|e| {
+            error!(name = %self.name, error = %e, "Rate limiter semaphore closed unexpectedly");
+            panic!("Rate limiter semaphore closed: {}", e)
+        })
+    }
+
+    /// Acquire an owned permit safely, returning a Result instead of panicking
+    pub async fn acquire_owned_safe(self: &Arc<Self>) -> RateLimitResult<OwnedSemaphorePermit> {
+        let permit = self.semaphore.clone().acquire_owned().await?;
 
         // Enforce minimum interval
         if self.min_interval_ms > 0 {
@@ -135,7 +173,7 @@ impl RateLimiter {
             *last = Instant::now();
         }
 
-        permit
+        Ok(permit)
     }
 }
 

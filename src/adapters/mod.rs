@@ -5,8 +5,6 @@
 //! - `InstagramAdapter`: TikHub API for Instagram content and comments
 //! - `RedditAdapter`: TikHub API for Reddit content and comments
 //! - `TwitterAdapter`: TikHub API for Twitter content and comments
-//! - `MultiPlatformContentGateway`: Routes to platform-specific adapters
-//! - `MultiPlatformCommentGateway`: Routes to platform-specific adapters
 //! - `OpenAiAdapter`: OpenAI/DeepSeek for AI analysis
 //! - `PostgresAdapter`: PostgreSQL for data persistence
 //! - `FixtureMockAdapter`: Test fixtures for mocking
@@ -16,7 +14,6 @@
 
 pub mod instagram;
 pub mod mock;
-pub mod multi_platform;
 pub mod openai;
 pub mod postgres;
 pub mod reddit;
@@ -26,7 +23,6 @@ pub mod twitter;
 
 pub use instagram::InstagramAdapter;
 pub use mock::FixtureMockAdapter;
-pub use multi_platform::{MultiPlatformCommentGateway, MultiPlatformContentGateway};
 pub use openai::OpenAiAdapter;
 pub use postgres::PostgresAdapter;
 pub use reddit::RedditAdapter;

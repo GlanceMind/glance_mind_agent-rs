@@ -12,8 +12,8 @@ use crate::ports::{
     CommentGateway, ContentGateway,
 };
 use crate::tikhub::{
-    InstagramComment, InstagramCommentParams, InstagramPost, InstagramV1Edge, InstagramV1Node,
-    TikHubClient, TikHubError, UserPostsParams,
+    HashtagSearchParams, InstagramComment, InstagramCommentParams, InstagramPost, InstagramV1Edge,
+    InstagramV1Node, TikHubClient, TikHubError, UserPostsParams,
 };
 
 /// Instagram adapter implementing ContentGateway and CommentGateway
@@ -78,18 +78,35 @@ impl InstagramAdapter {
 
     /// Convert Instagram post to domain Content
     fn convert_content(post: &InstagramPost) -> Content {
-        let post_id = post.post_id().unwrap_or("").to_string();
+        let media_id = post.post_id().unwrap_or("").to_string();
+        let shortcode = post.code.clone().unwrap_or_default();
+
+        // IMPORTANT: Use shortcode as content_id, NOT media_id!
+        // TikHub Instagram V2 fetch_post_comments API requires shortcode (e.g., "CxYZaBcDeF")
+        // not the numeric media_id (e.g., "3824454208267080788").
+        // The shortcode is what appears in Instagram URLs: instagram.com/p/{shortcode}/
+        let content_id = if !shortcode.is_empty() {
+            shortcode.clone()
+        } else {
+            // Fallback to media_id if shortcode is missing (shouldn't happen normally)
+            tracing::warn!(
+                media_id = %media_id,
+                "Instagram post missing shortcode (code field), falling back to media_id (comments may fail)"
+            );
+            media_id.clone()
+        };
 
         Content {
             platform: "instagram".to_string(),
-            content_id: post_id,
+            content_id,
             author: post.author_username().unwrap_or("").to_string(),
             author_name: post.author_name().map(|s| s.to_string()),
             description: post.caption_text_str().to_string(),
-            url: post
-                .code
-                .as_ref()
-                .map(|c| format!("https://www.instagram.com/p/{}/", c)),
+            url: if !shortcode.is_empty() {
+                Some(format!("https://www.instagram.com/p/{}/", shortcode))
+            } else {
+                None
+            },
             engagement: Engagement {
                 likes: post.likes(),
                 comments: post.comments(),
@@ -134,7 +151,7 @@ impl InstagramAdapter {
 
     /// Convert Instagram V1 node to domain Content
     fn convert_v1_node(node: &InstagramV1Node) -> Content {
-        let post_id = node.id.clone().unwrap_or_default();
+        let media_id = node.id.clone().unwrap_or_default();
         let shortcode = node.shortcode.clone().unwrap_or_default();
 
         // Extract caption text from nested structure
@@ -158,9 +175,24 @@ impl InstagramAdapter {
         let owner = node.owner.as_ref();
         let author = owner.and_then(|o| o.username.clone()).unwrap_or_default();
 
+        // IMPORTANT: Use shortcode as content_id, NOT media_id!
+        // TikHub Instagram V2 fetch_post_comments API requires shortcode (e.g., "CxYZaBcDeF")
+        // not the numeric media_id (e.g., "3824454208267080788").
+        // The shortcode is what appears in Instagram URLs: instagram.com/p/{shortcode}/
+        let content_id = if !shortcode.is_empty() {
+            shortcode.clone()
+        } else {
+            // Fallback to media_id if shortcode is missing (shouldn't happen normally)
+            tracing::warn!(
+                media_id = %media_id,
+                "Instagram post missing shortcode, falling back to media_id (comments may fail)"
+            );
+            media_id.clone()
+        };
+
         Content {
             platform: "instagram".to_string(),
-            content_id: post_id,
+            content_id,
             author,
             author_name: None,
             description: caption,
@@ -202,30 +234,31 @@ impl InstagramAdapter {
 #[async_trait]
 impl ContentGateway for InstagramAdapter {
     async fn search(&self, options: &SearchOptions) -> GatewayResult<Vec<Content>> {
-        // Use V1 API (more stable) with hashtag parameter
+        // Use V2 API with hashtag parameter - supports feed_type (top/recent)
         // Remove # prefix if present
         let query = options.query.trim_start_matches('#');
 
-        tracing::info!(hashtag = %query, "Instagram: Searching via V1 API");
+        // Default to "top" feed type to get posts with more engagement (comments)
+        let params = HashtagSearchParams::new(query).with_feed_type("top");
+
+        tracing::info!(
+            hashtag = %query,
+            feed_type = %params.feed_type,
+            "Instagram: Searching via V2 API"
+        );
 
         let response = self
             .client
-            .search_hashtag_posts_v1_with_retry(query, None)
+            .search_hashtag_posts_with_retry(&params)
             .await
             .map_err(Self::convert_error)?;
 
-        let edges = response
-            .data
-            .as_ref()
-            .and_then(|d| d.data.as_ref())
-            .and_then(|d| d.hashtag.as_ref())
-            .and_then(|h| h.edge_hashtag_to_media.as_ref())
-            .and_then(|e| e.edges.as_ref());
-
-        match edges {
-            Some(edges) => Ok(Self::extract_v1_contents(edges, options.count as usize)),
-            None => Ok(vec![]),
-        }
+        let posts: Vec<&InstagramPost> = Self::extract_posts_from_response(&response.data);
+        Ok(posts
+            .iter()
+            .take(options.count as usize)
+            .map(|p| Self::convert_content(p))
+            .collect())
     }
 
     async fn fetch_by_keyword(
@@ -235,30 +268,31 @@ impl ContentGateway for InstagramAdapter {
     ) -> GatewayResult<Vec<Content>> {
         match keyword {
             KeywordType::Search(query) | KeywordType::Hashtag(query) => {
-                // Use V1 API (more stable) with hashtag parameter
+                // Use V2 API with hashtag parameter - supports feed_type (top/recent)
                 // Remove # prefix if present
                 let query = query.trim_start_matches('#');
 
-                tracing::info!(hashtag = %query, "Instagram: Searching via V1 API");
+                // Default to "top" feed type to get posts with more engagement (comments)
+                let params = HashtagSearchParams::new(query).with_feed_type("top");
+
+                tracing::info!(
+                    hashtag = %query,
+                    feed_type = %params.feed_type,
+                    "Instagram: Searching via V2 API"
+                );
 
                 let response = self
                     .client
-                    .search_hashtag_posts_v1_with_retry(query, None)
+                    .search_hashtag_posts_with_retry(&params)
                     .await
                     .map_err(Self::convert_error)?;
 
-                let edges = response
-                    .data
-                    .as_ref()
-                    .and_then(|d| d.data.as_ref())
-                    .and_then(|d| d.hashtag.as_ref())
-                    .and_then(|h| h.edge_hashtag_to_media.as_ref())
-                    .and_then(|e| e.edges.as_ref());
-
-                match edges {
-                    Some(edges) => Ok(Self::extract_v1_contents(edges, options.count as usize)),
-                    None => Ok(vec![]),
-                }
+                let posts: Vec<&InstagramPost> = Self::extract_posts_from_response(&response.data);
+                Ok(posts
+                    .iter()
+                    .take(options.count as usize)
+                    .map(|p| Self::convert_content(p))
+                    .collect())
             }
             KeywordType::UserId(username) => self.fetch_user_content(username, options.count).await,
             KeywordType::ContentId(content_id) => {
@@ -326,7 +360,21 @@ impl CommentGateway for InstagramAdapter {
         content_id: &str,
         options: &FetchCommentsOptions,
     ) -> GatewayResult<FetchCommentsResult> {
-        let mut params = InstagramCommentParams::new(content_id).with_sort_by("recent");
+        // TikHub Instagram V2 API requires full URL format for fetch_post_comments
+        // Convert shortcode to full URL: https://www.instagram.com/p/{shortcode}/
+        let code_or_url = if content_id.starts_with("http") {
+            content_id.to_string()
+        } else {
+            format!("https://www.instagram.com/p/{}/", content_id)
+        };
+
+        tracing::debug!(
+            shortcode = %content_id,
+            url = %code_or_url,
+            "Instagram: Fetching comments with full URL"
+        );
+
+        let mut params = InstagramCommentParams::new(&code_or_url).with_sort_by("recent");
 
         if let Some(ref cursor) = options.cursor {
             params = params.with_pagination_token(cursor);
@@ -413,8 +461,15 @@ impl CommentGateway for InstagramAdapter {
         comment_id: &str,
         options: &FetchCommentsOptions,
     ) -> GatewayResult<Vec<Comment>> {
+        // TikHub Instagram V2 API requires full URL format
+        let code_or_url = if content_id.starts_with("http") {
+            content_id.to_string()
+        } else {
+            format!("https://www.instagram.com/p/{}/", content_id)
+        };
+
         // Use the comment replies endpoint
-        let mut params = crate::tikhub::CommentRepliesParams::new(content_id, comment_id);
+        let mut params = crate::tikhub::CommentRepliesParams::new(&code_or_url, comment_id);
 
         if let Some(ref cursor) = options.cursor {
             params = params.with_pagination_token(cursor);
@@ -480,7 +535,9 @@ mod tests {
 
         let content = InstagramAdapter::convert_content(&post);
         assert_eq!(content.platform, "instagram");
-        assert_eq!(content.content_id, "12345");
+        // content_id should be shortcode (code), not media_id (id)
+        // This is required for TikHub comment API which expects shortcode
+        assert_eq!(content.content_id, "ABC123");
         assert_eq!(content.author, "testuser");
         assert_eq!(content.engagement.likes, 100);
         assert_eq!(content.engagement.views, 1000);

@@ -14,9 +14,9 @@ use tracing_subscriber::EnvFilter;
 
 use glance_mind_agent_rs::{
     init_global_registry, AiAnalyzer, CommentGateway, ContentGateway, InstagramAdapter,
-    InstagramStrategy, MultiPlatformWorker, OpenAiAdapter, PlatformRegistry, PostgresAdapter,
-    RedditAdapter, RedditStrategy, RedisTaskConsumer, TikHubAdapter, TikTokStrategy,
-    TwitterAdapter, TwitterStrategy, WorkerConfig, WorkflowOrchestrator,
+    InstagramStrategy, MultiPlatformWorker, OpenAiAdapter, PlatformLookup, PlatformRegistry,
+    PostgresAdapter, RedditAdapter, RedditStrategy, RedisTaskConsumer, TikHubAdapter,
+    TikTokStrategy, TwitterAdapter, TwitterStrategy, WorkerConfig, WorkflowOrchestrator,
 };
 
 #[derive(Parser)]
@@ -342,7 +342,7 @@ async fn run_health_check(redis_url: &str, database_url: &str) -> anyhow::Result
 /// Load platform registry from database
 ///
 /// This queries the gm_platforms table and initializes the platform mappings.
-/// Falls back to defaults if database query fails.
+/// Returns an error if database loading fails - platform config must come from database.
 async fn load_platform_registry(database_url: &str) -> anyhow::Result<PlatformRegistry> {
     use diesel::prelude::*;
     use glance_mind_agent_rs::db::establish_pool;
@@ -357,51 +357,43 @@ async fn load_platform_registry(database_url: &str) -> anyhow::Result<PlatformRe
         }
     }
 
-    // Try to load from database
-    let pool = match establish_pool(database_url, Some(2)) {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::warn!("Failed to connect to database for platform registry: {}", e);
-            tracing::warn!("Using default platform mappings");
-            return Ok(PlatformRegistry::with_defaults());
-        }
-    };
+    // Connect to database - fail if connection fails
+    let pool = establish_pool(database_url, Some(2))
+        .map_err(|e| anyhow::anyhow!("Failed to connect to database for platform registry: {}", e))?;
 
-    let mut conn = match pool.get() {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!("Failed to get database connection: {}", e);
-            tracing::warn!("Using default platform mappings");
-            return Ok(PlatformRegistry::with_defaults());
-        }
-    };
+    let mut conn = pool
+        .get()
+        .map_err(|e| anyhow::anyhow!("Failed to get database connection: {}", e))?;
 
-    // Query platforms
-    let records: Result<Vec<(i32, String, String, bool)>, _> = gm_platforms::table
+    // Query platforms - fail if query fails
+    let records: Vec<(i32, String, String, bool)> = gm_platforms::table
         .select((
             gm_platforms::id,
             gm_platforms::name,
             gm_platforms::display_name,
             gm_platforms::is_active,
         ))
-        .load(&mut conn);
+        .load(&mut conn)
+        .map_err(|e| anyhow::anyhow!("Failed to query platforms from database: {}", e))?;
 
-    match records {
-        Ok(platforms) => {
-            if platforms.is_empty() {
-                tracing::warn!("No platforms found in database, using defaults");
-                return Ok(PlatformRegistry::with_defaults());
-            }
-
-            let count = platforms.len();
-            let registry = PlatformRegistry::from_records(platforms);
-            info!("Loaded {} platforms from database", count);
-            Ok(registry)
-        }
-        Err(e) => {
-            tracing::warn!("Failed to query platforms from database: {}", e);
-            tracing::warn!("Using default platform mappings");
-            Ok(PlatformRegistry::with_defaults())
-        }
+    // Fail if no platforms found
+    if records.is_empty() {
+        return Err(anyhow::anyhow!(
+            "No platforms found in gm_platforms table. Please ensure the database is properly initialized."
+        ));
     }
+
+    let count = records.len();
+    let registry = PlatformRegistry::from_records(records);
+
+    // Log loaded platforms for debugging
+    info!("Loaded {} platforms from database:", count);
+    for platform in registry.all_platforms() {
+        info!(
+            "  - {} (id={}, active={})",
+            platform.name, platform.id, platform.is_active
+        );
+    }
+
+    Ok(registry)
 }

@@ -54,7 +54,10 @@ pub use domain::{
 };
 
 // Concurrency re-exports
-pub use concurrency::{AiRateLimiter, GlobalRateLimiters, RateLimiter, TikHubRateLimiter};
+pub use concurrency::{
+    AiRateLimiter, GlobalRateLimiters, RateLimitError, RateLimitResult, RateLimiter,
+    TikHubRateLimiter,
+};
 pub use domain::errors::{
     AiError, AiResult, DbError, DbResult, GatewayError, GatewayResult, QueueError, QueueResult,
     WorkflowError, WorkflowResult,
@@ -80,7 +83,6 @@ pub use adapters::redis::TaskResult as RedisTaskResult;
 pub use adapters::{CrawlerTaskBuilder, CrawlerTaskExt, RedisTaskConsumer};
 pub use adapters::{FixtureMockAdapter, OpenAiAdapter, PostgresAdapter, TikHubAdapter};
 pub use adapters::{InstagramAdapter, RedditAdapter, TwitterAdapter};
-pub use adapters::{MultiPlatformCommentGateway, MultiPlatformContentGateway};
 
 // Protocol re-exports (task types from glance_mind_protocol)
 pub use protocol_gen::{

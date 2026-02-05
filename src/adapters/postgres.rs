@@ -92,7 +92,26 @@ impl PostgresAdapter {
         Ok(Self { pool })
     }
 
-    /// Get a connection from the pool
+    /// Get a connection from the pool (async-safe using spawn_blocking)
+    ///
+    /// This wraps the blocking r2d2 pool.get() in spawn_blocking to avoid
+    /// blocking the Tokio runtime under high concurrency.
+    async fn conn_async(
+        &self,
+    ) -> DbResult<diesel::r2d2::PooledConnection<diesel::r2d2::ConnectionManager<PgConnection>>>
+    {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || {
+            pool.get().map_err(|e| DbError::Connection(e.to_string()))
+        })
+        .await
+        .map_err(|e| DbError::Connection(format!("spawn_blocking failed: {}", e)))?
+    }
+
+    /// Get a connection from the pool (sync version for non-async contexts)
+    ///
+    /// Note: Prefer conn_async() in async functions to avoid blocking.
+    #[allow(dead_code)]
     fn conn(
         &self,
     ) -> DbResult<diesel::r2d2::PooledConnection<diesel::r2d2::ConnectionManager<PgConnection>>>
@@ -109,76 +128,21 @@ impl PostgresAdapter {
 
         global_registry().get_id(platform).unwrap_or(0)
     }
-}
 
-// ============================================================
-// ContentRepository Implementation
-// Using gm_agent_videos and gm_agent_comments tables
-// ============================================================
+    // ============================================================
+    // Platform-specific content save methods
+    // ============================================================
 
-#[async_trait]
-impl ContentRepository for PostgresAdapter {
-    async fn content_exists(&self, _platform: &str, content_id: &str) -> DbResult<bool> {
-        use schema::gm_agent_videos::dsl;
-
-        let mut conn = self.conn()?;
-
-        let count: i64 = dsl::gm_agent_videos
-            .filter(dsl::video_id.eq(content_id))
-            .count()
-            .get_result(&mut conn)
-            .map_err(DbError::from)?;
-
-        Ok(count > 0)
-    }
-
-    async fn get_content(
-        &self,
-        _platform: &str,
-        content_id: &str,
-    ) -> DbResult<Option<StoredContent>> {
-        use schema::gm_agent_videos::dsl;
-
-        let mut conn = self.conn()?;
-
-        let result: Option<models::AgentVideo> = dsl::gm_agent_videos
-            .filter(dsl::video_id.eq(content_id))
-            .first(&mut conn)
-            .optional()
-            .map_err(DbError::from)?;
-
-        Ok(result.map(|v| self.convert_video_to_content(&v)))
-    }
-
-    async fn get_content_by_id(&self, id: i32) -> DbResult<Option<StoredContent>> {
-        use schema::gm_agent_videos::dsl;
-
-        let mut conn = self.conn()?;
-
-        let result: Option<models::AgentVideo> = dsl::gm_agent_videos
-            .find(id)
-            .first(&mut conn)
-            .optional()
-            .map_err(DbError::from)?;
-
-        Ok(result.map(|v| self.convert_video_to_content(&v)))
-    }
-
-    async fn save_content(
+    /// Save TikTok video to gm_agent_videos table
+    async fn save_tiktok_video(
         &self,
         content: &Content,
         campaign_id: Option<i32>,
         task_id: Option<i32>,
     ) -> DbResult<ContentSaveResult> {
-        let mut conn = self.conn()?;
-
-        // Use the provided task_id directly (passed from orchestrator)
+        let mut conn = self.conn_async().await?;
         let task_id_value = task_id.unwrap_or(0);
 
-        // Use ON CONFLICT to atomically upsert, matching Python agent's behavior:
-        // - If (task_id, video_id) exists, update the record
-        // - If not exists, insert new record
-        // - Use (xmax = 0) to determine if this was a new insert
         let result: ContentUpsertResult = diesel::sql_query(
             r#"
             INSERT INTO gm_agent_videos (
@@ -217,15 +181,546 @@ impl ContentRepository for PostgresAdapter {
         .map_err(DbError::from)?;
 
         if result.inserted {
-            debug!(content_id = %content.content_id, db_id = result.id, "Saved new video");
+            debug!(content_id = %content.content_id, db_id = result.id, "Saved new TikTok video");
         } else {
-            debug!(content_id = %content.content_id, db_id = result.id, "Updated existing video");
+            debug!(content_id = %content.content_id, db_id = result.id, "Updated existing TikTok video");
         }
 
         Ok(ContentSaveResult {
             id: result.id,
             is_new: result.inserted,
         })
+    }
+
+    /// Save Instagram post to gm_agent_instagram_posts table
+    async fn save_instagram_post(
+        &self,
+        content: &Content,
+        campaign_id: Option<i32>,
+        task_id: Option<i32>,
+    ) -> DbResult<ContentSaveResult> {
+        let mut conn = self.conn_async().await?;
+        let task_id_value = task_id.unwrap_or(0);
+
+        // Extract Instagram-specific fields from raw_data if available
+        let raw = content.raw_data.as_ref();
+        let media_type = raw
+            .and_then(|r| r.get("media_type"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(1) as i32;
+        let product_type = raw
+            .and_then(|r| r.get("product_type"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("feed");
+        let instagram_id = raw
+            .and_then(|r| r.get("id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let thumbnail_url = raw
+            .and_then(|r| r.get("thumbnail_url"))
+            .and_then(|v| v.as_str());
+
+        let result: ContentUpsertResult = diesel::sql_query(
+            r#"
+            INSERT INTO gm_agent_instagram_posts (
+                task_id, campaign_id, code, instagram_id, media_type, product_type,
+                caption_text, owner_username, owner_id, owner_full_name,
+                media_url, thumbnail_url, like_count, comment_count, play_count,
+                taken_at_ts
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            ON CONFLICT (code) DO UPDATE SET
+                task_id = EXCLUDED.task_id,
+                campaign_id = EXCLUDED.campaign_id,
+                caption_text = EXCLUDED.caption_text,
+                owner_username = EXCLUDED.owner_username,
+                owner_full_name = EXCLUDED.owner_full_name,
+                media_url = EXCLUDED.media_url,
+                thumbnail_url = EXCLUDED.thumbnail_url,
+                like_count = EXCLUDED.like_count,
+                comment_count = EXCLUDED.comment_count,
+                play_count = EXCLUDED.play_count,
+                taken_at_ts = EXCLUDED.taken_at_ts,
+                updated_at = NOW()
+            RETURNING id, (xmax = 0) AS inserted
+            "#,
+        )
+        .bind::<Integer, _>(task_id_value)
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(campaign_id)
+        .bind::<Text, _>(&content.content_id) // code (shortcode)
+        .bind::<diesel::sql_types::Nullable<Text>, _>(if instagram_id.is_empty() { None } else { Some(instagram_id) })
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(media_type))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Some(product_type))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Some(&content.description)) // caption_text
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Some(&content.author)) // owner_username
+        .bind::<diesel::sql_types::Nullable<Text>, _>(content.raw_data.as_ref().and_then(|r| r.get("owner_id")).and_then(|v| v.as_str())) // owner_id
+        .bind::<diesel::sql_types::Nullable<Text>, _>(content.author_name.as_ref()) // owner_full_name
+        .bind::<diesel::sql_types::Nullable<Text>, _>(content.url.as_ref()) // media_url
+        .bind::<diesel::sql_types::Nullable<Text>, _>(thumbnail_url)
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(content.engagement.likes as i32))
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(content.engagement.comments as i32))
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(content.engagement.views as i32))
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::BigInt>, _>(content.created_at)
+        .get_result(&mut conn)
+        .map_err(DbError::from)?;
+
+        if result.inserted {
+            debug!(content_id = %content.content_id, db_id = result.id, "Saved new Instagram post");
+        } else {
+            debug!(content_id = %content.content_id, db_id = result.id, "Updated existing Instagram post");
+        }
+
+        Ok(ContentSaveResult {
+            id: result.id,
+            is_new: result.inserted,
+        })
+    }
+
+    /// Save Reddit post to gm_agent_reddit_posts table
+    async fn save_reddit_post(
+        &self,
+        content: &Content,
+        campaign_id: Option<i32>,
+        task_id: Option<i32>,
+    ) -> DbResult<ContentSaveResult> {
+        let mut conn = self.conn_async().await?;
+        let task_id_value = task_id.unwrap_or(0);
+
+        // Extract Reddit-specific fields from raw_data
+        let raw = content.raw_data.as_ref();
+        let subreddit = raw
+            .and_then(|r| r.get("subreddit"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let title = raw
+            .and_then(|r| r.get("title"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let score = raw
+            .and_then(|r| r.get("score"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as i32;
+        let num_comments = raw
+            .and_then(|r| r.get("num_comments"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(content.engagement.comments) as i32;
+
+        let result: ContentUpsertResult = diesel::sql_query(
+            r#"
+            INSERT INTO gm_agent_reddit_posts (
+                task_id, campaign_id, post_id, subreddit, title, selftext,
+                author, author_fullname, score, upvote_ratio, num_comments,
+                permalink, url, created_utc
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            ON CONFLICT (task_id, post_id) DO UPDATE SET
+                title = EXCLUDED.title,
+                selftext = EXCLUDED.selftext,
+                score = EXCLUDED.score,
+                num_comments = EXCLUDED.num_comments,
+                url = EXCLUDED.url,
+                updated_at = NOW()
+            RETURNING id, (xmax = 0) AS inserted
+            "#,
+        )
+        .bind::<Integer, _>(task_id_value)
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(campaign_id)
+        .bind::<Text, _>(&content.content_id) // post_id
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Some(subreddit))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Some(title))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Some(&content.description)) // selftext
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Some(&content.author))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(content.author_name.as_ref()) // author_fullname
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(score))
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Float>, _>(raw.and_then(|r| r.get("upvote_ratio")).and_then(|v| v.as_f64()).map(|f| f as f32))
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(num_comments))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(raw.and_then(|r| r.get("permalink")).and_then(|v| v.as_str()))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(content.url.as_ref())
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::BigInt>, _>(content.created_at)
+        .get_result(&mut conn)
+        .map_err(DbError::from)?;
+
+        if result.inserted {
+            debug!(content_id = %content.content_id, db_id = result.id, "Saved new Reddit post");
+        } else {
+            debug!(content_id = %content.content_id, db_id = result.id, "Updated existing Reddit post");
+        }
+
+        Ok(ContentSaveResult {
+            id: result.id,
+            is_new: result.inserted,
+        })
+    }
+
+    /// Save Twitter tweet to gm_agent_twitter_tweets table
+    async fn save_twitter_tweet(
+        &self,
+        content: &Content,
+        campaign_id: Option<i32>,
+        task_id: Option<i32>,
+    ) -> DbResult<ContentSaveResult> {
+        let mut conn = self.conn_async().await?;
+        let task_id_value = task_id.unwrap_or(0);
+
+        // Extract Twitter-specific fields from raw_data
+        let raw = content.raw_data.as_ref();
+        let retweet_count = raw
+            .and_then(|r| r.get("retweet_count"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(content.engagement.shares) as i32;
+        let reply_count = raw
+            .and_then(|r| r.get("reply_count"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(content.engagement.comments) as i32;
+        let quote_count = raw
+            .and_then(|r| r.get("quote_count"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as i32;
+        let view_count = raw
+            .and_then(|r| r.get("view_count"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(content.engagement.views) as i32;
+        let screen_name = raw
+            .and_then(|r| r.get("screen_name"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(&content.author);
+
+        // Constraint: UNIQUE (twitter_tweet_id, task_id)
+        let result: ContentUpsertResult = diesel::sql_query(
+            r#"
+            INSERT INTO gm_agent_twitter_tweets (
+                task_id, campaign_id, twitter_tweet_id, full_text,
+                user_id, screen_name, user_name,
+                favorite_count, retweet_count, reply_count, quote_count, view_count,
+                created_at_ts
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            ON CONFLICT (twitter_tweet_id, task_id) DO UPDATE SET
+                campaign_id = EXCLUDED.campaign_id,
+                full_text = EXCLUDED.full_text,
+                favorite_count = EXCLUDED.favorite_count,
+                retweet_count = EXCLUDED.retweet_count,
+                reply_count = EXCLUDED.reply_count,
+                quote_count = EXCLUDED.quote_count,
+                view_count = EXCLUDED.view_count,
+                updated_at = NOW()
+            RETURNING id, (xmax = 0) AS inserted
+            "#,
+        )
+        .bind::<Integer, _>(task_id_value)
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(campaign_id)
+        .bind::<Text, _>(&content.content_id) // twitter_tweet_id
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Some(&content.description)) // full_text
+        .bind::<diesel::sql_types::Nullable<Text>, _>(raw.and_then(|r| r.get("user_id")).and_then(|v| v.as_str()))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Some(screen_name)) // screen_name
+        .bind::<diesel::sql_types::Nullable<Text>, _>(content.author_name.as_ref()) // user_name
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(content.engagement.likes as i32))
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(retweet_count))
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(reply_count))
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(quote_count))
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(view_count))
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::BigInt>, _>(content.created_at)
+        .get_result(&mut conn)
+        .map_err(DbError::from)?;
+
+        if result.inserted {
+            debug!(content_id = %content.content_id, db_id = result.id, "Saved new Twitter tweet");
+        } else {
+            debug!(content_id = %content.content_id, db_id = result.id, "Updated existing Twitter tweet");
+        }
+
+        Ok(ContentSaveResult {
+            id: result.id,
+            is_new: result.inserted,
+        })
+    }
+
+    // ============================================================
+    // Platform-specific comment save methods
+    // ============================================================
+
+    /// Save TikTok comment to gm_agent_comments table
+    async fn save_tiktok_comment(
+        &self,
+        comment: &Comment,
+        content_db_id: i32,
+        campaign_id: i32,
+        suggestion: &ReplySuggestion,
+    ) -> DbResult<i32> {
+        let mut conn = self.conn_async().await?;
+
+        let create_time = comment
+            .created_at
+            .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0).map(|dt| dt.naive_utc()));
+
+        let id: i32 = diesel::sql_query(
+            r#"
+            INSERT INTO gm_agent_comments (
+                campaign_id, comment_id, video_db_id, user_nickname, user_unique_id,
+                content, create_time, reason, suggested_reply,
+                suggested_dm, suggested_reply_post, status
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0)
+            ON CONFLICT (campaign_id, comment_id) DO UPDATE SET
+                video_db_id = EXCLUDED.video_db_id,
+                reason = EXCLUDED.reason,
+                suggested_reply = EXCLUDED.suggested_reply,
+                suggested_dm = EXCLUDED.suggested_dm,
+                suggested_reply_post = EXCLUDED.suggested_reply_post,
+                status = 0,
+                updated_at = NOW()
+            RETURNING id
+            "#,
+        )
+        .bind::<Integer, _>(campaign_id)
+        .bind::<Text, _>(&comment.comment_id)
+        .bind::<Integer, _>(content_db_id)
+        .bind::<diesel::sql_types::Nullable<Text>, _>(comment.author_name.as_ref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Some(&comment.author))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Some(&comment.text))
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Timestamp>, _>(create_time)
+        .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.reason.as_ref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.reply_text.as_ref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.dm_text.as_ref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.post_reply_text.as_ref())
+        .get_result::<CommentInsertResult>(&mut conn)
+        .map_err(DbError::from)?
+        .id;
+
+        debug!(comment_id = %comment.comment_id, db_id = id, "Upserted TikTok comment");
+        Ok(id)
+    }
+
+    /// Save Instagram comment to gm_agent_instagram_comments table
+    async fn save_instagram_comment(
+        &self,
+        comment: &Comment,
+        content_db_id: i32,
+        campaign_id: i32,
+        suggestion: &ReplySuggestion,
+    ) -> DbResult<i32> {
+        let mut conn = self.conn_async().await?;
+
+        let created_at_ts = comment.created_at;
+
+        // Constraint: UNIQUE (instagram_comment_id, post_db_id)
+        let id: i32 = diesel::sql_query(
+            r#"
+            INSERT INTO gm_agent_instagram_comments (
+                post_db_id, campaign_id, instagram_comment_id, parent_comment_id,
+                comment_text, comment_user_id, comment_username, comment_user_full_name,
+                like_count, child_comment_count, created_at_ts,
+                reason, suggested_reply, suggested_dm, suggested_reply_post, status
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 0)
+            ON CONFLICT (instagram_comment_id, post_db_id) DO UPDATE SET
+                campaign_id = EXCLUDED.campaign_id,
+                comment_text = EXCLUDED.comment_text,
+                reason = EXCLUDED.reason,
+                suggested_reply = EXCLUDED.suggested_reply,
+                suggested_dm = EXCLUDED.suggested_dm,
+                suggested_reply_post = EXCLUDED.suggested_reply_post,
+                status = 0,
+                updated_at = NOW()
+            RETURNING id
+            "#,
+        )
+        .bind::<Integer, _>(content_db_id)
+        .bind::<Integer, _>(campaign_id)
+        .bind::<Text, _>(&comment.comment_id)
+        .bind::<diesel::sql_types::Nullable<Text>, _>(comment.parent_id.as_ref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Some(&comment.text))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(comment.author_uid.as_ref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Some(&comment.author))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(comment.author_name.as_ref())
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(comment.likes as i32))
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(comment.reply_count))
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::BigInt>, _>(created_at_ts)
+        .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.reason.as_ref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.reply_text.as_ref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.dm_text.as_ref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.post_reply_text.as_ref())
+        .get_result::<CommentInsertResult>(&mut conn)
+        .map_err(DbError::from)?
+        .id;
+
+        debug!(comment_id = %comment.comment_id, db_id = id, "Upserted Instagram comment");
+        Ok(id)
+    }
+
+    /// Save Reddit comment to gm_agent_reddit_comments table
+    async fn save_reddit_comment(
+        &self,
+        comment: &Comment,
+        content_db_id: i32,
+        campaign_id: i32,
+        suggestion: &ReplySuggestion,
+    ) -> DbResult<i32> {
+        let mut conn = self.conn_async().await?;
+
+        // Constraint: UNIQUE (comment_id, post_db_id)
+        let id: i32 = diesel::sql_query(
+            r#"
+            INSERT INTO gm_agent_reddit_comments (
+                post_db_id, campaign_id, comment_id, parent_id, body,
+                author, score,
+                reason, suggested_reply, suggested_dm, suggested_reply_post, status
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0)
+            ON CONFLICT (comment_id, post_db_id) DO UPDATE SET
+                campaign_id = EXCLUDED.campaign_id,
+                body = EXCLUDED.body,
+                score = EXCLUDED.score,
+                reason = EXCLUDED.reason,
+                suggested_reply = EXCLUDED.suggested_reply,
+                suggested_dm = EXCLUDED.suggested_dm,
+                suggested_reply_post = EXCLUDED.suggested_reply_post,
+                status = 0,
+                updated_at = NOW()
+            RETURNING id
+            "#,
+        )
+        .bind::<Integer, _>(content_db_id)
+        .bind::<Integer, _>(campaign_id)
+        .bind::<Text, _>(&comment.comment_id)
+        .bind::<diesel::sql_types::Nullable<Text>, _>(comment.parent_id.as_ref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Some(&comment.text))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Some(&comment.author))
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(comment.likes as i32))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.reason.as_ref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.reply_text.as_ref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.dm_text.as_ref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.post_reply_text.as_ref())
+        .get_result::<CommentInsertResult>(&mut conn)
+        .map_err(DbError::from)?
+        .id;
+
+        debug!(comment_id = %comment.comment_id, db_id = id, "Upserted Reddit comment");
+        Ok(id)
+    }
+
+    /// Save Twitter comment to gm_agent_twitter_comments table
+    async fn save_twitter_comment(
+        &self,
+        comment: &Comment,
+        content_db_id: i32,
+        campaign_id: i32,
+        suggestion: &ReplySuggestion,
+    ) -> DbResult<i32> {
+        let mut conn = self.conn_async().await?;
+
+        // Constraint: UNIQUE (twitter_comment_id, tweet_db_id)
+        let id: i32 = diesel::sql_query(
+            r#"
+            INSERT INTO gm_agent_twitter_comments (
+                tweet_db_id, campaign_id, twitter_comment_id, comment_text,
+                comment_user_id, comment_screen_name, comment_user_name,
+                favorite_count, retweet_count, created_at_ts,
+                reason, suggested_reply, suggested_dm, suggested_reply_post, status
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0)
+            ON CONFLICT (twitter_comment_id, tweet_db_id) DO UPDATE SET
+                campaign_id = EXCLUDED.campaign_id,
+                comment_text = EXCLUDED.comment_text,
+                reason = EXCLUDED.reason,
+                suggested_reply = EXCLUDED.suggested_reply,
+                suggested_dm = EXCLUDED.suggested_dm,
+                suggested_reply_post = EXCLUDED.suggested_reply_post,
+                status = 0,
+                updated_at = NOW()
+            RETURNING id
+            "#,
+        )
+        .bind::<Integer, _>(content_db_id)
+        .bind::<Integer, _>(campaign_id)
+        .bind::<Text, _>(&comment.comment_id) // twitter_comment_id
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Some(&comment.text)) // comment_text
+        .bind::<diesel::sql_types::Nullable<Text>, _>(comment.author_uid.as_ref()) // comment_user_id
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Some(&comment.author)) // comment_screen_name
+        .bind::<diesel::sql_types::Nullable<Text>, _>(comment.author_name.as_ref()) // comment_user_name
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(comment.likes as i32))
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(comment.reply_count))
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::BigInt>, _>(comment.created_at)
+        .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.reason.as_ref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.reply_text.as_ref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.dm_text.as_ref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.post_reply_text.as_ref())
+        .get_result::<CommentInsertResult>(&mut conn)
+        .map_err(DbError::from)?
+        .id;
+
+        debug!(comment_id = %comment.comment_id, db_id = id, "Upserted Twitter comment");
+        Ok(id)
+    }
+}
+
+// ============================================================
+// ContentRepository Implementation
+// Using gm_agent_videos and gm_agent_comments tables
+// ============================================================
+
+#[async_trait]
+impl ContentRepository for PostgresAdapter {
+    async fn content_exists(&self, _platform: &str, content_id: &str) -> DbResult<bool> {
+        use schema::gm_agent_videos::dsl;
+
+        let mut conn = self.conn_async().await?;
+
+        let count: i64 = dsl::gm_agent_videos
+            .filter(dsl::video_id.eq(content_id))
+            .count()
+            .get_result(&mut conn)
+            .map_err(DbError::from)?;
+
+        Ok(count > 0)
+    }
+
+    async fn get_content(
+        &self,
+        _platform: &str,
+        content_id: &str,
+    ) -> DbResult<Option<StoredContent>> {
+        use schema::gm_agent_videos::dsl;
+
+        let mut conn = self.conn_async().await?;
+
+        let result: Option<models::AgentVideo> = dsl::gm_agent_videos
+            .filter(dsl::video_id.eq(content_id))
+            .first(&mut conn)
+            .optional()
+            .map_err(DbError::from)?;
+
+        Ok(result.map(|v| self.convert_video_to_content(&v)))
+    }
+
+    async fn get_content_by_id(&self, id: i32) -> DbResult<Option<StoredContent>> {
+        use schema::gm_agent_videos::dsl;
+
+        let mut conn = self.conn_async().await?;
+
+        let result: Option<models::AgentVideo> = dsl::gm_agent_videos
+            .find(id)
+            .first(&mut conn)
+            .optional()
+            .map_err(DbError::from)?;
+
+        Ok(result.map(|v| self.convert_video_to_content(&v)))
+    }
+
+    async fn save_content(
+        &self,
+        content: &Content,
+        campaign_id: Option<i32>,
+        task_id: Option<i32>,
+    ) -> DbResult<ContentSaveResult> {
+        // Route to platform-specific save method
+        let platform = content.platform.to_lowercase();
+        match platform.as_str() {
+            "instagram" => self.save_instagram_post(content, campaign_id, task_id).await,
+            "reddit" => self.save_reddit_post(content, campaign_id, task_id).await,
+            "twitter" => self.save_twitter_tweet(content, campaign_id, task_id).await,
+            _ => self.save_tiktok_video(content, campaign_id, task_id).await, // TikTok is default
+        }
     }
 
     async fn save_contents(
@@ -252,7 +747,7 @@ impl ContentRepository for PostgresAdapter {
     ) -> DbResult<()> {
         use schema::gm_agent_videos::dsl;
 
-        let mut conn = self.conn()?;
+        let mut conn = self.conn_async().await?;
 
         diesel::update(dsl::gm_agent_videos.find(id))
             .set((
@@ -270,7 +765,7 @@ impl ContentRepository for PostgresAdapter {
     async fn comment_exists(&self, _platform: &str, comment_id: &str) -> DbResult<bool> {
         use schema::gm_agent_comments::dsl;
 
-        let mut conn = self.conn()?;
+        let mut conn = self.conn_async().await?;
 
         let count: i64 = dsl::gm_agent_comments
             .filter(dsl::comment_id.eq(comment_id))
@@ -288,7 +783,7 @@ impl ContentRepository for PostgresAdapter {
     ) -> DbResult<Option<StoredComment>> {
         use schema::gm_agent_comments::dsl;
 
-        let mut conn = self.conn()?;
+        let mut conn = self.conn_async().await?;
 
         let result: Option<models::AgentComment> = dsl::gm_agent_comments
             .filter(dsl::comment_id.eq(comment_id))
@@ -302,7 +797,7 @@ impl ContentRepository for PostgresAdapter {
     async fn get_comment_by_id(&self, id: i32) -> DbResult<Option<StoredComment>> {
         use schema::gm_agent_comments::dsl;
 
-        let mut conn = self.conn()?;
+        let mut conn = self.conn_async().await?;
 
         let result: Option<models::AgentComment> = dsl::gm_agent_comments
             .find(id)
@@ -316,7 +811,7 @@ impl ContentRepository for PostgresAdapter {
     async fn save_comment(&self, comment: &Comment, content_db_id: i32) -> DbResult<i32> {
         use schema::gm_agent_comments::dsl;
 
-        let mut conn = self.conn()?;
+        let mut conn = self.conn_async().await?;
 
         // Get campaign_id from the video
         let campaign_id = self.get_campaign_id_from_video(content_db_id).await?;
@@ -355,6 +850,12 @@ impl ContentRepository for PostgresAdapter {
     /// Uses ON CONFLICT for atomic UPSERT to safely handle concurrent inserts.
     /// This is essential for parallel video processing where the same comment
     /// might be processed by multiple concurrent tasks.
+    ///
+    /// Routes to platform-specific tables:
+    /// - TikTok: gm_agent_comments
+    /// - Instagram: gm_agent_instagram_comments
+    /// - Reddit: gm_agent_reddit_comments
+    /// - Twitter: gm_agent_twitter_comments
     async fn save_comment_with_analysis(
         &self,
         comment: &Comment,
@@ -362,51 +863,27 @@ impl ContentRepository for PostgresAdapter {
         campaign_id: i32,
         suggestion: &ReplySuggestion,
     ) -> DbResult<i32> {
-        let mut conn = self.conn()?;
-
-        // Parse create_time to NaiveDateTime if available
-        let create_time = comment
-            .created_at
-            .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0).map(|dt| dt.naive_utc()));
-
-        // Use ON CONFLICT to atomically handle duplicate comments
-        // Unique constraint: (campaign_id, comment_id) - same comment in same campaign is upserted
-        let id: i32 = diesel::sql_query(
-            r#"
-            INSERT INTO gm_agent_comments (
-                campaign_id, comment_id, video_db_id, user_nickname, user_unique_id,
-                content, create_time, reason, suggested_reply,
-                suggested_dm, suggested_reply_post, status
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0)
-            ON CONFLICT (campaign_id, comment_id) DO UPDATE SET
-                video_db_id = EXCLUDED.video_db_id,
-                reason = EXCLUDED.reason,
-                suggested_reply = EXCLUDED.suggested_reply,
-                suggested_dm = EXCLUDED.suggested_dm,
-                suggested_reply_post = EXCLUDED.suggested_reply_post,
-                status = 0,
-                updated_at = NOW()
-            RETURNING id
-            "#,
-        )
-        .bind::<Integer, _>(campaign_id)
-        .bind::<Text, _>(&comment.comment_id)
-        .bind::<Integer, _>(content_db_id)
-        .bind::<diesel::sql_types::Nullable<Text>, _>(comment.author_name.as_ref())
-        .bind::<diesel::sql_types::Nullable<Text>, _>(Some(&comment.author))
-        .bind::<diesel::sql_types::Nullable<Text>, _>(Some(&comment.text))
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Timestamp>, _>(create_time)
-        .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.reason.as_ref())
-        .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.reply_text.as_ref())
-        .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.dm_text.as_ref())
-        .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.post_reply_text.as_ref())
-        .get_result::<CommentInsertResult>(&mut conn)
-        .map_err(DbError::from)?
-        .id;
-
-        debug!(comment_id = %comment.comment_id, db_id = id, "Upserted comment with AI analysis");
-        Ok(id)
+        // Route to platform-specific save method
+        let platform = comment.platform.to_lowercase();
+        match platform.as_str() {
+            "instagram" => {
+                self.save_instagram_comment(comment, content_db_id, campaign_id, suggestion)
+                    .await
+            }
+            "reddit" => {
+                self.save_reddit_comment(comment, content_db_id, campaign_id, suggestion)
+                    .await
+            }
+            "twitter" => {
+                self.save_twitter_comment(comment, content_db_id, campaign_id, suggestion)
+                    .await
+            }
+            _ => {
+                // TikTok is default
+                self.save_tiktok_comment(comment, content_db_id, campaign_id, suggestion)
+                    .await
+            }
+        }
     }
 
     async fn get_pending_comments(
@@ -416,7 +893,7 @@ impl ContentRepository for PostgresAdapter {
     ) -> DbResult<Vec<StoredComment>> {
         use schema::gm_agent_comments::dsl;
 
-        let mut conn = self.conn()?;
+        let mut conn = self.conn_async().await?;
 
         let results: Vec<models::AgentComment> = dsl::gm_agent_comments
             .filter(dsl::campaign_id.eq(campaign_id))
@@ -434,7 +911,7 @@ impl ContentRepository for PostgresAdapter {
     async fn update_comment_status(&self, id: i32, status: CommentStatus) -> DbResult<()> {
         use schema::gm_agent_comments::dsl;
 
-        let mut conn = self.conn()?;
+        let mut conn = self.conn_async().await?;
 
         diesel::update(dsl::gm_agent_comments.find(id))
             .set(dsl::status.eq(status as i16))
@@ -452,7 +929,7 @@ impl ContentRepository for PostgresAdapter {
     ) -> DbResult<i32> {
         use schema::gm_agent_comments::dsl;
 
-        let mut conn = self.conn()?;
+        let mut conn = self.conn_async().await?;
 
         // Update the comment with AI analysis results
         // Matching Python agent: updated_at = NOW()
@@ -477,7 +954,7 @@ impl ContentRepository for PostgresAdapter {
     async fn get_analysis(&self, comment_id: i32) -> DbResult<Option<StoredAnalysis>> {
         use schema::gm_agent_comments::dsl;
 
-        let mut conn = self.conn()?;
+        let mut conn = self.conn_async().await?;
 
         let result: Option<models::AgentComment> = dsl::gm_agent_comments
             .find(comment_id)
@@ -518,7 +995,7 @@ impl PromptRepository for PostgresAdapter {
     async fn get_campaign(&self, campaign_id: i32) -> DbResult<Option<CampaignConfig>> {
         use schema::gm_campaigns::dsl;
 
-        let mut conn = self.conn()?;
+        let mut conn = self.conn_async().await?;
 
         let result: Option<models::Campaign> = dsl::gm_campaigns
             .find(campaign_id)
@@ -591,7 +1068,7 @@ impl PromptRepository for PostgresAdapter {
     async fn get_platform(&self, platform_id: i32) -> DbResult<Option<PlatformConfig>> {
         use schema::gm_platforms::dsl;
 
-        let mut conn = self.conn()?;
+        let mut conn = self.conn_async().await?;
 
         let result: Option<models::Platform> = dsl::gm_platforms
             .find(platform_id)
@@ -610,7 +1087,7 @@ impl PromptRepository for PostgresAdapter {
     async fn get_platform_by_name(&self, name: &str) -> DbResult<Option<PlatformConfig>> {
         use schema::gm_platforms::dsl;
 
-        let mut conn = self.conn()?;
+        let mut conn = self.conn_async().await?;
 
         let result: Option<models::Platform> = dsl::gm_platforms
             .filter(dsl::name.eq(name))
@@ -655,7 +1132,7 @@ impl PromptRepository for PostgresAdapter {
     async fn update_processed_count(&self, campaign_id: i32, count: i32) -> DbResult<()> {
         use schema::gm_campaigns::dsl;
 
-        let mut conn = self.conn()?;
+        let mut conn = self.conn_async().await?;
 
         diesel::update(dsl::gm_campaigns.find(campaign_id))
             .set(dsl::total_scanned.eq(count))
@@ -676,7 +1153,7 @@ impl ProgressTracker for PostgresAdapter {
         use schema::gm_campaigns::dsl as camp_dsl;
         use schema::gm_crawler_tasks::dsl;
 
-        let mut conn = self.conn()?;
+        let mut conn = self.conn_async().await?;
 
         let result: Option<models::CrawlerTask> = dsl::gm_crawler_tasks
             .find(task_id as i32)
@@ -715,7 +1192,7 @@ impl ProgressTracker for PostgresAdapter {
     async fn update_task_status(&self, task_id: i64, status: TaskStatus) -> DbResult<()> {
         use schema::gm_crawler_tasks::dsl;
 
-        let mut conn = self.conn()?;
+        let mut conn = self.conn_async().await?;
 
         let status_str = match status {
             TaskStatus::Pending => "pending",
@@ -738,7 +1215,7 @@ impl ProgressTracker for PostgresAdapter {
         task_id: i64,
         increment: i32,
     ) -> DbResult<TaskProgressUpdate> {
-        let mut conn = self.conn()?;
+        let mut conn = self.conn_async().await?;
 
         // Call fn_update_task_progress stored procedure (matching Python agent)
         // This updates process_count, actual_consumption on task AND campaign
@@ -779,7 +1256,7 @@ impl ProgressTracker for PostgresAdapter {
     async fn set_task_error(&self, task_id: i64, _error: &str) -> DbResult<()> {
         use schema::gm_crawler_tasks::dsl;
 
-        let mut conn = self.conn()?;
+        let mut conn = self.conn_async().await?;
 
         diesel::update(dsl::gm_crawler_tasks.find(task_id as i32))
             .set(dsl::status.eq("failed"))
@@ -791,7 +1268,7 @@ impl ProgressTracker for PostgresAdapter {
     }
 
     async fn complete_task(&self, task_id: i64) -> DbResult<()> {
-        let mut conn = self.conn()?;
+        let mut conn = self.conn_async().await?;
 
         // Call fn_complete_task stored procedure
         // This will:
@@ -852,7 +1329,7 @@ impl ProgressTracker for PostgresAdapter {
     async fn increment_processed(&self, campaign_id: i32, count: i32) -> DbResult<()> {
         use schema::gm_campaigns::dsl;
 
-        let mut conn = self.conn()?;
+        let mut conn = self.conn_async().await?;
 
         diesel::update(dsl::gm_campaigns.find(campaign_id))
             .set(dsl::total_scanned.eq(dsl::total_scanned + count))
@@ -868,7 +1345,7 @@ impl ProgressTracker for PostgresAdapter {
     }
 
     async fn stop_campaign_gracefully(&self, campaign_id: i32) -> DbResult<CampaignStopResult> {
-        let mut conn = self.conn()?;
+        let mut conn = self.conn_async().await?;
 
         // Call fn_stop_campaign_gracefully stored procedure (matching Python agent)
         // This sets campaign status to STOPPING or STOPPED and handles budget refunds
@@ -959,7 +1436,7 @@ impl PostgresAdapter {
     ) -> DbResult<Vec<models::CampaignTemplate>> {
         use schema::gm_campaign_templates::dsl;
 
-        let mut conn = self.conn()?;
+        let mut conn = self.conn_async().await?;
 
         let templates: Vec<models::CampaignTemplate> = dsl::gm_campaign_templates
             .filter(dsl::campaign_id.eq(campaign_id))
@@ -974,7 +1451,7 @@ impl PostgresAdapter {
     async fn get_active_task_id(&self, campaign_id: i32) -> DbResult<i32> {
         use schema::gm_crawler_tasks::dsl;
 
-        let mut conn = self.conn()?;
+        let mut conn = self.conn_async().await?;
 
         let task: Option<models::CrawlerTask> = dsl::gm_crawler_tasks
             .filter(dsl::campaign_id.eq(campaign_id))
@@ -991,7 +1468,7 @@ impl PostgresAdapter {
     async fn get_campaign_id_from_video(&self, video_id: i32) -> DbResult<Option<i32>> {
         use schema::gm_agent_videos::dsl;
 
-        let mut conn = self.conn()?;
+        let mut conn = self.conn_async().await?;
 
         let video: Option<models::AgentVideo> = dsl::gm_agent_videos
             .find(video_id)

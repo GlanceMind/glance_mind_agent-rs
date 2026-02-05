@@ -338,7 +338,9 @@ pub struct InstagramComment {
     pub user: Option<InstagramUser>,
 
     /// Like count
-    #[serde(alias = "comment_like_count")]
+    /// Note: TikHub returns both like_count and comment_like_count with same value,
+    /// so we only map to like_count to avoid "duplicate field" serde error
+    #[serde(default)]
     pub like_count: Option<i64>,
 
     /// Child comment count (replies)
@@ -346,7 +348,9 @@ pub struct InstagramComment {
     pub child_comment_count: Option<i32>,
 
     /// Created at timestamp (Unix epoch)
-    #[serde(alias = "created_at_utc")]
+    /// Note: TikHub returns both created_at and created_at_utc with same value,
+    /// so we only map to created_at to avoid "duplicate field" serde error
+    #[serde(default)]
     pub created_at: Option<i64>,
 
     /// Parent comment ID (for replies)

@@ -138,9 +138,31 @@ impl TikHubClient {
             return Err(TikHubError::from_status(status.as_u16(), body));
         }
 
-        // Parse JSON response
-        let data: T = response.json().await?;
-        Ok(data)
+        // Get response body as text first for better error diagnostics
+        let body = response.text().await?;
+
+        // Parse JSON response with detailed error logging
+        match serde_json::from_str::<T>(&body) {
+            Ok(data) => Ok(data),
+            Err(e) => {
+                // Log parse error with body snippet for debugging
+                let body_preview = if body.len() > 500 {
+                    format!("{}...(truncated, total {} bytes)", &body[..500], body.len())
+                } else {
+                    body.clone()
+                };
+                warn!(
+                    error = %e,
+                    body_preview = %body_preview,
+                    "TikHub JSON parse error"
+                );
+                Err(TikHubError::ParseError(format!(
+                    "{} (body preview: {})",
+                    e,
+                    if body.len() > 200 { &body[..200] } else { &body }
+                )))
+            }
+        }
     }
 
     /// Execute a request with automatic retry based on error type

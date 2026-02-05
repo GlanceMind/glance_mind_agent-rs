@@ -131,6 +131,9 @@ impl PlatformRegistry {
     ///
     /// # Arguments
     /// * `records` - Iterator of (id, name, display_name, is_active) tuples
+    ///
+    /// Note: Platform names are converted to lowercase to ensure consistency
+    /// with the code (e.g., database may have "INSTAGRAM" but code uses "instagram")
     pub fn from_records<I>(records: I) -> Self
     where
         I: IntoIterator<Item = (i32, String, String, bool)>,
@@ -138,9 +141,11 @@ impl PlatformRegistry {
         let mut registry = Self::new();
 
         for (id, name, display_name, is_active) in records {
+            // Convert name to lowercase for consistency with code
+            // Database may store "INSTAGRAM" but code uses "instagram"
             registry.register(PlatformInfo {
                 id,
-                name,
+                name: name.to_lowercase(),
                 display_name,
                 is_active,
             });
