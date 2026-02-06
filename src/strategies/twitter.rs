@@ -2,6 +2,7 @@
 //!
 //! Handles Twitter-specific keyword parsing, search options, and prompt formatting.
 
+use crate::config::platform::get_platform_id;
 use crate::domain::{Comment, Content, KeywordType, SearchOptions, TaskConfig};
 use crate::strategies::PlatformStrategy;
 
@@ -39,7 +40,7 @@ impl PlatformStrategy for TwitterStrategy {
     }
 
     fn platform_id(&self) -> i32 {
-        5 // Must match database platform ID
+        get_platform_id(self.name())
     }
 
     fn parse_keyword(&self, keyword: &str) -> KeywordType {

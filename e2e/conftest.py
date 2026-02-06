@@ -240,3 +240,218 @@ def verify_task_lifecycle(task_details):
             errors.append("updated_at should be >= created_at")
     
     return len(errors) == 0, errors
+
+
+# ============================================================================
+# Enhanced Verification Functions (Campaign + Wallet + Transactions)
+# ============================================================================
+
+def get_campaign_details(conn, campaign_id):
+    """Get full campaign details including financial fields."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT id, user_id, name, status, platform_id, keyword,
+                   pending_consumption, actual_consumption, total_scanned,
+                   budget_cap, is_frozen, created_at, updated_at
+            FROM gm_campaigns WHERE id = %s
+        """, (campaign_id,))
+        row = cur.fetchone()
+        if row:
+            return {
+                "id": row[0],
+                "user_id": row[1],
+                "name": row[2],
+                "status": row[3],
+                "platform_id": row[4],
+                "keyword": row[5],
+                "pending_consumption": float(row[6]) if row[6] else 0,
+                "actual_consumption": float(row[7]) if row[7] else 0,
+                "total_scanned": row[8] or 0,
+                "budget_cap": float(row[9]) if row[9] else 0,
+                "is_frozen": row[10],
+                "created_at": row[11],
+                "updated_at": row[12],
+            }
+        return None
+
+
+def get_wallet_transactions(conn, user_id, reference_id=None, txn_type=None):
+    """Get wallet transactions for user, optionally filtered by reference_id or type."""
+    with conn.cursor() as cur:
+        sql = """
+            SELECT id, user_id, amount, type, reference_id, description, created_at
+            FROM gm_wallet_transactions
+            WHERE user_id = %s
+        """
+        params = [user_id]
+        
+        if reference_id is not None:
+            sql += " AND reference_id = %s"
+            params.append(reference_id)
+        
+        if txn_type is not None:
+            sql += " AND type = %s"
+            params.append(txn_type)
+        
+        sql += " ORDER BY created_at DESC"
+        
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+        return [
+            {
+                "id": row[0],
+                "user_id": row[1],
+                "amount": float(row[2]) if row[2] else 0,
+                "type": row[3],
+                "reference_id": row[4],
+                "description": row[5],
+                "created_at": row[6],
+            }
+            for row in rows
+        ]
+
+
+def verify_campaign_financial_state(conn, campaign_id, expected_status=None):
+    """
+    Verify campaign financial state is consistent.
+    Returns (is_valid, errors, details) tuple.
+    """
+    errors = []
+    campaign = get_campaign_details(conn, campaign_id)
+    
+    if not campaign:
+        return False, ["Campaign not found"], None
+    
+    # Check status if expected
+    if expected_status and campaign["status"] != expected_status:
+        errors.append(f"Expected status '{expected_status}', got '{campaign['status']}'")
+    
+    # pending_consumption should be >= 0
+    if campaign["pending_consumption"] < 0:
+        errors.append(f"pending_consumption should be >= 0, got {campaign['pending_consumption']}")
+    
+    # actual_consumption should be >= 0
+    if campaign["actual_consumption"] < 0:
+        errors.append(f"actual_consumption should be >= 0, got {campaign['actual_consumption']}")
+    
+    # total_scanned should be >= 0
+    if campaign["total_scanned"] < 0:
+        errors.append(f"total_scanned should be >= 0, got {campaign['total_scanned']}")
+    
+    # pending + actual should not exceed budget_cap
+    total_consumption = campaign["pending_consumption"] + campaign["actual_consumption"]
+    if campaign["budget_cap"] > 0 and total_consumption > campaign["budget_cap"] * 1.1:  # 10% tolerance
+        errors.append(
+            f"Total consumption ({total_consumption}) exceeds budget_cap ({campaign['budget_cap']})"
+        )
+    
+    return len(errors) == 0, errors, campaign
+
+
+def verify_wallet_transactions_for_campaign(conn, user_id, campaign_id):
+    """
+    Verify wallet transactions exist for campaign activation.
+    Returns (is_valid, errors, transactions) tuple.
+    """
+    errors = []
+    
+    # Get FREEZE transaction (campaign activation)
+    freeze_txns = get_wallet_transactions(conn, user_id, reference_id=campaign_id, txn_type='FREEZE')
+    
+    if len(freeze_txns) == 0:
+        errors.append(f"No FREEZE transaction found for campaign {campaign_id}")
+    else:
+        freeze_txn = freeze_txns[0]
+        if freeze_txn["amount"] >= 0:
+            errors.append(f"FREEZE amount should be negative, got {freeze_txn['amount']}")
+    
+    return len(errors) == 0, errors, freeze_txns
+
+
+def verify_wallet_transactions_for_task(conn, user_id, task_id):
+    """
+    Verify wallet transactions exist for task settlement.
+    Returns (is_valid, errors, transactions) tuple.
+    """
+    errors = []
+    
+    # Get SETTLE transaction (task completion)
+    settle_txns = get_wallet_transactions(conn, user_id, reference_id=task_id, txn_type='SETTLE')
+    
+    if len(settle_txns) == 0:
+        errors.append(f"No SETTLE transaction found for task {task_id}")
+    else:
+        settle_txn = settle_txns[0]
+        if settle_txn["amount"] > 0:
+            errors.append(f"SETTLE amount should be non-positive, got {settle_txn['amount']}")
+    
+    return len(errors) == 0, errors, settle_txns
+
+
+def verify_wallet_balance_accounting(conn, user_id, initial_balance=10000.0):
+    """
+    Verify wallet balance accounting is correct.
+    balance + frozen should <= initial_balance (consumption reduces total)
+    Returns (is_valid, errors, wallet_state) tuple.
+    """
+    errors = []
+    wallet = get_wallet_balance(conn, user_id)
+    
+    if not wallet:
+        return False, ["Wallet not found"], None
+    
+    balance, frozen = wallet
+    balance = float(balance) if balance else 0
+    frozen = float(frozen) if frozen else 0
+    total = balance + frozen
+    
+    wallet_state = {
+        "balance": balance,
+        "frozen": frozen,
+        "total": total,
+        "initial_balance": initial_balance,
+        "consumed": initial_balance - total,
+    }
+    
+    # Total should not exceed initial balance
+    if total > initial_balance * 1.01:  # 1% tolerance for rounding
+        errors.append(
+            f"Wallet total ({total}) exceeds initial balance ({initial_balance})"
+        )
+    
+    # Balance should be >= 0
+    if balance < 0:
+        errors.append(f"Balance should be >= 0, got {balance}")
+    
+    # Frozen should be >= 0
+    if frozen < 0:
+        errors.append(f"Frozen should be >= 0, got {frozen}")
+    
+    return len(errors) == 0, errors, wallet_state
+
+
+def get_task_consumption_summary(conn, campaign_id):
+    """Get summary of all task consumptions for a campaign."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT 
+                COUNT(*) as task_count,
+                SUM(COALESCE(reserved_amount, 0)) as total_reserved,
+                SUM(COALESCE(actual_consumption, 0)) as total_actual,
+                SUM(COALESCE(process_count, 0)) as total_processed,
+                COUNT(*) FILTER (WHERE status = 'completed') as completed_count,
+                COUNT(*) FILTER (WHERE settled_at IS NOT NULL) as settled_count
+            FROM gm_crawler_tasks
+            WHERE campaign_id = %s
+        """, (campaign_id,))
+        row = cur.fetchone()
+        if row:
+            return {
+                "task_count": row[0] or 0,
+                "total_reserved": float(row[1]) if row[1] else 0,
+                "total_actual": float(row[2]) if row[2] else 0,
+                "total_processed": row[3] or 0,
+                "completed_count": row[4] or 0,
+                "settled_count": row[5] or 0,
+            }
+        return None

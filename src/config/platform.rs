@@ -235,6 +235,33 @@ pub fn platform_id(name: &str) -> Option<i32> {
     GLOBAL_REGISTRY.get().and_then(|r| r.get_id(name))
 }
 
+/// Get platform ID by name, with fallback to defaults if registry not initialized
+///
+/// This is useful for platform implementations that need their ID.
+/// If the global registry is initialized, looks up from there.
+/// If not initialized (e.g., during tests), falls back to default values.
+///
+/// # Panics
+/// Panics if the platform name is not found in either the registry or defaults.
+pub fn get_platform_id(name: &str) -> i32 {
+    // First try the global registry
+    if let Some(registry) = GLOBAL_REGISTRY.get() {
+        if let Some(id) = registry.get_id(name) {
+            return id;
+        }
+    }
+    
+    // Fall back to defaults (for testing or when registry not yet initialized)
+    let defaults = PlatformRegistry::with_defaults();
+    defaults.get_id(name).unwrap_or_else(|| {
+        panic!(
+            "Platform '{}' not found in registry or defaults. \
+             Ensure the platform is registered in the database or add it to defaults.",
+            name
+        )
+    })
+}
+
 // ============================================================
 // Database Loading
 // ============================================================

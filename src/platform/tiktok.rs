@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use crate::adapters::TikHubAdapter;
+use crate::config::platform::get_platform_id;
 use crate::domain::errors::GatewayError;
 use crate::platform::{Platform, PlatformConfigBase, PlatformStrategy};
 use crate::ports::{CommentGateway, ContentGateway};
@@ -95,7 +96,7 @@ impl Platform for TikTokPlatform {
     }
 
     fn platform_id(&self) -> i32 {
-        2
+        get_platform_id(self.name())
     }
 
     fn strategy(&self) -> &dyn PlatformStrategy {

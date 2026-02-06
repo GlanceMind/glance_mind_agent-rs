@@ -253,6 +253,186 @@ CREATE TABLE IF NOT EXISTS gm_agent_comments (
     UNIQUE (campaign_id, comment_id)
 );
 
+-- =============================================================================
+-- Agent Tables (Twitter)
+-- =============================================================================
+
+-- Agent Twitter tweets
+CREATE TABLE IF NOT EXISTS gm_agent_twitter_tweets (
+    id SERIAL PRIMARY KEY,
+    task_id INTEGER NOT NULL REFERENCES gm_crawler_tasks(id),
+    campaign_id INTEGER REFERENCES gm_campaigns(id) ON DELETE CASCADE,
+    twitter_tweet_id VARCHAR(255) NOT NULL,
+    conversation_id VARCHAR(255),
+    full_text TEXT DEFAULT '' NOT NULL,
+    lang VARCHAR(10),
+    screen_name VARCHAR(255),
+    user_name VARCHAR(255),
+    user_id VARCHAR(255),
+    user_description TEXT,
+    user_followers_count INTEGER DEFAULT 0,
+    user_avatar TEXT,
+    user_verified BOOLEAN DEFAULT false,
+    media_urls TEXT[],
+    has_media BOOLEAN DEFAULT false,
+    favorite_count INTEGER DEFAULT 0,
+    retweet_count INTEGER DEFAULT 0,
+    reply_count INTEGER DEFAULT 0,
+    quote_count INTEGER DEFAULT 0,
+    bookmark_count INTEGER DEFAULT 0,
+    view_count INTEGER DEFAULT 0,
+    is_reply BOOLEAN DEFAULT false,
+    in_reply_to_status_id VARCHAR(255),
+    in_reply_to_user_id VARCHAR(255),
+    created_at_str VARCHAR(255),
+    created_at_ts BIGINT,
+    tweet_created_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+    updated_at TIMESTAMPTZ,
+    UNIQUE (twitter_tweet_id, task_id)
+);
+
+-- Agent Twitter comments/replies
+CREATE TABLE IF NOT EXISTS gm_agent_twitter_comments (
+    id SERIAL PRIMARY KEY,
+    tweet_db_id INTEGER NOT NULL REFERENCES gm_agent_twitter_tweets(id) ON DELETE CASCADE,
+    campaign_id INTEGER REFERENCES gm_campaigns(id) ON DELETE CASCADE,
+    twitter_comment_id VARCHAR(255) NOT NULL,
+    conversation_id VARCHAR(255),
+    comment_screen_name VARCHAR(255),
+    comment_user_name VARCHAR(255),
+    comment_user_id VARCHAR(255),
+    comment_user_followers INTEGER DEFAULT 0,
+    comment_text TEXT NOT NULL,
+    reason TEXT,
+    suggested_reply TEXT,
+    suggested_dm TEXT,
+    suggested_reply_post TEXT,
+    status VARCHAR(50) DEFAULT 'PENDING',
+    favorite_count INTEGER DEFAULT 0,
+    retweet_count INTEGER DEFAULT 0,
+    reply_count INTEGER DEFAULT 0,
+    in_reply_to_status_id VARCHAR(255),
+    is_reply BOOLEAN DEFAULT true,
+    media_urls TEXT[],
+    has_media BOOLEAN DEFAULT false,
+    created_at_str VARCHAR(255),
+    created_at_ts BIGINT,
+    comment_created_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+    updated_at TIMESTAMPTZ,
+    UNIQUE (twitter_comment_id, tweet_db_id)
+);
+
+-- Agent Reddit posts
+CREATE TABLE IF NOT EXISTS gm_agent_reddit_posts (
+    id SERIAL PRIMARY KEY,
+    task_id INTEGER NOT NULL REFERENCES gm_crawler_tasks(id),
+    campaign_id INTEGER REFERENCES gm_campaigns(id) ON DELETE CASCADE,
+    post_id VARCHAR(255) NOT NULL,
+    post_name VARCHAR(255),
+    title TEXT,
+    selftext TEXT,
+    author VARCHAR(255),
+    subreddit VARCHAR(255),
+    url TEXT,
+    permalink TEXT,
+    domain VARCHAR(255),
+    thumbnail TEXT,
+    score INTEGER DEFAULT 0,
+    upvote_ratio NUMERIC(3,2) DEFAULT 0,
+    num_comments INTEGER DEFAULT 0,
+    is_video BOOLEAN DEFAULT false,
+    post_created_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+    updated_at TIMESTAMPTZ,
+    UNIQUE (task_id, post_id)
+);
+
+-- Agent Reddit comments
+CREATE TABLE IF NOT EXISTS gm_agent_reddit_comments (
+    id SERIAL PRIMARY KEY,
+    post_db_id INTEGER NOT NULL REFERENCES gm_agent_reddit_posts(id) ON DELETE CASCADE,
+    campaign_id INTEGER REFERENCES gm_campaigns(id) ON DELETE CASCADE,
+    comment_id VARCHAR(255) NOT NULL,
+    comment_name VARCHAR(255),
+    author VARCHAR(255),
+    body TEXT NOT NULL,
+    reason TEXT,
+    suggested_reply TEXT,
+    suggested_dm TEXT,
+    suggested_reply_post TEXT,
+    score INTEGER DEFAULT 0,
+    parent_id VARCHAR(255),
+    is_reply BOOLEAN DEFAULT true,
+    depth INTEGER DEFAULT 0,
+    status INTEGER DEFAULT 0,
+    comment_created_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+    updated_at TIMESTAMPTZ,
+    UNIQUE (comment_id, post_db_id)
+);
+
+-- =============================================================================
+-- Agent Tables (Instagram)
+-- =============================================================================
+
+-- Agent Instagram posts
+CREATE TABLE IF NOT EXISTS gm_agent_instagram_posts (
+    id SERIAL PRIMARY KEY,
+    task_id INTEGER NOT NULL REFERENCES gm_crawler_tasks(id),
+    campaign_id INTEGER REFERENCES gm_campaigns(id) ON DELETE CASCADE,
+    instagram_media_id VARCHAR(255) NOT NULL,
+    shortcode VARCHAR(255),
+    media_type VARCHAR(50),
+    caption TEXT,
+    username VARCHAR(255),
+    user_id VARCHAR(255),
+    user_full_name VARCHAR(255),
+    user_profile_pic TEXT,
+    user_followers_count INTEGER DEFAULT 0,
+    user_is_verified BOOLEAN DEFAULT false,
+    display_url TEXT,
+    thumbnail_url TEXT,
+    video_url TEXT,
+    like_count INTEGER DEFAULT 0,
+    comment_count INTEGER DEFAULT 0,
+    view_count INTEGER DEFAULT 0,
+    play_count INTEGER DEFAULT 0,
+    is_video BOOLEAN DEFAULT false,
+    post_created_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+    updated_at TIMESTAMPTZ,
+    UNIQUE (task_id, instagram_media_id)
+);
+
+-- Agent Instagram comments
+CREATE TABLE IF NOT EXISTS gm_agent_instagram_comments (
+    id SERIAL PRIMARY KEY,
+    post_db_id INTEGER NOT NULL REFERENCES gm_agent_instagram_posts(id) ON DELETE CASCADE,
+    campaign_id INTEGER REFERENCES gm_campaigns(id) ON DELETE CASCADE,
+    instagram_comment_id VARCHAR(255) NOT NULL,
+    comment_text TEXT NOT NULL,
+    username VARCHAR(255),
+    user_id VARCHAR(255),
+    user_full_name VARCHAR(255),
+    user_profile_pic TEXT,
+    user_is_verified BOOLEAN DEFAULT false,
+    reason TEXT,
+    suggested_reply TEXT,
+    suggested_dm TEXT,
+    suggested_reply_post TEXT,
+    like_count INTEGER DEFAULT 0,
+    reply_count INTEGER DEFAULT 0,
+    is_reply BOOLEAN DEFAULT false,
+    parent_comment_id VARCHAR(255),
+    status INTEGER DEFAULT 0,
+    comment_created_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+    updated_at TIMESTAMPTZ,
+    UNIQUE (instagram_comment_id, post_db_id)
+);
+
 -- Wallet transactions
 CREATE TABLE IF NOT EXISTS gm_wallet_transactions (
     id SERIAL PRIMARY KEY,
@@ -379,6 +559,24 @@ CREATE INDEX IF NOT EXISTS idx_crawler_tasks_campaign_settled ON gm_crawler_task
 CREATE INDEX IF NOT EXISTS idx_agent_videos_task_id ON gm_agent_videos(task_id);
 CREATE INDEX IF NOT EXISTS idx_agent_comments_status ON gm_agent_comments(status);
 CREATE INDEX IF NOT EXISTS idx_agent_comments_video_db_id ON gm_agent_comments(video_db_id);
+
+-- Twitter agent indexes
+CREATE INDEX IF NOT EXISTS idx_twitter_tweets_task_id ON gm_agent_twitter_tweets(task_id);
+CREATE INDEX IF NOT EXISTS idx_twitter_tweets_campaign_id ON gm_agent_twitter_tweets(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_twitter_comments_tweet_db_id ON gm_agent_twitter_comments(tweet_db_id);
+CREATE INDEX IF NOT EXISTS idx_twitter_comments_campaign_id ON gm_agent_twitter_comments(campaign_id);
+
+-- Reddit agent indexes
+CREATE INDEX IF NOT EXISTS idx_reddit_posts_task_id ON gm_agent_reddit_posts(task_id);
+CREATE INDEX IF NOT EXISTS idx_reddit_posts_campaign_id ON gm_agent_reddit_posts(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_reddit_comments_post_db_id ON gm_agent_reddit_comments(post_db_id);
+CREATE INDEX IF NOT EXISTS idx_reddit_comments_campaign_id ON gm_agent_reddit_comments(campaign_id);
+
+-- Instagram agent indexes
+CREATE INDEX IF NOT EXISTS idx_instagram_posts_task_id ON gm_agent_instagram_posts(task_id);
+CREATE INDEX IF NOT EXISTS idx_instagram_posts_campaign_id ON gm_agent_instagram_posts(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_instagram_comments_post_db_id ON gm_agent_instagram_comments(post_db_id);
+CREATE INDEX IF NOT EXISTS idx_instagram_comments_campaign_id ON gm_agent_instagram_comments(campaign_id);
 
 -- Video generation indexes
 CREATE INDEX IF NOT EXISTS idx_video_generation_tasks_status ON gm_video_generation_tasks(status);

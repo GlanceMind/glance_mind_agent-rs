@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use crate::adapters::InstagramAdapter;
+use crate::config::platform::get_platform_id;
 use crate::domain::errors::GatewayError;
 use crate::platform::{Platform, PlatformConfigBase, PlatformStrategy};
 use crate::ports::{CommentGateway, ContentGateway};
@@ -106,7 +107,7 @@ impl Platform for InstagramPlatform {
     }
 
     fn platform_id(&self) -> i32 {
-        3
+        get_platform_id(self.name())
     }
 
     fn strategy(&self) -> &dyn PlatformStrategy {

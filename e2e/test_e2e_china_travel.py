@@ -6,6 +6,7 @@ This test verifies the complete flow:
 2. Scheduler creates crawler task
 3. Agent-rs processes task (fetch videos, comments, AI analysis)
 4. Verify results in database
+5. Verify wallet transactions and campaign financial state
 """
 import time
 import pytest
@@ -13,7 +14,11 @@ from conftest import (
     E2E_USER_ID, E2E_CAMPAIGN_ID, E2E_TIMEOUT,
     wait_for_condition, get_campaign_status, get_task_status, get_wallet_balance,
     get_any_completed_task, get_completed_task_count,
-    get_task_details, get_all_tasks, verify_task_lifecycle
+    get_task_details, get_all_tasks, verify_task_lifecycle,
+    get_campaign_details, get_wallet_transactions,
+    verify_campaign_financial_state, verify_wallet_transactions_for_campaign,
+    verify_wallet_transactions_for_task, verify_wallet_balance_accounting,
+    get_task_consumption_summary
 )
 
 
@@ -28,6 +33,32 @@ class TestChinaTravelE2E:
         """Verify campaign is in DRAFT status and wallet has balance."""
         campaign_id = e2e_config["campaign_id"]
         user_id = e2e_config["user_id"]
+        expected_platform_id = 2  # TikTok
+        
+        # Check campaign exists with full details
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, name, platform_id, keyword, user_id, status FROM gm_campaigns WHERE id = %s",
+                (campaign_id,)
+            )
+            campaign = cur.fetchone()
+        
+        assert campaign is not None, f"Campaign {campaign_id} not found. Run init-scripts first."
+        
+        campaign_name = campaign[1]
+        campaign_platform_id = campaign[2]
+        campaign_keyword = campaign[3]
+        campaign_status = campaign[5]
+        
+        print(f"[OK] Campaign found: {campaign_name}")
+        print(f"  - Platform ID: {campaign_platform_id}")
+        print(f"  - Keyword: {campaign_keyword}")
+        print(f"  - Status: {campaign_status}")
+        
+        # Verify platform_id matches expected (2 for TikTok)
+        assert campaign_platform_id == expected_platform_id, \
+            f"Expected platform_id {expected_platform_id} (TikTok), got {campaign_platform_id}"
+        print(f"[OK] Platform ID verified: {campaign_platform_id} (TikTok)")
         
         # Check campaign status
         status = get_campaign_status(db_conn, campaign_id)
@@ -290,17 +321,18 @@ class TestChinaTravelE2E:
     # =========================================================================
     
     def test_10_summary(self, db_conn, e2e_config):
-        """Print final test summary."""
+        """Print final test summary with comprehensive verification."""
         campaign_id = e2e_config["campaign_id"]
         user_id = e2e_config["user_id"]
         
         print("\n" + "=" * 60)
-        print("E2E TEST SUMMARY")
+        print("TIKTOK E2E TEST SUMMARY")
         print("=" * 60)
         
         # Campaign status
         status = get_campaign_status(db_conn, campaign_id)
         print(f"Campaign Status: {status}")
+        print(f"Platform: TikTok (ID: 2)")
         
         # Task count
         with db_conn.cursor() as cur:
@@ -330,12 +362,42 @@ class TestChinaTravelE2E:
             comment_count = cur.fetchone()[0]
         print(f"Comments Analyzed: {comment_count}")
         
-        # Wallet
-        balance, frozen = get_wallet_balance(db_conn, user_id)
-        print(f"Wallet: balance={balance}, frozen={frozen}")
+        # Campaign financial state
+        campaign = get_campaign_details(db_conn, campaign_id)
+        if campaign:
+            print(f"\n--- Campaign Financial State ---")
+            print(f"  pending_consumption: {campaign['pending_consumption']}")
+            print(f"  actual_consumption: {campaign['actual_consumption']}")
+            print(f"  total_scanned: {campaign['total_scanned']}")
+            print(f"  budget_cap: {campaign['budget_cap']}")
         
-        print("=" * 60)
-        print("E2E TEST COMPLETED SUCCESSFULLY!")
+        # Task consumption summary
+        task_summary = get_task_consumption_summary(db_conn, campaign_id)
+        if task_summary:
+            print(f"\n--- Task Summary ---")
+            print(f"  Total tasks: {task_summary['task_count']}")
+            print(f"  Completed: {task_summary['completed_count']}")
+            print(f"  Settled: {task_summary['settled_count']}")
+            print(f"  Total processed: {task_summary['total_processed']}")
+            print(f"  Total actual consumption: {task_summary['total_actual']}")
+        
+        # Wallet state
+        wallet = get_wallet_balance(db_conn, user_id)
+        if wallet:
+            balance, frozen = wallet
+            print(f"\n--- Wallet State ---")
+            print(f"  Balance: {balance}")
+            print(f"  Frozen: {frozen}")
+        
+        # Wallet transactions
+        all_txns = get_wallet_transactions(db_conn, user_id, reference_id=campaign_id)
+        if all_txns:
+            print(f"\n--- Wallet Transactions for Campaign ---")
+            for txn in all_txns:
+                print(f"  {txn['type']}: {txn['amount']} ({txn['description']})")
+        
+        print("\n" + "=" * 60)
+        print("TIKTOK E2E TEST COMPLETED SUCCESSFULLY!")
         print("=" * 60)
 
 

@@ -2,6 +2,7 @@
 //!
 //! Handles Instagram-specific keyword parsing, search options, and prompt formatting.
 
+use crate::config::platform::get_platform_id;
 use crate::domain::{Comment, Content, KeywordType, SearchOptions, TaskConfig};
 use crate::strategies::PlatformStrategy;
 
@@ -39,7 +40,7 @@ impl PlatformStrategy for InstagramStrategy {
     }
 
     fn platform_id(&self) -> i32 {
-        4 // Must match database platform ID for Instagram
+        get_platform_id(self.name())
     }
 
     fn parse_keyword(&self, keyword: &str) -> KeywordType {

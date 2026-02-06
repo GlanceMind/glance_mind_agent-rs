@@ -2,6 +2,7 @@
 //!
 //! Handles Reddit-specific keyword parsing, search options, and prompt formatting.
 
+use crate::config::platform::get_platform_id;
 use crate::domain::{Comment, Content, KeywordType, SearchOptions, TaskConfig};
 use crate::strategies::PlatformStrategy;
 
@@ -44,7 +45,7 @@ impl PlatformStrategy for RedditStrategy {
     }
 
     fn platform_id(&self) -> i32 {
-        1 // Must match database platform ID for Reddit
+        get_platform_id(self.name())
     }
 
     fn parse_keyword(&self, keyword: &str) -> KeywordType {
