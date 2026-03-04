@@ -58,7 +58,8 @@ services:
       REDIS_URL: redis://redis:6379
       RUST_LOG: ${RUST_LOG}
       LAOZHANG_API_KEY: ${LAOZHANG_API_KEY}
-      CHAT_API_KEY: ${CHAT_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://timicc.com/v1}
     depends_on:
       postgres:
         condition: service_healthy
@@ -83,12 +84,9 @@ services:
       AGENT_WORKERS: ${AGENT_WORKERS}
       TIKHUB_API_KEY: ${TIKHUB_API_KEY}
       TIKHUB_BASE_URL: ${TIKHUB_BASE_URL}
-      # AI API (Python agent compatible: AGENT_*, also supports OPENAI_*)
-      AGENT_API_KEY: ${AGENT_API_KEY}
-      AGENT_BASE_URL: ${AGENT_BASE_URL}
+      # AI API Configuration
       OPENAI_API_KEY: ${OPENAI_API_KEY}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL}
-      AI_MODEL: ${AI_MODEL}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://timicc.com/v1}
       RUST_LOG: ${RUST_LOG}
     depends_on:
       postgres:

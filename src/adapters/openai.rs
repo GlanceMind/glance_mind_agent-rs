@@ -1,4 +1,4 @@
-//! OpenAI Adapter - Implements AiAnalyzer for OpenAI/DeepSeek
+//! OpenAI Adapter - Implements AiAnalyzer for OpenAI-compatible APIs (timicc)
 //!
 //! This adapter provides AI-powered comment analysis using OpenAI-compatible APIs.
 //! The prompt structure is synchronized with the Python glance_mind_agent.
@@ -88,7 +88,7 @@ pub struct OpenAiAdapter {
 impl OpenAiAdapter {
     /// Create a new OpenAI adapter
     ///
-    /// Note: Default base_url is SiliconFlow (matching Python glance_mind_agent)
+    /// Note: Default base_url is timicc (matching AI chat assistant)
     pub fn new(
         api_key: impl Into<String>,
         base_url: Option<String>,
@@ -97,9 +97,8 @@ impl OpenAiAdapter {
         Self {
             client: Client::new(),
             api_key: api_key.into(),
-            // Default to SiliconFlow API (matching Python glance_mind_agent)
-            base_url: base_url.unwrap_or_else(|| "https://api.siliconflow.cn/v1".to_string()),
-            model: model.unwrap_or_else(|| "deepseek-ai/DeepSeek-V3".to_string()),
+            base_url: base_url.unwrap_or_else(|| "https://timicc.com/v1".to_string()),
+            model: model.unwrap_or_else(|| "gpt-5.2".to_string()),
             // Note: Python agent does NOT set max_tokens (uses API default)
             // Setting to None to match Python behavior
             max_tokens: None,
@@ -111,26 +110,16 @@ impl OpenAiAdapter {
 
     /// Create from environment variables
     ///
-    /// Environment variables (matching Python glance_mind_agent):
-    /// - AGENT_API_KEY or OPENAI_API_KEY: API key for the AI service
-    /// - AGENT_BASE_URL or OPENAI_BASE_URL: Base URL (default: https://api.siliconflow.cn/v1)
-    /// - AI_MODEL: Model name (default: deepseek-ai/DeepSeek-V3)
+    /// Environment variables:
+    /// - OPENAI_API_KEY: API key for the AI service
+    /// - OPENAI_BASE_URL: Base URL (default: https://timicc.com/v1)
     pub fn from_env() -> Result<Self, AiError> {
-        // Try AGENT_API_KEY first (Python agent compatible), then OPENAI_API_KEY
-        let api_key = std::env::var("AGENT_API_KEY")
-            .or_else(|_| std::env::var("OPENAI_API_KEY"))
-            .map_err(|_| AiError::ServiceError("AGENT_API_KEY or OPENAI_API_KEY not set".into()))?;
+        let api_key = std::env::var("OPENAI_API_KEY")
+            .map_err(|_| AiError::ServiceError("OPENAI_API_KEY not set".into()))?;
 
-        // Try AGENT_BASE_URL first (Python agent compatible), then OPENAI_BASE_URL
-        // Default to SiliconFlow (matching Python agent)
-        let base_url = std::env::var("AGENT_BASE_URL")
-            .or_else(|_| std::env::var("OPENAI_BASE_URL"))
-            .ok()
-            .or_else(|| Some("https://api.siliconflow.cn/v1".to_string()));
+        let base_url = std::env::var("OPENAI_BASE_URL").ok();
 
-        let model = std::env::var("AI_MODEL").ok();
-
-        Ok(Self::new(api_key, base_url, model))
+        Ok(Self::new(api_key, base_url, None))
     }
 
     /// Set the model

@@ -5,7 +5,7 @@
 //! - `InstagramAdapter`: TikHub API for Instagram content and comments
 //! - `RedditAdapter`: TikHub API for Reddit content and comments
 //! - `TwitterAdapter`: TikHub API for Twitter content and comments
-//! - `OpenAiAdapter`: OpenAI/DeepSeek for AI analysis
+//! - `OpenAiAdapter`: OpenAI-compatible API (timicc) for AI analysis
 //! - `PostgresAdapter`: PostgreSQL for data persistence
 //! - `FixtureMockAdapter`: Test fixtures for mocking
 //!

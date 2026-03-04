@@ -49,13 +49,15 @@ SELECT setval(pg_get_serial_sequence('gm_regions', 'id'), (SELECT MAX(id) FROM g
 -- 3. AI Models
 -- ============================================================================
 INSERT INTO gm_ai_models (id, name, provider, model_key, model_type, cost_multiplier, is_active) VALUES
-(1, 'GPT-4o', 'openai', 'gpt-4o', 'chat', 1.0, true),
-(2, 'GPT-4o-mini', 'openai', 'gpt-4o-mini', 'chat', 0.5, true),
-(3, 'DeepSeek-V3', 'deepseek', 'deepseek-ai/DeepSeek-V3', 'chat', 0.3, true),
-(4, 'Claude-3.5-Sonnet', 'anthropic', 'claude-3-5-sonnet-20241022', 'chat', 1.2, true)
+(1, 'Claude Haiku', 'anthropic', 'claude-haiku-4-5-20251001', 'chat', 0.3, true),
+(2, 'Claude Sonnet', 'anthropic', 'claude-sonnet-4-6', 'chat', 1.0, true),
+(3, 'GPT-5.2', 'openai', 'gpt-5.2', 'chat', 1.2, true),
+(4, 'Claude Opus', 'anthropic', 'claude-opus-4-6', 'chat', 2.0, true)
 ON CONFLICT (id) DO UPDATE SET
     name = EXCLUDED.name,
-    model_key = EXCLUDED.model_key;
+    provider = EXCLUDED.provider,
+    model_key = EXCLUDED.model_key,
+    cost_multiplier = EXCLUDED.cost_multiplier;
 
 SELECT setval(pg_get_serial_sequence('gm_ai_models', 'id'), (SELECT MAX(id) FROM gm_ai_models));
 

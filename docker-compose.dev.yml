@@ -45,7 +45,8 @@ services:
       REDIS_URL: redis://redis:6379
       RUST_LOG: ${RUST_LOG:-info,glance_mind_scheduler=debug}
       LAOZHANG_API_KEY: ${LAOZHANG_API_KEY:-}
-      CHAT_API_KEY: ${CHAT_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://timicc.com/v1}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -72,11 +73,8 @@ services:
       TIKHUB_API_KEY: ${TIKHUB_API_KEY}
       TIKHUB_BASE_URL: ${TIKHUB_BASE_URL:-https://api.tikhub.io}
       # AI API Configuration
-      AGENT_API_KEY: ${AGENT_API_KEY:-${OPENAI_API_KEY}}
-      AGENT_BASE_URL: ${AGENT_BASE_URL:-${OPENAI_BASE_URL:-https://api.siliconflow.cn/v1}}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-${AGENT_API_KEY}}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-${AGENT_BASE_URL:-https://api.siliconflow.cn/v1}}
-      AI_MODEL: ${AI_MODEL:-deepseek-ai/DeepSeek-V3}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://timicc.com/v1}
       RUST_LOG: ${RUST_LOG:-info,glance_mind_agent_rs=debug}
       # Concurrency settings
       AGENT_MAX_CONCURRENT_TASKS: ${AGENT_MAX_CONCURRENT_TASKS:-5}

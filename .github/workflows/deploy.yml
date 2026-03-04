@@ -81,11 +81,11 @@ jobs:
           # Required Secrets (GitHub Secrets):
           #   - DATABASE_URL: PostgreSQL connection string
           #   - TIKHUB_API_KEY: TikHub API key
-          #   - AGENT_API_KEY: AI service API key (SiliconFlow/OpenAI)
+          #   - OPENAI_API_KEY: AI service API key (timicc)
           #
-          # Optional Vars (GitHub Vars, have defaults):
+          # Optional Vars (GitHub Vars/Secrets, have defaults):
           #   - TIKHUB_BASE_URL: TikHub API base URL (default: https://api.tikhub.io)
-          #   - AGENT_BASE_URL: AI service base URL (default: https://api.siliconflow.cn/v1)
+          #   - OPENAI_BASE_URL: AI service base URL (default: https://timicc.com/v1)
           #   - RUST_LOG: Log level (default: info,glance_mind_agent_rs=debug)
           #
           # ============================================================
@@ -101,8 +101,8 @@ jobs:
           # TikHub API
           TIKHUB_API_KEY=${{ secrets.TIKHUB_API_KEY }}
 
-          # AI Service (SiliconFlow/OpenAI compatible)
-          AGENT_API_KEY=${{ secrets.AGENT_API_KEY }}
+          # AI Service (OpenAI compatible, via timicc)
+          OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
 
           # ===================
           # Optional - Vars
@@ -114,8 +114,8 @@ jobs:
           # TikHub Base URL
           TIKHUB_BASE_URL=${{ vars.TIKHUB_BASE_URL || 'https://api.tikhub.io' }}
 
-          # AI Service Base URL (default: SiliconFlow)
-          AGENT_BASE_URL=${{ vars.AGENT_BASE_URL || 'https://api.siliconflow.cn/v1' }}
+          # AI Service Base URL (org secret)
+          OPENAI_BASE_URL=${{ secrets.OPENAI_BASE_URL }}
 
           # Logging
           RUST_LOG=${{ vars.RUST_LOG || 'info,glance_mind_agent_rs=debug' }}

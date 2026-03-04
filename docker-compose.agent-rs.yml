@@ -8,11 +8,11 @@
 #   Required:
 #     - DATABASE_URL: PostgreSQL connection string
 #     - TIKHUB_API_KEY: TikHub API key
-#     - AGENT_API_KEY: AI service API key
+#     - OPENAI_API_KEY: AI service API key (timicc)
 #   Optional (have defaults):
 #     - REDIS_URL: Redis connection (default: redis://host.docker.internal:6379/0)
 #     - TIKHUB_BASE_URL: TikHub API base URL
-#     - AGENT_BASE_URL: AI service base URL
+#     - OPENAI_BASE_URL: AI service base URL (default: https://timicc.com/v1)
 #     - RUST_LOG: Log level
 
 services:
