@@ -29,11 +29,6 @@ on:
       - "docker-compose.agent-rs.yml"
       - ".github/workflows/deploy.yml"
 
-# Concurrency control: prevent multiple deployments running simultaneously
-concurrency:
-  group: deploy-agent-rs-${{ github.ref }}
-  cancel-in-progress: false
-
 env:
   IMAGE_NAME: gm_agent_rs
   BUILDKIT_CACHE_DIR: /var/cache/buildkit
@@ -41,9 +36,12 @@ env:
 jobs:
   deploy:
     name: Deploy Agent-RS
-    runs-on: [self-hosted, prod]
+    runs-on: [self-hosted, backend, p1]
     environment: prod
     timeout-minutes: 30
+    concurrency:
+      group: deploy-agent-rs-${{ github.ref }}
+      cancel-in-progress: true
 
     steps:
       - name: Pre-Cleanup Workspace
