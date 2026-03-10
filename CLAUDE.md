@@ -1,0 +1,1 @@
+/Users/jacksoom/programer/aihub/CLAUDE.md

@@ -19,3 +19,6 @@ Thumbs.db
 # Test fixtures (generated, can be large)
 # Uncomment if you want to exclude generated fixtures from git
 # tests/fixtures/tiktok/*.json
+
+# Cursor IDE
+.cursor/
