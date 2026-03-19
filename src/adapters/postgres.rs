@@ -15,6 +15,7 @@ use tracing::{debug, info, warn};
 use crate::db::{models, schema, DbPool};
 use crate::domain::errors::{DbError, DbResult};
 use crate::domain::{Comment, Content, ReplySuggestion};
+use crate::tikhub::TwitterTweet as TikhubTwitterTweet;
 use crate::ports::{
     ai_analyzer::AnalysisContext,
     content_repository::{
@@ -184,6 +185,158 @@ impl PostgresAdapter {
             debug!(content_id = %content.content_id, db_id = result.id, "Saved new TikTok video");
         } else {
             debug!(content_id = %content.content_id, db_id = result.id, "Updated existing TikTok video");
+        }
+
+        Ok(ContentSaveResult {
+            id: result.id,
+            is_new: result.inserted,
+        })
+    }
+
+    /// Save Facebook post to gm_agent_facebook_posts table.
+    async fn save_facebook_post(
+        &self,
+        content: &Content,
+        campaign_id: Option<i32>,
+        task_id: Option<i32>,
+    ) -> DbResult<ContentSaveResult> {
+        let mut conn = self.conn_async().await?;
+        let task_id_value = task_id.unwrap_or(0);
+        let raw = content.raw_data.as_ref();
+        let timestamp = Self::json_i64(raw, &["timestamp"]).or(content.created_at);
+        let posted_at = Self::timestamp_to_datetime(timestamp);
+        let has_image = Self::json_at(raw, &["image"]).is_some_and(|value| !value.is_null());
+        let has_video = Self::json_at(raw, &["video"]).is_some_and(|value| !value.is_null());
+
+        let result: ContentUpsertResult = diesel::sql_query(
+            r#"
+            INSERT INTO gm_agent_facebook_posts (
+                task_id, campaign_id, facebook_post_id, post_type, url,
+                message, message_rich, timestamp, posted_at,
+                reactions_count, comments_count, reshare_count,
+                reactions_like, reactions_love, reactions_haha, reactions_wow,
+                reactions_sad, reactions_angry, reactions_care,
+                author_id, author_name, author_url, author_profile_picture_url, author_title,
+                has_image, image_url, image_width, image_height, image_id,
+                has_video, video_thumbnail, external_url, attached_post_url, comments_id, shares_id
+            )
+            VALUES (
+                $1, $2, $3, $4, $5,
+                $6, $7, $8, $9,
+                $10, $11, $12,
+                $13, $14, $15, $16,
+                $17, $18, $19,
+                $20, $21, $22, $23, $24,
+                $25, $26, $27, $28, $29,
+                $30, $31, $32, $33, $34, $35
+            )
+            ON CONFLICT (task_id, facebook_post_id) DO UPDATE SET
+                campaign_id = EXCLUDED.campaign_id,
+                post_type = EXCLUDED.post_type,
+                url = EXCLUDED.url,
+                message = EXCLUDED.message,
+                message_rich = EXCLUDED.message_rich,
+                timestamp = EXCLUDED.timestamp,
+                posted_at = EXCLUDED.posted_at,
+                reactions_count = EXCLUDED.reactions_count,
+                comments_count = EXCLUDED.comments_count,
+                reshare_count = EXCLUDED.reshare_count,
+                reactions_like = EXCLUDED.reactions_like,
+                reactions_love = EXCLUDED.reactions_love,
+                reactions_haha = EXCLUDED.reactions_haha,
+                reactions_wow = EXCLUDED.reactions_wow,
+                reactions_sad = EXCLUDED.reactions_sad,
+                reactions_angry = EXCLUDED.reactions_angry,
+                reactions_care = EXCLUDED.reactions_care,
+                author_id = EXCLUDED.author_id,
+                author_name = EXCLUDED.author_name,
+                author_url = EXCLUDED.author_url,
+                author_profile_picture_url = EXCLUDED.author_profile_picture_url,
+                author_title = EXCLUDED.author_title,
+                has_image = EXCLUDED.has_image,
+                image_url = EXCLUDED.image_url,
+                image_width = EXCLUDED.image_width,
+                image_height = EXCLUDED.image_height,
+                image_id = EXCLUDED.image_id,
+                has_video = EXCLUDED.has_video,
+                video_thumbnail = EXCLUDED.video_thumbnail,
+                external_url = EXCLUDED.external_url,
+                attached_post_url = EXCLUDED.attached_post_url,
+                comments_id = EXCLUDED.comments_id,
+                shares_id = EXCLUDED.shares_id,
+                updated_at = NOW()
+            RETURNING id, (xmax = 0) AS inserted
+            "#,
+        )
+        .bind::<Integer, _>(task_id_value)
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(campaign_id)
+        .bind::<Text, _>(&content.content_id)
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Self::json_string(raw, &["type"]))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(content.url.as_ref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Some(&content.description))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(
+            Self::json_string(raw, &["message_rich"]).or_else(|| Some(content.description.clone())),
+        )
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::BigInt>, _>(timestamp)
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>, _>(posted_at)
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(content.engagement.likes as i32))
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(content.engagement.comments as i32))
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(content.engagement.shares as i32))
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(
+            Self::json_i64(raw, &["reactions", "like"]).map(|value| value as i32),
+        )
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(
+            Self::json_i64(raw, &["reactions", "love"]).map(|value| value as i32),
+        )
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(
+            Self::json_i64(raw, &["reactions", "haha"]).map(|value| value as i32),
+        )
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(
+            Self::json_i64(raw, &["reactions", "wow"]).map(|value| value as i32),
+        )
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(
+            Self::json_i64(raw, &["reactions", "sad"]).map(|value| value as i32),
+        )
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(
+            Self::json_i64(raw, &["reactions", "angry"]).map(|value| value as i32),
+        )
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(
+            Self::json_i64(raw, &["reactions", "care"]).map(|value| value as i32),
+        )
+        .bind::<diesel::sql_types::Nullable<Text>, _>(
+            Self::json_string(raw, &["author", "id"]).or_else(|| Some(content.author.clone())),
+        )
+        .bind::<diesel::sql_types::Nullable<Text>, _>(
+            Self::json_string(raw, &["author", "name"]).or_else(|| content.author_name.clone()),
+        )
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Self::json_string(raw, &["author", "url"]))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Self::json_string(
+            raw,
+            &["author", "profile_picture_url"],
+        ))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Self::json_string(raw, &["author_title"]))
+        .bind::<diesel::sql_types::Nullable<Bool>, _>(Some(has_image))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Self::json_string(raw, &["image", "uri"]))
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(
+            Self::json_i64(raw, &["image", "width"]).map(|value| value as i32),
+        )
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(
+            Self::json_i64(raw, &["image", "height"]).map(|value| value as i32),
+        )
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Self::json_string(raw, &["image", "id"]))
+        .bind::<diesel::sql_types::Nullable<Bool>, _>(Some(has_video))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Self::json_string(raw, &["video_thumbnail"]))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Self::json_string(raw, &["external_url"]))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Self::json_string(raw, &["attached_post_url"]))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Self::json_string(raw, &["comments_id"]))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Self::json_string(raw, &["shares_id"]))
+        .get_result(&mut conn)
+        .map_err(DbError::from)?;
+
+        if result.inserted {
+            debug!(content_id = %content.content_id, db_id = result.id, "Saved new Facebook post");
+        } else {
+            debug!(content_id = %content.content_id, db_id = result.id, "Updated existing Facebook post");
         }
 
         Ok(ContentSaveResult {
@@ -362,64 +515,149 @@ impl PostgresAdapter {
         let mut conn = self.conn_async().await?;
         let task_id_value = task_id.unwrap_or(0);
 
-        // Extract Twitter-specific fields from raw_data
-        let raw = content.raw_data.as_ref();
-        let retweet_count = raw
-            .and_then(|r| r.get("retweet_count"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(content.engagement.shares) as i32;
-        let reply_count = raw
-            .and_then(|r| r.get("reply_count"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(content.engagement.comments) as i32;
-        let quote_count = raw
-            .and_then(|r| r.get("quote_count"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32;
-        let view_count = raw
-            .and_then(|r| r.get("view_count"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(content.engagement.views) as i32;
-        let screen_name = raw
-            .and_then(|r| r.get("screen_name"))
-            .and_then(|v| v.as_str())
-            .unwrap_or(&content.author);
+        let parsed_tweet = Self::parse_twitter_raw(content.raw_data.as_ref());
+        let twitter_user = parsed_tweet
+            .as_ref()
+            .and_then(|tweet| tweet.user_info.as_ref().or(tweet.author.as_ref()));
+        let screen_name = parsed_tweet
+            .as_ref()
+            .and_then(|tweet| tweet.author_handle().map(ToString::to_string))
+            .or_else(|| (!content.author.is_empty()).then(|| content.author.clone()));
+        let user_name = parsed_tweet
+            .as_ref()
+            .and_then(|tweet| tweet.author_name().map(ToString::to_string))
+            .or_else(|| content.author_name.clone());
+        let user_id = parsed_tweet
+            .as_ref()
+            .and_then(|tweet| tweet.user_id().map(ToString::to_string));
+        let conversation_id = parsed_tweet
+            .as_ref()
+            .and_then(|tweet| tweet.conversation_id.clone());
+        let lang = parsed_tweet.as_ref().and_then(|tweet| tweet.lang.clone());
+        let user_description = twitter_user.and_then(|user| user.description.clone());
+        let user_followers_count =
+            twitter_user.and_then(|user| user.followers_count).map(Self::i64_to_i32);
+        let user_avatar = twitter_user.and_then(|user| user.avatar.clone());
+        let user_verified = twitter_user.and_then(|user| user.verified.or(user.blue_verified));
+        let media_urls = parsed_tweet
+            .as_ref()
+            .and_then(Self::twitter_media_bind_value);
+        let has_media = parsed_tweet.as_ref().map(|tweet| tweet.has_media());
+        let favorite_count = parsed_tweet
+            .as_ref()
+            .map(|tweet| Self::i64_to_i32(tweet.like_count()))
+            .or_else(|| Some(Self::i64_to_i32(content.engagement.likes)));
+        let retweet_count = parsed_tweet
+            .as_ref()
+            .map(|tweet| Self::i64_to_i32(tweet.retweet_count()))
+            .or_else(|| Some(Self::i64_to_i32(content.engagement.shares)));
+        let reply_count = parsed_tweet
+            .as_ref()
+            .map(|tweet| Self::i64_to_i32(tweet.reply_count()))
+            .or_else(|| Some(Self::i64_to_i32(content.engagement.comments)));
+        let quote_count = parsed_tweet
+            .as_ref()
+            .map(|tweet| Self::i64_to_i32(tweet.quote_count()));
+        let bookmark_count = parsed_tweet
+            .as_ref()
+            .map(|tweet| Self::i64_to_i32(tweet.bookmark_count()));
+        let view_count = parsed_tweet
+            .as_ref()
+            .map(|tweet| Self::i64_to_i32(tweet.view_count()))
+            .or_else(|| Some(Self::i64_to_i32(content.engagement.views)));
+        let is_reply = parsed_tweet.as_ref().map(|tweet| tweet.is_reply());
+        let in_reply_to_status_id = parsed_tweet
+            .as_ref()
+            .and_then(|tweet| tweet.in_reply_to_status_id_str.clone());
+        let in_reply_to_user_id = parsed_tweet
+            .as_ref()
+            .and_then(|tweet| tweet.in_reply_to_user_id_str.clone());
+        let created_at_str = parsed_tweet
+            .as_ref()
+            .and_then(|tweet| tweet.created_at.clone());
+        let created_at_ts = content
+            .created_at
+            .or_else(|| parsed_tweet.as_ref().and_then(|tweet| tweet.created_at_timestamp()));
+        let tweet_created_at = Self::timestamp_to_datetime(created_at_ts);
 
         // Constraint: UNIQUE (twitter_tweet_id, task_id)
         let result: ContentUpsertResult = diesel::sql_query(
             r#"
             INSERT INTO gm_agent_twitter_tweets (
-                task_id, campaign_id, twitter_tweet_id, full_text,
-                user_id, screen_name, user_name,
-                favorite_count, retweet_count, reply_count, quote_count, view_count,
-                created_at_ts
+                task_id, campaign_id, twitter_tweet_id, conversation_id, full_text,
+                lang, screen_name, user_name, user_id, user_description,
+                user_followers_count, user_avatar, user_verified, media_urls, has_media,
+                favorite_count, retweet_count, reply_count, quote_count, bookmark_count,
+                view_count, is_reply, in_reply_to_status_id, in_reply_to_user_id,
+                created_at_str, created_at_ts, tweet_created_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            VALUES (
+                $1, $2, $3, $4, $5,
+                $6, $7, $8, $9, $10,
+                $11, $12, $13, $14, $15,
+                $16, $17, $18, $19, $20,
+                $21, $22, $23, $24,
+                $25, $26, $27
+            )
             ON CONFLICT (twitter_tweet_id, task_id) DO UPDATE SET
                 campaign_id = EXCLUDED.campaign_id,
+                conversation_id = EXCLUDED.conversation_id,
                 full_text = EXCLUDED.full_text,
+                lang = EXCLUDED.lang,
+                screen_name = EXCLUDED.screen_name,
+                user_name = EXCLUDED.user_name,
+                user_id = EXCLUDED.user_id,
+                user_description = EXCLUDED.user_description,
+                user_followers_count = EXCLUDED.user_followers_count,
+                user_avatar = EXCLUDED.user_avatar,
+                user_verified = EXCLUDED.user_verified,
+                media_urls = EXCLUDED.media_urls,
+                has_media = EXCLUDED.has_media,
                 favorite_count = EXCLUDED.favorite_count,
                 retweet_count = EXCLUDED.retweet_count,
                 reply_count = EXCLUDED.reply_count,
                 quote_count = EXCLUDED.quote_count,
+                bookmark_count = EXCLUDED.bookmark_count,
                 view_count = EXCLUDED.view_count,
+                is_reply = EXCLUDED.is_reply,
+                in_reply_to_status_id = EXCLUDED.in_reply_to_status_id,
+                in_reply_to_user_id = EXCLUDED.in_reply_to_user_id,
+                created_at_str = EXCLUDED.created_at_str,
+                created_at_ts = EXCLUDED.created_at_ts,
+                tweet_created_at = EXCLUDED.tweet_created_at,
                 updated_at = NOW()
             RETURNING id, (xmax = 0) AS inserted
             "#,
         )
         .bind::<Integer, _>(task_id_value)
         .bind::<diesel::sql_types::Nullable<Integer>, _>(campaign_id)
-        .bind::<Text, _>(&content.content_id) // twitter_tweet_id
-        .bind::<diesel::sql_types::Nullable<Text>, _>(Some(&content.description)) // full_text
-        .bind::<diesel::sql_types::Nullable<Text>, _>(raw.and_then(|r| r.get("user_id")).and_then(|v| v.as_str()))
-        .bind::<diesel::sql_types::Nullable<Text>, _>(Some(screen_name)) // screen_name
-        .bind::<diesel::sql_types::Nullable<Text>, _>(content.author_name.as_ref()) // user_name
-        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(content.engagement.likes as i32))
-        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(retweet_count))
-        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(reply_count))
-        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(quote_count))
-        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(view_count))
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::BigInt>, _>(content.created_at)
+        .bind::<Text, _>(&content.content_id)
+        .bind::<diesel::sql_types::Nullable<Text>, _>(conversation_id.as_deref())
+        .bind::<Text, _>(&content.description)
+        .bind::<diesel::sql_types::Nullable<Text>, _>(lang.as_deref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(screen_name.as_deref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(user_name.as_deref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(user_id.as_deref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(user_description.as_deref())
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(user_followers_count)
+        .bind::<diesel::sql_types::Nullable<Text>, _>(user_avatar.as_deref())
+        .bind::<diesel::sql_types::Nullable<Bool>, _>(user_verified)
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Array<diesel::sql_types::Nullable<Text>>>, _>(
+            media_urls,
+        )
+        .bind::<diesel::sql_types::Nullable<Bool>, _>(has_media)
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(favorite_count)
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(retweet_count)
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(reply_count)
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(quote_count)
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(bookmark_count)
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(view_count)
+        .bind::<diesel::sql_types::Nullable<Bool>, _>(is_reply)
+        .bind::<diesel::sql_types::Nullable<Text>, _>(in_reply_to_status_id.as_deref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(in_reply_to_user_id.as_deref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(created_at_str.as_deref())
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::BigInt>, _>(created_at_ts)
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>, _>(tweet_created_at)
         .get_result(&mut conn)
         .map_err(DbError::from)?;
 
@@ -488,6 +726,99 @@ impl PostgresAdapter {
         .id;
 
         debug!(comment_id = %comment.comment_id, db_id = id, "Upserted TikTok comment");
+        Ok(id)
+    }
+
+    /// Save Facebook comment to gm_agent_facebook_comments table.
+    async fn save_facebook_comment(
+        &self,
+        comment: &Comment,
+        content_db_id: i32,
+        campaign_id: i32,
+        suggestion: &ReplySuggestion,
+    ) -> DbResult<i32> {
+        let mut conn = self.conn_async().await?;
+        let raw = comment.raw_data.as_ref();
+        let (_, post_url, facebook_post_id) = self.get_facebook_post_context(content_db_id).await?;
+        let created_at_ts = Self::json_i64(raw, &["created_time"]).or(comment.created_at);
+        let comment_created_at = Self::timestamp_to_datetime(created_at_ts);
+
+        let id: i32 = diesel::sql_query(
+            r#"
+            INSERT INTO gm_agent_facebook_comments (
+                post_db_id, campaign_id, facebook_comment_id, parent_comment_id, comment_url,
+                comment_text, reason, suggested_reply, suggested_dm, suggested_reply_post,
+                comment_user_id, comment_username, comment_user_url, comment_user_profile_picture,
+                like_count, reply_count, threading_depth, created_at_ts, comment_created_at,
+                facebook_post_id, post_url, status
+            )
+            VALUES (
+                $1, $2, $3, $4, $5,
+                $6, $7, $8, $9, $10,
+                $11, $12, $13, $14,
+                $15, $16, $17, $18, $19,
+                $20, $21, 0
+            )
+            ON CONFLICT (facebook_comment_id, post_db_id) DO UPDATE SET
+                campaign_id = EXCLUDED.campaign_id,
+                parent_comment_id = EXCLUDED.parent_comment_id,
+                comment_url = EXCLUDED.comment_url,
+                comment_text = EXCLUDED.comment_text,
+                reason = EXCLUDED.reason,
+                suggested_reply = EXCLUDED.suggested_reply,
+                suggested_dm = EXCLUDED.suggested_dm,
+                suggested_reply_post = EXCLUDED.suggested_reply_post,
+                comment_user_id = EXCLUDED.comment_user_id,
+                comment_username = EXCLUDED.comment_username,
+                comment_user_url = EXCLUDED.comment_user_url,
+                comment_user_profile_picture = EXCLUDED.comment_user_profile_picture,
+                like_count = EXCLUDED.like_count,
+                reply_count = EXCLUDED.reply_count,
+                threading_depth = EXCLUDED.threading_depth,
+                created_at_ts = EXCLUDED.created_at_ts,
+                comment_created_at = EXCLUDED.comment_created_at,
+                facebook_post_id = EXCLUDED.facebook_post_id,
+                post_url = EXCLUDED.post_url,
+                status = 0,
+                updated_at = NOW()
+            RETURNING id
+            "#,
+        )
+        .bind::<Integer, _>(content_db_id)
+        .bind::<Integer, _>(campaign_id)
+        .bind::<Text, _>(&comment.comment_id)
+        .bind::<diesel::sql_types::Nullable<Text>, _>(comment.parent_id.as_ref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Self::json_string(raw, &["comment_url"]))
+        .bind::<Text, _>(&comment.text)
+        .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.reason.as_ref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.reply_text.as_ref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.dm_text.as_ref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.post_reply_text.as_ref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(
+            comment.author_uid.as_ref().or(Some(&comment.author)),
+        )
+        .bind::<diesel::sql_types::Nullable<Text>, _>(
+            comment.author_name.as_ref().or(Some(&comment.author)),
+        )
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Self::json_string(raw, &["author", "url"]))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Self::json_string(
+            raw,
+            &["author", "profile_image"],
+        ))
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(comment.likes as i32))
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(comment.reply_count))
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(
+            Self::json_i64(raw, &["depth"]).map(|value| value as i32),
+        )
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::BigInt>, _>(created_at_ts)
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>, _>(comment_created_at)
+        .bind::<diesel::sql_types::Nullable<Text>, _>(facebook_post_id.as_ref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(post_url.as_ref())
+        .get_result::<CommentInsertResult>(&mut conn)
+        .map_err(DbError::from)?
+        .id;
+
+        debug!(comment_id = %comment.comment_id, db_id = id, "Upserted Facebook comment");
         Ok(id)
     }
 
@@ -609,21 +940,98 @@ impl PostgresAdapter {
     ) -> DbResult<i32> {
         let mut conn = self.conn_async().await?;
 
+        let parsed_comment = Self::parse_twitter_raw(comment.raw_data.as_ref());
+        let twitter_user = parsed_comment
+            .as_ref()
+            .and_then(|tweet| tweet.author.as_ref().or(tweet.user_info.as_ref()));
+        let conversation_id = parsed_comment
+            .as_ref()
+            .and_then(|tweet| tweet.conversation_id.clone())
+            .or_else(|| (!comment.content_id.is_empty()).then(|| comment.content_id.clone()));
+        let comment_screen_name = parsed_comment
+            .as_ref()
+            .and_then(|tweet| tweet.author_handle().map(ToString::to_string))
+            .or_else(|| (!comment.author.is_empty()).then(|| comment.author.clone()));
+        let comment_user_name = parsed_comment
+            .as_ref()
+            .and_then(|tweet| tweet.author_name().map(ToString::to_string))
+            .or_else(|| comment.author_name.clone());
+        let comment_user_id = parsed_comment
+            .as_ref()
+            .and_then(|tweet| tweet.user_id().map(ToString::to_string))
+            .or_else(|| comment.author_uid.clone());
+        let comment_user_followers =
+            twitter_user.and_then(|user| user.followers_count).map(Self::i64_to_i32);
+        let favorite_count = parsed_comment
+            .as_ref()
+            .map(|tweet| Self::i64_to_i32(tweet.like_count()))
+            .or_else(|| Some(Self::i64_to_i32(comment.likes)));
+        let retweet_count = parsed_comment
+            .as_ref()
+            .map(|tweet| Self::i64_to_i32(tweet.retweet_count()));
+        let reply_count = parsed_comment
+            .as_ref()
+            .map(|tweet| Self::i64_to_i32(tweet.reply_count()))
+            .or(Some(comment.reply_count));
+        let in_reply_to_status_id = parsed_comment
+            .as_ref()
+            .and_then(|tweet| tweet.in_reply_to_status_id_str.clone())
+            .or_else(|| comment.parent_id.clone());
+        let is_reply = parsed_comment
+            .as_ref()
+            .map(|tweet| tweet.is_reply())
+            .or(Some(comment.is_reply));
+        let media_urls = parsed_comment
+            .as_ref()
+            .and_then(Self::twitter_media_bind_value);
+        let has_media = parsed_comment.as_ref().map(|tweet| tweet.has_media());
+        let created_at_str = parsed_comment
+            .as_ref()
+            .and_then(|tweet| tweet.created_at.clone());
+        let created_at_ts = comment
+            .created_at
+            .or_else(|| parsed_comment.as_ref().and_then(|tweet| tweet.created_at_timestamp()));
+        let comment_created_at = Self::timestamp_to_datetime(created_at_ts);
+
         // Constraint: UNIQUE (twitter_comment_id, tweet_db_id)
         let id: i32 = diesel::sql_query(
             r#"
             INSERT INTO gm_agent_twitter_comments (
-                tweet_db_id, campaign_id, twitter_comment_id, comment_text,
-                comment_user_id, comment_screen_name, comment_user_name,
-                favorite_count, retweet_count, created_at_ts,
-                reason, suggested_reply, suggested_dm, suggested_reply_post, status
+                tweet_db_id, campaign_id, twitter_comment_id, conversation_id,
+                comment_screen_name, comment_user_name, comment_user_id, comment_user_followers,
+                comment_text, reason, suggested_reply, favorite_count,
+                retweet_count, reply_count, in_reply_to_status_id, is_reply,
+                media_urls, has_media, created_at_str, created_at_ts,
+                comment_created_at, suggested_dm, suggested_reply_post, status
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0)
+            VALUES (
+                $1, $2, $3, $4,
+                $5, $6, $7, $8,
+                $9, $10, $11, $12,
+                $13, $14, $15, $16,
+                $17, $18, $19, $20,
+                $21, $22, $23, 0
+            )
             ON CONFLICT (twitter_comment_id, tweet_db_id) DO UPDATE SET
                 campaign_id = EXCLUDED.campaign_id,
+                conversation_id = EXCLUDED.conversation_id,
+                comment_screen_name = EXCLUDED.comment_screen_name,
+                comment_user_name = EXCLUDED.comment_user_name,
+                comment_user_id = EXCLUDED.comment_user_id,
+                comment_user_followers = EXCLUDED.comment_user_followers,
                 comment_text = EXCLUDED.comment_text,
                 reason = EXCLUDED.reason,
                 suggested_reply = EXCLUDED.suggested_reply,
+                favorite_count = EXCLUDED.favorite_count,
+                retweet_count = EXCLUDED.retweet_count,
+                reply_count = EXCLUDED.reply_count,
+                in_reply_to_status_id = EXCLUDED.in_reply_to_status_id,
+                is_reply = EXCLUDED.is_reply,
+                media_urls = EXCLUDED.media_urls,
+                has_media = EXCLUDED.has_media,
+                created_at_str = EXCLUDED.created_at_str,
+                created_at_ts = EXCLUDED.created_at_ts,
+                comment_created_at = EXCLUDED.comment_created_at,
                 suggested_dm = EXCLUDED.suggested_dm,
                 suggested_reply_post = EXCLUDED.suggested_reply_post,
                 status = 0,
@@ -633,16 +1041,27 @@ impl PostgresAdapter {
         )
         .bind::<Integer, _>(content_db_id)
         .bind::<Integer, _>(campaign_id)
-        .bind::<Text, _>(&comment.comment_id) // twitter_comment_id
-        .bind::<diesel::sql_types::Nullable<Text>, _>(Some(&comment.text)) // comment_text
-        .bind::<diesel::sql_types::Nullable<Text>, _>(comment.author_uid.as_ref()) // comment_user_id
-        .bind::<diesel::sql_types::Nullable<Text>, _>(Some(&comment.author)) // comment_screen_name
-        .bind::<diesel::sql_types::Nullable<Text>, _>(comment.author_name.as_ref()) // comment_user_name
-        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(comment.likes as i32))
-        .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(comment.reply_count))
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::BigInt>, _>(comment.created_at)
+        .bind::<Text, _>(&comment.comment_id)
+        .bind::<diesel::sql_types::Nullable<Text>, _>(conversation_id.as_deref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(comment_screen_name.as_deref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(comment_user_name.as_deref())
+        .bind::<diesel::sql_types::Nullable<Text>, _>(comment_user_id.as_deref())
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(comment_user_followers)
+        .bind::<Text, _>(&comment.text)
         .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.reason.as_ref())
         .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.reply_text.as_ref())
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(favorite_count)
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(retweet_count)
+        .bind::<diesel::sql_types::Nullable<Integer>, _>(reply_count)
+        .bind::<diesel::sql_types::Nullable<Text>, _>(in_reply_to_status_id.as_deref())
+        .bind::<diesel::sql_types::Nullable<Bool>, _>(is_reply)
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Array<diesel::sql_types::Nullable<Text>>>, _>(
+            media_urls,
+        )
+        .bind::<diesel::sql_types::Nullable<Bool>, _>(has_media)
+        .bind::<diesel::sql_types::Nullable<Text>, _>(created_at_str.as_deref())
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::BigInt>, _>(created_at_ts)
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>, _>(comment_created_at)
         .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.dm_text.as_ref())
         .bind::<diesel::sql_types::Nullable<Text>, _>(suggestion.post_reply_text.as_ref())
         .get_result::<CommentInsertResult>(&mut conn)
@@ -661,50 +1080,126 @@ impl PostgresAdapter {
 
 #[async_trait]
 impl ContentRepository for PostgresAdapter {
-    async fn content_exists(&self, _platform: &str, content_id: &str) -> DbResult<bool> {
-        use schema::gm_agent_videos::dsl;
-
+    async fn content_exists(&self, platform: &str, content_id: &str) -> DbResult<bool> {
         let mut conn = self.conn_async().await?;
 
-        let count: i64 = dsl::gm_agent_videos
-            .filter(dsl::video_id.eq(content_id))
-            .count()
-            .get_result(&mut conn)
-            .map_err(DbError::from)?;
+        let count: i64 = match platform.to_lowercase().as_str() {
+            "facebook" => {
+                use schema::gm_agent_facebook_posts::dsl;
+                dsl::gm_agent_facebook_posts
+                    .filter(dsl::facebook_post_id.eq(content_id))
+                    .count()
+                    .get_result(&mut conn)
+                    .map_err(DbError::from)?
+            }
+            "twitter" => {
+                use schema::gm_agent_twitter_tweets::dsl;
+                dsl::gm_agent_twitter_tweets
+                    .filter(dsl::twitter_tweet_id.eq(content_id))
+                    .count()
+                    .get_result(&mut conn)
+                    .map_err(DbError::from)?
+            }
+            _ => {
+                use schema::gm_agent_videos::dsl;
+                dsl::gm_agent_videos
+                    .filter(dsl::video_id.eq(content_id))
+                    .count()
+                    .get_result(&mut conn)
+                    .map_err(DbError::from)?
+            }
+        };
 
         Ok(count > 0)
     }
 
     async fn get_content(
         &self,
-        _platform: &str,
+        platform: &str,
         content_id: &str,
     ) -> DbResult<Option<StoredContent>> {
-        use schema::gm_agent_videos::dsl;
-
         let mut conn = self.conn_async().await?;
 
-        let result: Option<models::AgentVideo> = dsl::gm_agent_videos
-            .filter(dsl::video_id.eq(content_id))
-            .first(&mut conn)
-            .optional()
-            .map_err(DbError::from)?;
+        match platform.to_lowercase().as_str() {
+            "facebook" => {
+                use schema::gm_agent_facebook_posts::dsl;
 
-        Ok(result.map(|v| self.convert_video_to_content(&v)))
+                let result: Option<models::FacebookPost> = dsl::gm_agent_facebook_posts
+                    .filter(dsl::facebook_post_id.eq(content_id))
+                    .first(&mut conn)
+                    .optional()
+                    .map_err(DbError::from)?;
+
+                Ok(result.map(|post| self.convert_facebook_post_to_content(&post)))
+            }
+            "twitter" => {
+                use schema::gm_agent_twitter_tweets::dsl;
+
+                let result: Option<models::TwitterTweet> = dsl::gm_agent_twitter_tweets
+                    .filter(dsl::twitter_tweet_id.eq(content_id))
+                    .first(&mut conn)
+                    .optional()
+                    .map_err(DbError::from)?;
+
+                Ok(result.map(|tweet| self.convert_twitter_tweet_to_content(&tweet)))
+            }
+            _ => {
+                use schema::gm_agent_videos::dsl;
+
+                let result: Option<models::AgentVideo> = dsl::gm_agent_videos
+                    .filter(dsl::video_id.eq(content_id))
+                    .first(&mut conn)
+                    .optional()
+                    .map_err(DbError::from)?;
+
+                Ok(result.map(|video| self.convert_video_to_content(&video)))
+            }
+        }
     }
 
     async fn get_content_by_id(&self, id: i32) -> DbResult<Option<StoredContent>> {
-        use schema::gm_agent_videos::dsl;
-
         let mut conn = self.conn_async().await?;
+        {
+            use schema::gm_agent_videos::dsl;
 
-        let result: Option<models::AgentVideo> = dsl::gm_agent_videos
-            .find(id)
-            .first(&mut conn)
-            .optional()
-            .map_err(DbError::from)?;
+            let result: Option<models::AgentVideo> = dsl::gm_agent_videos
+                .find(id)
+                .first(&mut conn)
+                .optional()
+                .map_err(DbError::from)?;
 
-        Ok(result.map(|v| self.convert_video_to_content(&v)))
+            if let Some(video) = result {
+                return Ok(Some(self.convert_video_to_content(&video)));
+            }
+        }
+        {
+            use schema::gm_agent_facebook_posts::dsl;
+
+            let result: Option<models::FacebookPost> = dsl::gm_agent_facebook_posts
+                .find(id)
+                .first(&mut conn)
+                .optional()
+                .map_err(DbError::from)?;
+
+            if let Some(post) = result {
+                return Ok(Some(self.convert_facebook_post_to_content(&post)));
+            }
+        }
+        {
+            use schema::gm_agent_twitter_tweets::dsl;
+
+            let result: Option<models::TwitterTweet> = dsl::gm_agent_twitter_tweets
+                .find(id)
+                .first(&mut conn)
+                .optional()
+                .map_err(DbError::from)?;
+
+            if let Some(tweet) = result {
+                return Ok(Some(self.convert_twitter_tweet_to_content(&tweet)));
+            }
+        }
+
+        Ok(None)
     }
 
     async fn save_content(
@@ -716,6 +1211,7 @@ impl ContentRepository for PostgresAdapter {
         // Route to platform-specific save method
         let platform = content.platform.to_lowercase();
         match platform.as_str() {
+            "facebook" => self.save_facebook_post(content, campaign_id, task_id).await,
             "instagram" => self.save_instagram_post(content, campaign_id, task_id).await,
             "reddit" => self.save_reddit_post(content, campaign_id, task_id).await,
             "twitter" => self.save_twitter_tweet(content, campaign_id, task_id).await,
@@ -746,15 +1242,29 @@ impl ContentRepository for PostgresAdapter {
         views: i64,
     ) -> DbResult<()> {
         use schema::gm_agent_videos::dsl;
+        use schema::gm_agent_twitter_tweets::dsl as twitter_dsl;
 
         let mut conn = self.conn_async().await?;
 
-        diesel::update(dsl::gm_agent_videos.find(id))
+        let updated = diesel::update(dsl::gm_agent_videos.find(id))
             .set((
-                dsl::like_count.eq(likes as i32),
-                dsl::comment_count.eq(comments as i32),
-                dsl::share_count.eq(shares as i32),
-                dsl::play_count.eq(views as i32),
+                dsl::like_count.eq(Self::i64_to_i32(likes)),
+                dsl::comment_count.eq(Self::i64_to_i32(comments)),
+                dsl::share_count.eq(Self::i64_to_i32(shares)),
+                dsl::play_count.eq(Self::i64_to_i32(views)),
+            ))
+            .execute(&mut conn)
+            .map_err(DbError::from)?;
+        if updated > 0 {
+            return Ok(());
+        }
+
+        diesel::update(twitter_dsl::gm_agent_twitter_tweets.find(id))
+            .set((
+                twitter_dsl::favorite_count.eq(Some(Self::i64_to_i32(likes))),
+                twitter_dsl::reply_count.eq(Some(Self::i64_to_i32(comments))),
+                twitter_dsl::retweet_count.eq(Some(Self::i64_to_i32(shares))),
+                twitter_dsl::view_count.eq(Some(Self::i64_to_i32(views))),
             ))
             .execute(&mut conn)
             .map_err(DbError::from)?;
@@ -762,53 +1272,161 @@ impl ContentRepository for PostgresAdapter {
         Ok(())
     }
 
-    async fn comment_exists(&self, _platform: &str, comment_id: &str) -> DbResult<bool> {
-        use schema::gm_agent_comments::dsl;
-
+    async fn comment_exists(&self, platform: &str, comment_id: &str) -> DbResult<bool> {
         let mut conn = self.conn_async().await?;
 
-        let count: i64 = dsl::gm_agent_comments
-            .filter(dsl::comment_id.eq(comment_id))
-            .count()
-            .get_result(&mut conn)
-            .map_err(DbError::from)?;
+        let count: i64 = match platform.to_lowercase().as_str() {
+            "facebook" => {
+                use schema::gm_agent_facebook_comments::dsl;
+                dsl::gm_agent_facebook_comments
+                    .filter(dsl::facebook_comment_id.eq(comment_id))
+                    .count()
+                    .get_result(&mut conn)
+                    .map_err(DbError::from)?
+            }
+            "twitter" => {
+                use schema::gm_agent_twitter_comments::dsl;
+                dsl::gm_agent_twitter_comments
+                    .filter(dsl::twitter_comment_id.eq(comment_id))
+                    .count()
+                    .get_result(&mut conn)
+                    .map_err(DbError::from)?
+            }
+            _ => {
+                use schema::gm_agent_comments::dsl;
+                dsl::gm_agent_comments
+                    .filter(dsl::comment_id.eq(comment_id))
+                    .count()
+                    .get_result(&mut conn)
+                    .map_err(DbError::from)?
+            }
+        };
 
         Ok(count > 0)
     }
 
     async fn get_comment(
         &self,
-        _platform: &str,
+        platform: &str,
         comment_id: &str,
     ) -> DbResult<Option<StoredComment>> {
-        use schema::gm_agent_comments::dsl;
-
         let mut conn = self.conn_async().await?;
 
-        let result: Option<models::AgentComment> = dsl::gm_agent_comments
-            .filter(dsl::comment_id.eq(comment_id))
-            .first(&mut conn)
-            .optional()
-            .map_err(DbError::from)?;
+        match platform.to_lowercase().as_str() {
+            "facebook" => {
+                use schema::gm_agent_facebook_comments::dsl;
 
-        Ok(result.map(|c| self.convert_agent_comment(&c)))
+                let result: Option<models::FacebookComment> = dsl::gm_agent_facebook_comments
+                    .filter(dsl::facebook_comment_id.eq(comment_id))
+                    .first(&mut conn)
+                    .optional()
+                    .map_err(DbError::from)?;
+
+                Ok(result.map(|comment| self.convert_facebook_comment(&comment)))
+            }
+            "twitter" => {
+                use schema::gm_agent_twitter_comments::dsl;
+
+                let result: Option<models::TwitterComment> = dsl::gm_agent_twitter_comments
+                    .filter(dsl::twitter_comment_id.eq(comment_id))
+                    .first(&mut conn)
+                    .optional()
+                    .map_err(DbError::from)?;
+
+                Ok(result.map(|comment| self.convert_twitter_comment(&comment)))
+            }
+            _ => {
+                use schema::gm_agent_comments::dsl;
+
+                let result: Option<models::AgentComment> = dsl::gm_agent_comments
+                    .filter(dsl::comment_id.eq(comment_id))
+                    .first(&mut conn)
+                    .optional()
+                    .map_err(DbError::from)?;
+
+                Ok(result.map(|comment| self.convert_agent_comment(&comment)))
+            }
+        }
     }
 
     async fn get_comment_by_id(&self, id: i32) -> DbResult<Option<StoredComment>> {
-        use schema::gm_agent_comments::dsl;
-
         let mut conn = self.conn_async().await?;
+        {
+            use schema::gm_agent_comments::dsl;
 
-        let result: Option<models::AgentComment> = dsl::gm_agent_comments
-            .find(id)
-            .first(&mut conn)
-            .optional()
-            .map_err(DbError::from)?;
+            let result: Option<models::AgentComment> = dsl::gm_agent_comments
+                .find(id)
+                .first(&mut conn)
+                .optional()
+                .map_err(DbError::from)?;
 
-        Ok(result.map(|c| self.convert_agent_comment(&c)))
+            if let Some(comment) = result {
+                return Ok(Some(self.convert_agent_comment(&comment)));
+            }
+        }
+        {
+            use schema::gm_agent_facebook_comments::dsl;
+
+            let result: Option<models::FacebookComment> = dsl::gm_agent_facebook_comments
+                .find(id)
+                .first(&mut conn)
+                .optional()
+                .map_err(DbError::from)?;
+
+            if let Some(comment) = result {
+                return Ok(Some(self.convert_facebook_comment(&comment)));
+            }
+        }
+        {
+            use schema::gm_agent_twitter_comments::dsl;
+
+            let result: Option<models::TwitterComment> = dsl::gm_agent_twitter_comments
+                .find(id)
+                .first(&mut conn)
+                .optional()
+                .map_err(DbError::from)?;
+
+            if let Some(comment) = result {
+                return Ok(Some(self.convert_twitter_comment(&comment)));
+            }
+        }
+
+        Ok(None)
     }
 
     async fn save_comment(&self, comment: &Comment, content_db_id: i32) -> DbResult<i32> {
+        if comment.platform.eq_ignore_ascii_case("facebook") {
+            let campaign_id = self
+                .get_facebook_post_context(content_db_id)
+                .await?
+                .0
+                .unwrap_or(0);
+            return self
+                .save_facebook_comment(
+                    comment,
+                    content_db_id,
+                    campaign_id,
+                    &ReplySuggestion::new(comment.comment_id.clone()),
+                )
+                .await;
+        }
+
+        if comment.platform.eq_ignore_ascii_case("twitter") {
+            let campaign_id = self
+                .get_twitter_tweet_context(content_db_id)
+                .await?
+                .0
+                .unwrap_or(0);
+            return self
+                .save_twitter_comment(
+                    comment,
+                    content_db_id,
+                    campaign_id,
+                    &ReplySuggestion::new(comment.comment_id.clone()),
+                )
+                .await;
+        }
+
         use schema::gm_agent_comments::dsl;
 
         let mut conn = self.conn_async().await?;
@@ -853,6 +1471,7 @@ impl ContentRepository for PostgresAdapter {
     ///
     /// Routes to platform-specific tables:
     /// - TikTok: gm_agent_comments
+    /// - Facebook: gm_agent_facebook_comments
     /// - Instagram: gm_agent_instagram_comments
     /// - Reddit: gm_agent_reddit_comments
     /// - Twitter: gm_agent_twitter_comments
@@ -866,6 +1485,10 @@ impl ContentRepository for PostgresAdapter {
         // Route to platform-specific save method
         let platform = comment.platform.to_lowercase();
         match platform.as_str() {
+            "facebook" => {
+                self.save_facebook_comment(comment, content_db_id, campaign_id, suggestion)
+                    .await
+            }
             "instagram" => {
                 self.save_instagram_comment(comment, content_db_id, campaign_id, suggestion)
                     .await
@@ -892,6 +1515,7 @@ impl ContentRepository for PostgresAdapter {
         limit: i32,
     ) -> DbResult<Vec<StoredComment>> {
         use schema::gm_agent_comments::dsl;
+        use schema::gm_agent_twitter_comments::dsl as twitter_dsl;
 
         let mut conn = self.conn_async().await?;
 
@@ -902,19 +1526,61 @@ impl ContentRepository for PostgresAdapter {
             .load(&mut conn)
             .map_err(DbError::from)?;
 
-        Ok(results
+        let mut pending_comments = results
             .iter()
-            .map(|c| self.convert_agent_comment(c))
-            .collect())
+            .map(|comment| self.convert_agent_comment(comment))
+            .collect::<Vec<_>>();
+
+        let remaining = limit.saturating_sub(pending_comments.len() as i32);
+        if remaining > 0 {
+            let twitter_results: Vec<models::TwitterComment> = twitter_dsl::gm_agent_twitter_comments
+                .filter(twitter_dsl::campaign_id.eq(campaign_id))
+                .filter(twitter_dsl::status.eq(Some(CommentStatus::Pending as i16)))
+                .limit(remaining as i64)
+                .load(&mut conn)
+                .map_err(DbError::from)?;
+
+            pending_comments.extend(
+                twitter_results
+                    .iter()
+                    .map(|comment| self.convert_twitter_comment(comment)),
+            );
+        }
+
+        Ok(pending_comments)
     }
 
     async fn update_comment_status(&self, id: i32, status: CommentStatus) -> DbResult<()> {
         use schema::gm_agent_comments::dsl;
+        use schema::gm_agent_facebook_comments::dsl as facebook_dsl;
+        use schema::gm_agent_twitter_comments::dsl as twitter_dsl;
 
         let mut conn = self.conn_async().await?;
 
-        diesel::update(dsl::gm_agent_comments.find(id))
+        let updated = diesel::update(dsl::gm_agent_comments.find(id))
             .set(dsl::status.eq(status as i16))
+            .execute(&mut conn)
+            .map_err(DbError::from)?;
+        if updated > 0 {
+            return Ok(());
+        }
+
+        let updated = diesel::update(facebook_dsl::gm_agent_facebook_comments.find(id))
+            .set((
+                facebook_dsl::status.eq(Some(status as i16)),
+                facebook_dsl::updated_at.eq(Some(chrono::Utc::now())),
+            ))
+            .execute(&mut conn)
+            .map_err(DbError::from)?;
+        if updated > 0 {
+            return Ok(());
+        }
+
+        diesel::update(twitter_dsl::gm_agent_twitter_comments.find(id))
+            .set((
+                twitter_dsl::status.eq(Some(status as i16)),
+                twitter_dsl::updated_at.eq(Some(chrono::Utc::now())),
+            ))
             .execute(&mut conn)
             .map_err(DbError::from)?;
 
@@ -928,9 +1594,10 @@ impl ContentRepository for PostgresAdapter {
         suggestion: &ReplySuggestion,
     ) -> DbResult<i32> {
         use schema::gm_agent_comments::dsl;
+        use schema::gm_agent_facebook_comments::dsl as facebook_dsl;
+        use schema::gm_agent_twitter_comments::dsl as twitter_dsl;
 
         let mut conn = self.conn_async().await?;
-
         // Update the comment with AI analysis results
         // Matching Python agent: updated_at = NOW()
         let update = models::UpdateAgentComment {
@@ -942,10 +1609,36 @@ impl ContentRepository for PostgresAdapter {
             updated_at: Some(chrono::Utc::now()), // Matching Python: updated_at = NOW()
         };
 
-        diesel::update(dsl::gm_agent_comments.find(comment_id))
+        let updated = diesel::update(dsl::gm_agent_comments.find(comment_id))
             .set(&update)
             .execute(&mut conn)
             .map_err(DbError::from)?;
+        if updated == 0 {
+            let updated = diesel::update(facebook_dsl::gm_agent_facebook_comments.find(comment_id))
+                .set((
+                    facebook_dsl::reason.eq(suggestion.reason.as_ref()),
+                    facebook_dsl::suggested_reply.eq(suggestion.reply_text.as_ref()),
+                    facebook_dsl::suggested_dm.eq(suggestion.dm_text.as_ref()),
+                    facebook_dsl::suggested_reply_post.eq(suggestion.post_reply_text.as_ref()),
+                    facebook_dsl::status.eq(Some(CommentStatus::Completed as i16)),
+                    facebook_dsl::updated_at.eq(Some(chrono::Utc::now())),
+                ))
+                .execute(&mut conn)
+                .map_err(DbError::from)?;
+            if updated == 0 {
+                diesel::update(twitter_dsl::gm_agent_twitter_comments.find(comment_id))
+                    .set((
+                        twitter_dsl::reason.eq(suggestion.reason.as_ref()),
+                        twitter_dsl::suggested_reply.eq(suggestion.reply_text.as_ref()),
+                        twitter_dsl::suggested_dm.eq(suggestion.dm_text.as_ref()),
+                        twitter_dsl::suggested_reply_post.eq(suggestion.post_reply_text.as_ref()),
+                        twitter_dsl::status.eq(Some(CommentStatus::Completed as i16)),
+                        twitter_dsl::updated_at.eq(Some(chrono::Utc::now())),
+                    ))
+                    .execute(&mut conn)
+                    .map_err(DbError::from)?;
+            }
+        }
 
         debug!(comment_id, "Saved AI analysis to comment");
         Ok(comment_id) // Return comment_id as the "analysis id"
@@ -953,6 +1646,8 @@ impl ContentRepository for PostgresAdapter {
 
     async fn get_analysis(&self, comment_id: i32) -> DbResult<Option<StoredAnalysis>> {
         use schema::gm_agent_comments::dsl;
+        use schema::gm_agent_facebook_comments::dsl as facebook_dsl;
+        use schema::gm_agent_twitter_comments::dsl as twitter_dsl;
 
         let mut conn = self.conn_async().await?;
 
@@ -962,7 +1657,7 @@ impl ContentRepository for PostgresAdapter {
             .optional()
             .map_err(DbError::from)?;
 
-        Ok(result.and_then(|c| {
+        if let Some(analysis) = result.and_then(|c| {
             // Only return if analysis exists
             if c.suggested_reply.is_some()
                 || c.suggested_dm.is_some()
@@ -976,6 +1671,60 @@ impl ContentRepository for PostgresAdapter {
                     suggested_dm: c.suggested_dm,
                     suggested_reply_post: c.suggested_reply_post,
                     reason: c.reason,
+                    tokens_used: None,
+                    model_name: None,
+                })
+            } else {
+                None
+            }
+        }) {
+            return Ok(Some(analysis));
+        }
+
+        let result: Option<models::FacebookComment> = facebook_dsl::gm_agent_facebook_comments
+            .find(comment_id)
+            .first(&mut conn)
+            .optional()
+            .map_err(DbError::from)?;
+
+        if let Some(comment) = result {
+            if comment.suggested_reply.is_some()
+                || comment.suggested_dm.is_some()
+                || comment.suggested_reply_post.is_some()
+            {
+                return Ok(Some(StoredAnalysis {
+                    id: comment.id,
+                    comment_id: comment.id,
+                    campaign_id: comment.campaign_id.unwrap_or(0),
+                    suggested_reply: comment.suggested_reply,
+                    suggested_dm: comment.suggested_dm,
+                    suggested_reply_post: comment.suggested_reply_post,
+                    reason: comment.reason,
+                    tokens_used: None,
+                    model_name: None,
+                }));
+            }
+        }
+
+        let result: Option<models::TwitterComment> = twitter_dsl::gm_agent_twitter_comments
+            .find(comment_id)
+            .first(&mut conn)
+            .optional()
+            .map_err(DbError::from)?;
+
+        Ok(result.and_then(|comment| {
+            if comment.suggested_reply.is_some()
+                || comment.suggested_dm.is_some()
+                || comment.suggested_reply_post.is_some()
+            {
+                Some(StoredAnalysis {
+                    id: comment.id,
+                    comment_id: comment.id,
+                    campaign_id: comment.campaign_id.unwrap_or(0),
+                    suggested_reply: comment.suggested_reply,
+                    suggested_dm: comment.suggested_dm,
+                    suggested_reply_post: comment.suggested_reply_post,
+                    reason: comment.reason,
                     tokens_used: None,
                     model_name: None,
                 })
@@ -1391,6 +2140,71 @@ impl ProgressTracker for PostgresAdapter {
 // ============================================================
 
 impl PostgresAdapter {
+    fn json_at<'a>(
+        value: Option<&'a serde_json::Value>,
+        path: &[&str],
+    ) -> Option<&'a serde_json::Value> {
+        let mut current = value?;
+        for key in path {
+            current = current.get(*key)?;
+        }
+        Some(current)
+    }
+
+    fn json_string(value: Option<&serde_json::Value>, path: &[&str]) -> Option<String> {
+        match Self::json_at(value, path) {
+            Some(serde_json::Value::String(value)) => Some(value.clone()),
+            Some(serde_json::Value::Number(value)) => Some(value.to_string()),
+            Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
+            _ => None,
+        }
+    }
+
+    fn json_i64(value: Option<&serde_json::Value>, path: &[&str]) -> Option<i64> {
+        match Self::json_at(value, path) {
+            Some(serde_json::Value::Number(value)) => {
+                value.as_i64().or_else(|| value.as_u64().map(|v| v as i64))
+            }
+            Some(serde_json::Value::String(value)) => value.parse().ok(),
+            _ => None,
+        }
+    }
+
+    fn timestamp_to_datetime(timestamp: Option<i64>) -> Option<chrono::DateTime<chrono::Utc>> {
+        timestamp.and_then(|value| chrono::DateTime::<chrono::Utc>::from_timestamp(value, 0))
+    }
+
+    fn i64_to_i32(value: i64) -> i32 {
+        value.clamp(i32::MIN as i64, i32::MAX as i64) as i32
+    }
+
+    fn parse_twitter_raw(value: Option<&serde_json::Value>) -> Option<TikhubTwitterTweet> {
+        value
+            .cloned()
+            .and_then(|raw| serde_json::from_value::<TikhubTwitterTweet>(raw).ok())
+    }
+
+    fn twitter_media_bind_value(tweet: &TikhubTwitterTweet) -> Option<Vec<Option<String>>> {
+        let media_urls = tweet.media_urls();
+        if media_urls.is_empty() {
+            None
+        } else {
+            Some(media_urls.into_iter().map(Some).collect())
+        }
+    }
+
+    fn twitter_media_json(media_urls: Option<&Vec<Option<String>>>) -> Option<serde_json::Value> {
+        media_urls.map(|urls| {
+            serde_json::Value::Array(
+                urls.iter()
+                    .flatten()
+                    .cloned()
+                    .map(serde_json::Value::String)
+                    .collect(),
+            )
+        })
+    }
+
     fn convert_video_to_content(&self, v: &models::AgentVideo) -> StoredContent {
         StoredContent {
             id: v.id,
@@ -1407,6 +2221,111 @@ impl PostgresAdapter {
             content_created_at: v.publish_time,
             raw_data: None,
             campaign_id: v.campaign_id,
+        }
+    }
+
+    fn convert_facebook_post_to_content(&self, post: &models::FacebookPost) -> StoredContent {
+        StoredContent {
+            id: post.id,
+            platform_id: 3,
+            content_id: post.facebook_post_id.clone(),
+            author_unique_id: post.author_id.clone(),
+            author_nickname: post.author_name.clone(),
+            description: post.message.clone().or_else(|| post.message_rich.clone()),
+            content_url: post.url.clone(),
+            likes: post.reactions_count.map(|value| value as i64),
+            comments: post.comments_count.map(|value| value as i64),
+            shares: post.reshare_count.map(|value| value as i64),
+            views: None,
+            content_created_at: post.timestamp,
+            raw_data: Some(serde_json::json!({
+                "post_id": post.facebook_post_id.clone(),
+                "type": post.post_type.clone(),
+                "url": post.url.clone(),
+                "message": post.message.clone(),
+                "message_rich": post.message_rich.clone(),
+                "timestamp": post.timestamp,
+                "reactions_count": post.reactions_count,
+                "comments_count": post.comments_count,
+                "reshare_count": post.reshare_count,
+                "reactions": {
+                    "like": post.reactions_like,
+                    "love": post.reactions_love,
+                    "haha": post.reactions_haha,
+                    "wow": post.reactions_wow,
+                    "sad": post.reactions_sad,
+                    "angry": post.reactions_angry,
+                    "care": post.reactions_care
+                },
+                "author": {
+                    "id": post.author_id.clone(),
+                    "name": post.author_name.clone(),
+                    "url": post.author_url.clone(),
+                    "profile_picture_url": post.author_profile_picture_url.clone()
+                },
+                "author_title": post.author_title.clone(),
+                "image": {
+                    "uri": post.image_url.clone(),
+                    "width": post.image_width,
+                    "height": post.image_height,
+                    "id": post.image_id.clone()
+                },
+                "video_thumbnail": post.video_thumbnail.clone(),
+                "external_url": post.external_url.clone(),
+                "attached_post_url": post.attached_post_url.clone(),
+                "comments_id": post.comments_id.clone(),
+                "shares_id": post.shares_id.clone()
+            })),
+            campaign_id: post.campaign_id,
+        }
+    }
+
+    fn convert_twitter_tweet_to_content(&self, tweet: &models::TwitterTweet) -> StoredContent {
+        let content_url = tweet.screen_name.as_ref().map_or_else(
+            || Some(format!("https://twitter.com/i/web/status/{}", tweet.twitter_tweet_id)),
+            |screen_name| Some(format!("https://twitter.com/{screen_name}/status/{}", tweet.twitter_tweet_id)),
+        );
+
+        StoredContent {
+            id: tweet.id,
+            platform_id: 5,
+            content_id: tweet.twitter_tweet_id.clone(),
+            author_unique_id: tweet.screen_name.clone(),
+            author_nickname: tweet.user_name.clone(),
+            description: Some(tweet.full_text.clone()),
+            content_url,
+            likes: tweet.favorite_count.map(|value| value as i64),
+            comments: tweet.reply_count.map(|value| value as i64),
+            shares: tweet.retweet_count.map(|value| value as i64),
+            views: tweet.view_count.map(|value| value as i64),
+            content_created_at: tweet.created_at_ts,
+            raw_data: Some(serde_json::json!({
+                "tweet_id": tweet.twitter_tweet_id.clone(),
+                "type": "tweet",
+                "text": tweet.full_text.clone(),
+                "created_at": tweet.created_at_str.clone(),
+                "conversation_id": tweet.conversation_id.clone(),
+                "lang": tweet.lang.clone(),
+                "bookmarks": tweet.bookmark_count,
+                "favorites": tweet.favorite_count,
+                "quotes": tweet.quote_count,
+                "replies": tweet.reply_count,
+                "retweets": tweet.retweet_count,
+                "views": tweet.view_count,
+                "user_info": {
+                    "rest_id": tweet.user_id.clone(),
+                    "screen_name": tweet.screen_name.clone(),
+                    "name": tweet.user_name.clone(),
+                    "description": tweet.user_description.clone(),
+                    "followers_count": tweet.user_followers_count,
+                    "avatar": tweet.user_avatar.clone(),
+                    "verified": tweet.user_verified
+                },
+                "media": Self::twitter_media_json(tweet.media_urls.as_ref()),
+                "in_reply_to_status_id_str": tweet.in_reply_to_status_id.clone(),
+                "in_reply_to_user_id_str": tweet.in_reply_to_user_id.clone()
+            })),
+            campaign_id: tweet.campaign_id,
         }
     }
 
@@ -1427,6 +2346,80 @@ impl PostgresAdapter {
             is_reply: false,
             raw_data: None,
             status: c.status,
+        }
+    }
+
+    fn convert_facebook_comment(&self, comment: &models::FacebookComment) -> StoredComment {
+        StoredComment {
+            id: comment.id,
+            platform_id: 3,
+            content_id: comment.post_db_id,
+            comment_id: comment.facebook_comment_id.clone(),
+            parent_comment_id: comment.parent_comment_id.clone(),
+            author_uid: comment.comment_user_id.clone(),
+            author_unique_id: comment.comment_user_id.clone(),
+            author_nickname: comment.comment_username.clone(),
+            comment_text: Some(comment.comment_text.clone()),
+            likes: comment.like_count.map(|value| value as i64),
+            reply_count: comment.reply_count,
+            comment_created_at: comment.created_at_ts,
+            is_reply: comment.parent_comment_id.is_some(),
+            raw_data: Some(serde_json::json!({
+                "comment_id": comment.facebook_comment_id.clone(),
+                "parent_comment_id": comment.parent_comment_id.clone(),
+                "comment_url": comment.comment_url.clone(),
+                "message": comment.comment_text.clone(),
+                "author": {
+                    "id": comment.comment_user_id.clone(),
+                    "name": comment.comment_username.clone(),
+                    "url": comment.comment_user_url.clone(),
+                    "profile_image": comment.comment_user_profile_picture.clone()
+                },
+                "reactions_count": comment.like_count,
+                "replies_count": comment.reply_count,
+                "depth": comment.threading_depth,
+                "created_time": comment.created_at_ts,
+                "facebook_post_id": comment.facebook_post_id.clone(),
+                "post_url": comment.post_url.clone()
+            })),
+            status: comment.status.unwrap_or(0),
+        }
+    }
+
+    fn convert_twitter_comment(&self, comment: &models::TwitterComment) -> StoredComment {
+        StoredComment {
+            id: comment.id,
+            platform_id: 5,
+            content_id: comment.tweet_db_id,
+            comment_id: comment.twitter_comment_id.clone(),
+            parent_comment_id: comment.in_reply_to_status_id.clone(),
+            author_uid: comment.comment_user_id.clone(),
+            author_unique_id: comment.comment_screen_name.clone(),
+            author_nickname: comment.comment_user_name.clone(),
+            comment_text: Some(comment.comment_text.clone()),
+            likes: comment.favorite_count.map(|value| value as i64),
+            reply_count: comment.reply_count,
+            comment_created_at: comment.created_at_ts,
+            is_reply: comment.is_reply.unwrap_or(false),
+            raw_data: Some(serde_json::json!({
+                "tweet_id": comment.twitter_comment_id.clone(),
+                "type": "tweet",
+                "text": comment.comment_text.clone(),
+                "created_at": comment.created_at_str.clone(),
+                "conversation_id": comment.conversation_id.clone(),
+                "favorites": comment.favorite_count,
+                "retweets": comment.retweet_count,
+                "replies": comment.reply_count,
+                "author": {
+                    "rest_id": comment.comment_user_id.clone(),
+                    "screen_name": comment.comment_screen_name.clone(),
+                    "name": comment.comment_user_name.clone(),
+                    "followers_count": comment.comment_user_followers
+                },
+                "media": Self::twitter_media_json(comment.media_urls.as_ref()),
+                "in_reply_to_status_id_str": comment.in_reply_to_status_id.clone()
+            })),
+            status: comment.status.unwrap_or(0),
         }
     }
 
@@ -1477,6 +2470,55 @@ impl PostgresAdapter {
             .map_err(DbError::from)?;
 
         Ok(video.and_then(|v| v.campaign_id))
+    }
+
+    async fn get_facebook_post_context(
+        &self,
+        post_db_id: i32,
+    ) -> DbResult<(Option<i32>, Option<String>, Option<String>)> {
+        use schema::gm_agent_facebook_posts::dsl;
+
+        let mut conn = self.conn_async().await?;
+
+        let post: Option<models::FacebookPost> = dsl::gm_agent_facebook_posts
+            .find(post_db_id)
+            .first(&mut conn)
+            .optional()
+            .map_err(DbError::from)?;
+
+        Ok(post
+            .map(|post| (post.campaign_id, post.url, Some(post.facebook_post_id)))
+            .unwrap_or((None, None, None)))
+    }
+
+    async fn get_twitter_tweet_context(
+        &self,
+        tweet_db_id: i32,
+    ) -> DbResult<(Option<i32>, Option<String>, Option<String>)> {
+        use schema::gm_agent_twitter_tweets::dsl;
+
+        let mut conn = self.conn_async().await?;
+
+        let tweet: Option<models::TwitterTweet> = dsl::gm_agent_twitter_tweets
+            .find(tweet_db_id)
+            .first(&mut conn)
+            .optional()
+            .map_err(DbError::from)?;
+
+        Ok(tweet
+            .map(|tweet| {
+                let url = tweet.screen_name.as_ref().map_or_else(
+                    || Some(format!("https://twitter.com/i/web/status/{}", tweet.twitter_tweet_id)),
+                    |screen_name| {
+                        Some(format!(
+                            "https://twitter.com/{screen_name}/status/{}",
+                            tweet.twitter_tweet_id
+                        ))
+                    },
+                );
+                (tweet.campaign_id, url, Some(tweet.twitter_tweet_id))
+            })
+            .unwrap_or((None, None, None)))
     }
 }
 

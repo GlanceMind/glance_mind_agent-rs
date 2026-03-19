@@ -81,9 +81,16 @@ jobs:
           #   - TIKHUB_API_KEY: TikHub API key
           #   - OPENAI_API_KEY: AI service API key (timicc)
           #
-          # Optional Vars (GitHub Vars/Secrets, have defaults):
+          # Optional Secrets (GitHub Secrets):
+          #   - FACEBOOK_RAPIDAPI_KEY: RapidAPI key for Facebook campaigns.
+          #     Leave empty to disable Facebook adapter registration in production.
+          #
+          # Optional Vars (GitHub Vars, have defaults):
+          #   - REDIS_URL: Redis connection URL (default: redis://host.docker.internal:6379/0)
           #   - TIKHUB_BASE_URL: TikHub API base URL (default: https://api.tikhub.io)
-          #   - OPENAI_BASE_URL: AI service base URL (default: https://timicc.com/v1)
+          #   - FACEBOOK_RAPIDAPI_HOST: RapidAPI host (default: facebook-scraper3.p.rapidapi.com)
+          #   - FACEBOOK_RAPIDAPI_BASE_URL: RapidAPI base URL (default: https://facebook-scraper3.p.rapidapi.com)
+          #   - OPENAI_BASE_URL: AI service base URL override (default: https://timicc.com/v1)
           #   - RUST_LOG: Log level (default: info,glance_mind_agent_rs=debug)
           #
           # ============================================================
@@ -112,8 +119,13 @@ jobs:
           # TikHub Base URL
           TIKHUB_BASE_URL=${{ vars.TIKHUB_BASE_URL || 'https://api.tikhub.io' }}
 
-          # AI Service Base URL (org secret)
-          OPENAI_BASE_URL=${{ secrets.OPENAI_BASE_URL }}
+          # Facebook RapidAPI (leave key empty to disable Facebook adapter)
+          FACEBOOK_RAPIDAPI_KEY=${{ secrets.FACEBOOK_RAPIDAPI_KEY }}
+          FACEBOOK_RAPIDAPI_HOST=${{ vars.FACEBOOK_RAPIDAPI_HOST || 'facebook-scraper3.p.rapidapi.com' }}
+          FACEBOOK_RAPIDAPI_BASE_URL=${{ vars.FACEBOOK_RAPIDAPI_BASE_URL || 'https://facebook-scraper3.p.rapidapi.com' }}
+
+          # AI Service Base URL (optional org/repo/environment variable)
+          OPENAI_BASE_URL=${{ vars.OPENAI_BASE_URL || 'https://timicc.com/v1' }}
 
           # Logging
           RUST_LOG=${{ vars.RUST_LOG || 'info,glance_mind_agent_rs=debug' }}

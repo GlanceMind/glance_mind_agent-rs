@@ -16,18 +16,19 @@
 └─────────────────────────────────────────────────────────────┘
                               │
                     ┌─────────┴─────────┐
-                    │   真实外部 API     │
-                    │  TikHub + OpenAI  │
+│   真实/Mock 外部 API │
+│ TikHub + Facebook Mock + LaoZhang Mock │
                     └───────────────────┘
 ```
 
 ## 测试场景
 
-- **Campaign**: 中国旅游 TikTok 推广
-- **关键词**: 中国旅游
-- **平台**: TikTok
-- **扫描数量**: 1 个视频
-- **AI 回复**: 总是返回 "OK"
+- **TikTok**: 中国旅游关键词抓取
+- **Instagram**: 话题内容抓取
+- **Reddit**: 关键字帖子抓取
+- **Twitter**: `twitter_tweet_id:` 直链抓取，默认走内部 TikHub mock
+- **Facebook**: `facebook_post_url:` 直链抓取，供应商默认走内部 mock
+- **AI 回复**: Campaign 模板要求回复尽量返回 "OK"
 
 ## 快速开始
 
@@ -38,15 +39,30 @@ cd e2e
 cp .env.example .env
 ```
 
-编辑 `.env` 填入真实 API 密钥：
+编辑 `.env` 填入需要的 API 密钥：
 
 ```bash
 # 必需
-TIKHUB_API_KEY=your_tikhub_api_key
 OPENAI_API_KEY=your_openai_api_key
 
-# 可选 (使用 SiliconFlow)
-OPENAI_BASE_URL=https://api.siliconflow.cn/v1
+# E2E 默认走内部 TikHub mock，可直接保留
+TIKHUB_API_KEY=mock-tikhub-key
+TIKHUB_BASE_URL=http://tikhub-mock:8500
+
+# 如需切换到真实 TikHub，再覆盖以下值
+# TIKHUB_API_KEY=your_tikhub_api_key
+# TIKHUB_BASE_URL=https://api.tikhub.io
+
+# 可选: 覆盖 Facebook E2E 默认 mock
+FACEBOOK_RAPIDAPI_KEY=your_facebook_rapidapi_key
+
+# 可选 (Facebook supplier override, E2E 默认为内部 mock)
+FACEBOOK_RAPIDAPI_HOST=facebook-scraper3.p.rapidapi.com
+FACEBOOK_RAPIDAPI_BASE_URL=http://facebook-scraper-mock:8600
+
+# OpenAI supplier override
+# 默认会被 docker-compose 固定到 laozhang-mock，只有你手动改 compose 时才需要
+OPENAI_BASE_URL=http://laozhang-mock:8100/v1
 AI_MODEL=deepseek-ai/DeepSeek-V3
 ```
 
@@ -55,6 +71,9 @@ AI_MODEL=deepseek-ai/DeepSeek-V3
 ```bash
 chmod +x scripts/*.sh
 ./scripts/start.sh
+
+# 只跑 Facebook
+./scripts/run_platform_test.sh facebook
 ```
 
 ### 3. 查看日志
@@ -78,6 +97,9 @@ python3 scripts/reset_campaign.py
 
 # 重新运行测试
 pytest test_e2e_china_travel.py -v
+
+# 或运行 Facebook 路径
+pytest test_e2e_facebook.py -v
 ```
 
 ### 5. 清理环境
@@ -90,10 +112,13 @@ pytest test_e2e_china_travel.py -v
 
 | 变量 | 必需 | 默认值 | 说明 |
 |------|------|--------|------|
-| `TIKHUB_API_KEY` | ✅ | - | TikHub API 密钥 |
+| `TIKHUB_API_KEY` | 仅 TikHub 场景强依赖 | mock-tikhub-key | TikHub API 密钥 |
+| `FACEBOOK_RAPIDAPI_KEY` | Facebook 场景 | mock-facebook-key | Facebook RapidAPI 密钥 |
 | `OPENAI_API_KEY` | ✅ | - | OpenAI API 密钥 |
-| `TIKHUB_BASE_URL` | ❌ | https://api.tikhub.io | TikHub API 地址 |
-| `OPENAI_BASE_URL` | ❌ | https://api.openai.com/v1 | OpenAI API 地址 |
+| `TIKHUB_BASE_URL` | ❌ | http://tikhub-mock:8500 | TikHub API 地址，E2E 默认走内部 mock |
+| `FACEBOOK_RAPIDAPI_HOST` | ❌ | facebook-scraper3.p.rapidapi.com | Facebook RapidAPI Host |
+| `FACEBOOK_RAPIDAPI_BASE_URL` | ❌ | http://facebook-scraper-mock:8600 | Facebook RapidAPI Base URL |
+| `OPENAI_BASE_URL` | 由 E2E compose 固定 | http://laozhang-mock:8100/v1 | OpenAI API 地址 |
 | `AI_MODEL` | ❌ | deepseek-ai/DeepSeek-V3 | AI 模型名称 |
 | `POSTGRES_PORT` | ❌ | 5433 | PostgreSQL 端口 |
 | `REDIS_PORT` | ❌ | 6380 | Redis 端口 |
@@ -113,6 +138,8 @@ pytest test_e2e_china_travel.py -v
 | 08 | wallet_updated | 验证钱包余额变化 |
 | 09 | summary | 打印测试汇总 |
 
+Twitter 端到端路径使用内部 `tikhub-mock`，Facebook 使用内部 `facebook-scraper-mock`，评论分析默认走内部 `laozhang-mock`，因此不依赖真实 Twitter/Facebook/OpenAI 供应商即可验证 Scheduler -> Agent-rs -> PostgreSQL 的全链路。
+
 ## 目录结构
 
 ```
@@ -128,7 +155,9 @@ e2e/
 │   ├── 02_budget_procedures.sql  # 预算管理存储过程
 │   ├── 03_seed_base.sql   # 基础数据 (平台、地区等)
 │   ├── 04_mock_user.sql   # E2E 测试用户
-│   └── 05_mock_campaign.sql  # E2E 测试 Campaign
+│   ├── 05_mock_campaign.sql  # TikTok E2E Campaign
+│   ├── 08_mock_twitter_campaign.sql  # Twitter E2E Campaign
+│   └── 09_mock_facebook_campaign.sql  # Facebook E2E Campaign
 ├── scripts/
 │   ├── start.sh           # 启动测试
 │   ├── cleanup.sh         # 清理环境

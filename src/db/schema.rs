@@ -150,6 +150,158 @@ table! {
 }
 
 // ============================================================
+// Facebook Posts table
+// ============================================================
+table! {
+    gm_agent_facebook_posts (id) {
+        id -> Int4,
+        task_id -> Int4,
+        campaign_id -> Nullable<Int4>,
+        facebook_post_id -> Varchar,
+        post_type -> Nullable<Varchar>,
+        url -> Nullable<Text>,
+        message -> Nullable<Text>,
+        message_rich -> Nullable<Text>,
+        timestamp -> Nullable<Int8>,
+        posted_at -> Nullable<Timestamptz>,
+        reactions_count -> Nullable<Int4>,
+        comments_count -> Nullable<Int4>,
+        reshare_count -> Nullable<Int4>,
+        reactions_like -> Nullable<Int4>,
+        reactions_love -> Nullable<Int4>,
+        reactions_haha -> Nullable<Int4>,
+        reactions_wow -> Nullable<Int4>,
+        reactions_sad -> Nullable<Int4>,
+        reactions_angry -> Nullable<Int4>,
+        reactions_care -> Nullable<Int4>,
+        author_id -> Nullable<Varchar>,
+        author_name -> Nullable<Varchar>,
+        author_url -> Nullable<Text>,
+        author_profile_picture_url -> Nullable<Text>,
+        author_title -> Nullable<Varchar>,
+        has_image -> Nullable<Bool>,
+        image_url -> Nullable<Text>,
+        image_width -> Nullable<Int4>,
+        image_height -> Nullable<Int4>,
+        image_id -> Nullable<Varchar>,
+        has_video -> Nullable<Bool>,
+        video_thumbnail -> Nullable<Text>,
+        external_url -> Nullable<Text>,
+        attached_post_url -> Nullable<Text>,
+        comments_id -> Nullable<Varchar>,
+        shares_id -> Nullable<Varchar>,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+// ============================================================
+// Facebook Comments table
+// ============================================================
+table! {
+    gm_agent_facebook_comments (id) {
+        id -> Int4,
+        post_db_id -> Int4,
+        campaign_id -> Nullable<Int4>,
+        facebook_comment_id -> Varchar,
+        parent_comment_id -> Nullable<Varchar>,
+        comment_url -> Nullable<Text>,
+        comment_text -> Text,
+        reason -> Nullable<Text>,
+        suggested_reply -> Nullable<Text>,
+        suggested_dm -> Nullable<Text>,
+        suggested_reply_post -> Nullable<Text>,
+        comment_user_id -> Nullable<Varchar>,
+        comment_username -> Nullable<Varchar>,
+        comment_user_url -> Nullable<Text>,
+        comment_user_profile_picture -> Nullable<Text>,
+        like_count -> Nullable<Int4>,
+        reply_count -> Nullable<Int4>,
+        threading_depth -> Nullable<Int4>,
+        created_at_ts -> Nullable<Int8>,
+        comment_created_at -> Nullable<Timestamptz>,
+        facebook_post_id -> Nullable<Varchar>,
+        post_url -> Nullable<Text>,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+        status -> Nullable<Int2>,
+    }
+}
+
+// ============================================================
+// Twitter Tweets table
+// ============================================================
+table! {
+    gm_agent_twitter_tweets (id) {
+        id -> Int4,
+        task_id -> Int4,
+        campaign_id -> Nullable<Int4>,
+        twitter_tweet_id -> Varchar,
+        conversation_id -> Nullable<Varchar>,
+        full_text -> Text,
+        lang -> Nullable<Varchar>,
+        screen_name -> Nullable<Varchar>,
+        user_name -> Nullable<Varchar>,
+        user_id -> Nullable<Varchar>,
+        user_description -> Nullable<Text>,
+        user_followers_count -> Nullable<Int4>,
+        user_avatar -> Nullable<Text>,
+        user_verified -> Nullable<Bool>,
+        media_urls -> Nullable<Array<Nullable<Text>>>,
+        has_media -> Nullable<Bool>,
+        favorite_count -> Nullable<Int4>,
+        retweet_count -> Nullable<Int4>,
+        reply_count -> Nullable<Int4>,
+        quote_count -> Nullable<Int4>,
+        bookmark_count -> Nullable<Int4>,
+        view_count -> Nullable<Int4>,
+        is_reply -> Nullable<Bool>,
+        in_reply_to_status_id -> Nullable<Varchar>,
+        in_reply_to_user_id -> Nullable<Varchar>,
+        created_at_str -> Nullable<Varchar>,
+        created_at_ts -> Nullable<Int8>,
+        tweet_created_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+// ============================================================
+// Twitter Comments table
+// ============================================================
+table! {
+    gm_agent_twitter_comments (id) {
+        id -> Int4,
+        tweet_db_id -> Int4,
+        campaign_id -> Nullable<Int4>,
+        twitter_comment_id -> Varchar,
+        conversation_id -> Nullable<Varchar>,
+        comment_screen_name -> Nullable<Varchar>,
+        comment_user_name -> Nullable<Varchar>,
+        comment_user_id -> Nullable<Varchar>,
+        comment_user_followers -> Nullable<Int4>,
+        comment_text -> Text,
+        reason -> Nullable<Text>,
+        suggested_reply -> Nullable<Text>,
+        favorite_count -> Nullable<Int4>,
+        retweet_count -> Nullable<Int4>,
+        reply_count -> Nullable<Int4>,
+        in_reply_to_status_id -> Nullable<Varchar>,
+        is_reply -> Nullable<Bool>,
+        media_urls -> Nullable<Array<Nullable<Text>>>,
+        has_media -> Nullable<Bool>,
+        created_at_str -> Nullable<Varchar>,
+        created_at_ts -> Nullable<Int8>,
+        comment_created_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
+        suggested_dm -> Nullable<Text>,
+        suggested_reply_post -> Nullable<Text>,
+        status -> Nullable<Int2>,
+    }
+}
+
+// ============================================================
 // Define relationships
 // ============================================================
 diesel::joinable!(gm_campaigns -> gm_platforms (platform_id));
@@ -159,6 +311,14 @@ diesel::joinable!(gm_agent_videos -> gm_crawler_tasks (task_id));
 diesel::joinable!(gm_agent_videos -> gm_campaigns (campaign_id));
 diesel::joinable!(gm_agent_comments -> gm_agent_videos (video_db_id));
 diesel::joinable!(gm_agent_comments -> gm_campaigns (campaign_id));
+diesel::joinable!(gm_agent_facebook_posts -> gm_crawler_tasks (task_id));
+diesel::joinable!(gm_agent_facebook_posts -> gm_campaigns (campaign_id));
+diesel::joinable!(gm_agent_facebook_comments -> gm_agent_facebook_posts (post_db_id));
+diesel::joinable!(gm_agent_facebook_comments -> gm_campaigns (campaign_id));
+diesel::joinable!(gm_agent_twitter_tweets -> gm_crawler_tasks (task_id));
+diesel::joinable!(gm_agent_twitter_tweets -> gm_campaigns (campaign_id));
+diesel::joinable!(gm_agent_twitter_comments -> gm_agent_twitter_tweets (tweet_db_id));
+diesel::joinable!(gm_agent_twitter_comments -> gm_campaigns (campaign_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     gm_platforms,
@@ -167,4 +327,8 @@ diesel::allow_tables_to_appear_in_same_query!(
     gm_crawler_tasks,
     gm_agent_videos,
     gm_agent_comments,
+    gm_agent_facebook_posts,
+    gm_agent_facebook_comments,
+    gm_agent_twitter_tweets,
+    gm_agent_twitter_comments,
 );

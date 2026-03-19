@@ -324,6 +324,83 @@ CREATE TABLE IF NOT EXISTS gm_agent_twitter_comments (
     UNIQUE (twitter_comment_id, tweet_db_id)
 );
 
+-- =============================================================================
+-- Agent Tables (Facebook)
+-- =============================================================================
+
+-- Agent Facebook posts
+CREATE TABLE IF NOT EXISTS gm_agent_facebook_posts (
+    id SERIAL PRIMARY KEY,
+    task_id INTEGER NOT NULL REFERENCES gm_crawler_tasks(id),
+    campaign_id INTEGER REFERENCES gm_campaigns(id) ON DELETE CASCADE,
+    facebook_post_id VARCHAR(255) NOT NULL,
+    post_type VARCHAR(50),
+    url TEXT,
+    message TEXT,
+    message_rich TEXT,
+    timestamp BIGINT,
+    posted_at TIMESTAMPTZ,
+    reactions_count INTEGER DEFAULT 0,
+    comments_count INTEGER DEFAULT 0,
+    reshare_count INTEGER DEFAULT 0,
+    reactions_like INTEGER DEFAULT 0,
+    reactions_love INTEGER DEFAULT 0,
+    reactions_haha INTEGER DEFAULT 0,
+    reactions_wow INTEGER DEFAULT 0,
+    reactions_sad INTEGER DEFAULT 0,
+    reactions_angry INTEGER DEFAULT 0,
+    reactions_care INTEGER DEFAULT 0,
+    author_id VARCHAR(255),
+    author_name VARCHAR(255),
+    author_url TEXT,
+    author_profile_picture_url TEXT,
+    author_title VARCHAR(255),
+    has_image BOOLEAN DEFAULT false,
+    image_url TEXT,
+    image_width INTEGER,
+    image_height INTEGER,
+    image_id VARCHAR(255),
+    has_video BOOLEAN DEFAULT false,
+    video_thumbnail TEXT,
+    external_url TEXT,
+    attached_post_url TEXT,
+    comments_id VARCHAR(255),
+    shares_id VARCHAR(255),
+    created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+    updated_at TIMESTAMPTZ,
+    UNIQUE (task_id, facebook_post_id)
+);
+
+-- Agent Facebook comments
+CREATE TABLE IF NOT EXISTS gm_agent_facebook_comments (
+    id SERIAL PRIMARY KEY,
+    post_db_id INTEGER NOT NULL REFERENCES gm_agent_facebook_posts(id) ON DELETE CASCADE,
+    campaign_id INTEGER REFERENCES gm_campaigns(id) ON DELETE CASCADE,
+    facebook_comment_id VARCHAR(255) NOT NULL,
+    parent_comment_id VARCHAR(255),
+    comment_url TEXT,
+    comment_text TEXT NOT NULL,
+    reason TEXT,
+    suggested_reply TEXT,
+    suggested_dm TEXT,
+    suggested_reply_post TEXT,
+    comment_user_id VARCHAR(255),
+    comment_username VARCHAR(255),
+    comment_user_url TEXT,
+    comment_user_profile_picture TEXT,
+    like_count INTEGER DEFAULT 0,
+    reply_count INTEGER DEFAULT 0,
+    threading_depth INTEGER DEFAULT 0,
+    created_at_ts BIGINT,
+    comment_created_at TIMESTAMPTZ,
+    facebook_post_id VARCHAR(255),
+    post_url TEXT,
+    created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+    updated_at TIMESTAMPTZ,
+    status SMALLINT DEFAULT 0,
+    UNIQUE (facebook_comment_id, post_db_id)
+);
+
 -- Agent Reddit posts
 CREATE TABLE IF NOT EXISTS gm_agent_reddit_posts (
     id SERIAL PRIMARY KEY,
@@ -501,8 +578,13 @@ CREATE TABLE IF NOT EXISTS gm_aipub_plans (
     updated_at TIMESTAMPTZ,
     chat_ai_model_id INTEGER REFERENCES gm_ai_models(id),
     video_ai_model_id INTEGER REFERENCES gm_ai_models(id),
+    image_ai_model_id INTEGER REFERENCES gm_ai_models(id),
     name VARCHAR(255),
     plan_type VARCHAR(50),
+    billing_status VARCHAR(20) DEFAULT 'none' NOT NULL,
+    frozen_cost NUMERIC(10,2) DEFAULT 0 NOT NULL,
+    consumed_cost NUMERIC(10,2) DEFAULT 0 NOT NULL,
+    frozen_at TIMESTAMPTZ,
     CONSTRAINT aipub_plans_valid_content_type CHECK (content_type IN ('post', 'video', 'reel', 'story')),
     CONSTRAINT aipub_plans_valid_status CHECK (status IN ('pending', 'ai_processing', 'ready', 'completed', 'failed'))
 );
@@ -566,6 +648,12 @@ CREATE INDEX IF NOT EXISTS idx_twitter_tweets_campaign_id ON gm_agent_twitter_tw
 CREATE INDEX IF NOT EXISTS idx_twitter_comments_tweet_db_id ON gm_agent_twitter_comments(tweet_db_id);
 CREATE INDEX IF NOT EXISTS idx_twitter_comments_campaign_id ON gm_agent_twitter_comments(campaign_id);
 
+-- Facebook agent indexes
+CREATE INDEX IF NOT EXISTS idx_facebook_posts_task_id ON gm_agent_facebook_posts(task_id);
+CREATE INDEX IF NOT EXISTS idx_facebook_posts_campaign_id ON gm_agent_facebook_posts(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_facebook_comments_post_db_id ON gm_agent_facebook_comments(post_db_id);
+CREATE INDEX IF NOT EXISTS idx_facebook_comments_campaign_id ON gm_agent_facebook_comments(campaign_id);
+
 -- Reddit agent indexes
 CREATE INDEX IF NOT EXISTS idx_reddit_posts_task_id ON gm_agent_reddit_posts(task_id);
 CREATE INDEX IF NOT EXISTS idx_reddit_posts_campaign_id ON gm_agent_reddit_posts(campaign_id);
@@ -606,6 +694,8 @@ SELECT diesel_manage_updated_at('gm_campaign_templates');
 SELECT diesel_manage_updated_at('gm_crawler_tasks');
 SELECT diesel_manage_updated_at('gm_agent_videos');
 SELECT diesel_manage_updated_at('gm_agent_comments');
+SELECT diesel_manage_updated_at('gm_agent_facebook_posts');
+SELECT diesel_manage_updated_at('gm_agent_facebook_comments');
 SELECT diesel_manage_updated_at('gm_wallet_transactions');
 SELECT diesel_manage_updated_at('gm_video_generation_tasks');
 SELECT diesel_manage_updated_at('gm_aipub_plans');

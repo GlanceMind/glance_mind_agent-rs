@@ -781,6 +781,10 @@ pub struct SearchOptions {
 
     /// Time filter (platform-specific)
     pub publish_time: Option<u8>,
+
+    /// Platform-specific extra options
+    #[serde(default)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 impl SearchOptions {
@@ -794,6 +798,7 @@ impl SearchOptions {
             offset: 0,
             sort_type: None,
             publish_time: None,
+            extra: HashMap::new(),
         }
     }
 
@@ -817,6 +822,22 @@ impl SearchOptions {
         self
     }
 
+    /// Attach a platform-specific extra option
+    pub fn with_extra_value(
+        mut self,
+        key: impl Into<String>,
+        value: serde_json::Value,
+    ) -> Self {
+        self.extra.insert(key.into(), value);
+        self
+    }
+
+    /// Attach multiple platform-specific extra options
+    pub fn with_extra(mut self, extra: HashMap<String, serde_json::Value>) -> Self {
+        self.extra.extend(extra);
+        self
+    }
+
     /// Create a copy with a different query (efficient for modifying just the query)
     pub fn with_query(&self, query: impl Into<String>) -> Self {
         Self {
@@ -827,6 +848,7 @@ impl SearchOptions {
             offset: self.offset,
             sort_type: self.sort_type,
             publish_time: self.publish_time,
+            extra: self.extra.clone(),
         }
     }
 }

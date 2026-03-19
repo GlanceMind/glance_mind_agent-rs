@@ -72,6 +72,10 @@ services:
       # TikHub API
       TIKHUB_API_KEY: ${TIKHUB_API_KEY}
       TIKHUB_BASE_URL: ${TIKHUB_BASE_URL:-https://api.tikhub.io}
+      # Facebook RapidAPI
+      FACEBOOK_RAPIDAPI_KEY: ${FACEBOOK_RAPIDAPI_KEY:-}
+      FACEBOOK_RAPIDAPI_HOST: ${FACEBOOK_RAPIDAPI_HOST:-facebook-scraper3.p.rapidapi.com}
+      FACEBOOK_RAPIDAPI_BASE_URL: ${FACEBOOK_RAPIDAPI_BASE_URL:-https://facebook-scraper3.p.rapidapi.com}
       # AI API Configuration
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://timicc.com/v1}

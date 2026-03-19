@@ -5,8 +5,10 @@
 //! - `/api/v1/twitter/web/fetch_search_timeline` - Search tweets
 //! - `/api/v1/twitter/web/fetch_user_post_tweet` - Get user tweets
 //! - `/api/v1/twitter/web/fetch_post_comments` - Get tweet comments/replies
+//! - `/api/v1/twitter/web/fetch_tweet_detail` - Get single tweet detail
 
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Serialize};
+use serde_json::Value;
 
 // ============================================================
 // Common Response Types
@@ -90,18 +92,31 @@ pub struct TwitterCommentsData {
     pub next_cursor: Option<String>,
 }
 
+/// Tweet detail response.
+///
+/// TikHub's OpenAPI spec currently models `data` as a generic value, so we
+/// keep the raw payload and normalize it into `TwitterTweet` via
+/// `extract_tweet_from_detail_response`.
+pub type TwitterTweetDetailResponse = TwitterResponse<Value>;
+
 // ============================================================
 // Twitter Tweet Data Structure
 // ============================================================
 
 /// Twitter tweet/comment information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TwitterTweet {
     /// Tweet ID
+    #[serde(default, deserialize_with = "deserialize_optional_stringish")]
     pub tweet_id: Option<String>,
 
     /// Tweet ID (alternative field name for comments)
+    #[serde(default, deserialize_with = "deserialize_optional_stringish")]
     pub id: Option<String>,
+
+    /// REST ID (seen in some TikHub Twitter payloads)
+    #[serde(default, deserialize_with = "deserialize_optional_stringish")]
+    pub rest_id: Option<String>,
 
     /// Type indicator (usually "tweet")
     #[serde(rename = "type")]
@@ -117,31 +132,38 @@ pub struct TwitterTweet {
     pub created_at: Option<String>,
 
     /// Conversation ID
+    #[serde(default, deserialize_with = "deserialize_optional_stringish")]
     pub conversation_id: Option<String>,
 
     /// Language
     pub lang: Option<String>,
 
     /// Bookmark count
+    #[serde(default, deserialize_with = "deserialize_optional_i64ish")]
     pub bookmarks: Option<i64>,
 
     /// Favorite/like count
+    #[serde(default, deserialize_with = "deserialize_optional_i64ish")]
     pub favorites: Option<i64>,
 
     /// Like count (alternative field name)
+    #[serde(default, deserialize_with = "deserialize_optional_i64ish")]
     pub likes: Option<i64>,
 
     /// Quote count
+    #[serde(default, deserialize_with = "deserialize_optional_i64ish")]
     pub quotes: Option<i64>,
 
     /// Reply count
+    #[serde(default, deserialize_with = "deserialize_optional_i64ish")]
     pub replies: Option<i64>,
 
     /// Retweet count
+    #[serde(default, deserialize_with = "deserialize_optional_i64ish")]
     pub retweets: Option<i64>,
 
     /// View count (may be string or number)
-    #[serde(default, deserialize_with = "deserialize_views")]
+    #[serde(default, deserialize_with = "deserialize_optional_i64ish")]
     pub views: Option<i64>,
 
     /// User information
@@ -157,105 +179,71 @@ pub struct TwitterTweet {
     pub entities: Option<TwitterEntities>,
 
     /// In reply to status ID
+    #[serde(default, deserialize_with = "deserialize_optional_stringish")]
     pub in_reply_to_status_id_str: Option<String>,
 
     /// In reply to user ID
+    #[serde(default, deserialize_with = "deserialize_optional_stringish")]
     pub in_reply_to_user_id_str: Option<String>,
 }
 
-/// Custom deserializer for views which can be string or number
-fn deserialize_views<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+fn deserialize_optional_stringish<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    use serde::de;
-
-    struct ViewsVisitor;
-
-    impl<'de> de::Visitor<'de> for ViewsVisitor {
-        type Value = Option<i64>;
-
-        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-            formatter.write_str("a number or string")
-        }
-
-        fn visit_none<E>(self) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            Ok(None)
-        }
-
-        fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            deserializer.deserialize_any(ViewsInnerVisitor)
-        }
-
-        fn visit_unit<E>(self) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            Ok(None)
-        }
-    }
-
-    struct ViewsInnerVisitor;
-
-    impl<'de> de::Visitor<'de> for ViewsInnerVisitor {
-        type Value = Option<i64>;
-
-        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-            formatter.write_str("a number or string")
-        }
-
-        fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            Ok(Some(v))
-        }
-
-        fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            Ok(Some(v as i64))
-        }
-
-        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            if v.is_empty() {
-                return Ok(None);
+    let value = Option::<Value>::deserialize(deserializer)?;
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(trimmed.to_string()))
             }
-            v.parse::<i64>().map(Some).map_err(de::Error::custom)
         }
-
-        fn visit_none<E>(self) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            Ok(None)
-        }
-
-        fn visit_unit<E>(self) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            Ok(None)
-        }
+        Some(Value::Number(value)) => Ok(Some(value.to_string())),
+        Some(Value::Bool(value)) => Ok(Some(value.to_string())),
+        Some(other) => Err(de::Error::custom(format!(
+            "expected string/number/bool/null, got {other}"
+        ))),
     }
+}
 
-    deserializer.deserialize_option(ViewsVisitor)
+fn deserialize_optional_i64ish<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(value)) => value
+            .as_i64()
+            .or_else(|| value.as_u64().map(|unsigned| unsigned as i64))
+            .map(Some)
+            .ok_or_else(|| de::Error::custom(format!("invalid numeric value: {value}"))),
+        Some(Value::String(value)) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                trimmed
+                    .parse::<i64>()
+                    .map(Some)
+                    .map_err(|err| de::Error::custom(format!("invalid integer string `{trimmed}`: {err}")))
+            }
+        }
+        Some(other) => Err(de::Error::custom(format!(
+            "expected number/string/null, got {other}"
+        ))),
+    }
 }
 
 /// Twitter user information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TwitterUser {
     /// User ID (rest_id)
+    #[serde(default, deserialize_with = "deserialize_optional_stringish")]
     pub rest_id: Option<String>,
 
     /// Display name
@@ -268,6 +256,7 @@ pub struct TwitterUser {
     pub description: Option<String>,
 
     /// Follower count
+    #[serde(default, deserialize_with = "deserialize_optional_i64ish")]
     pub followers_count: Option<i64>,
 
     /// Avatar URL
@@ -299,6 +288,7 @@ pub enum TwitterMedia {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TwitterPhotoMedia {
     pub media_url_https: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_stringish")]
     pub id: Option<String>,
     #[serde(flatten)]
     pub extra: Option<serde_json::Value>,
@@ -327,6 +317,7 @@ pub struct TwitterVideoMedia {
 pub struct TwitterVideoVariant {
     pub content_type: Option<String>,
     pub url: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_i64ish")]
     pub bitrate: Option<i64>,
 }
 
@@ -354,6 +345,7 @@ pub struct TwitterUrl {
 pub struct TwitterMention {
     pub screen_name: Option<String>,
     pub name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_stringish")]
     pub id_str: Option<String>,
 }
 
@@ -495,6 +487,16 @@ impl TwitterTweet {
         self.replies.unwrap_or(0)
     }
 
+    /// Get quote count
+    pub fn quote_count(&self) -> i64 {
+        self.quotes.unwrap_or(0)
+    }
+
+    /// Get bookmark count
+    pub fn bookmark_count(&self) -> i64 {
+        self.bookmarks.unwrap_or(0)
+    }
+
     /// Get view count
     pub fn view_count(&self) -> i64 {
         self.views.unwrap_or(0)
@@ -589,6 +591,81 @@ impl TwitterTweet {
     }
 }
 
+fn looks_like_tweet_payload(tweet: &TwitterTweet) -> bool {
+    tweet.get_tweet_id().is_some()
+        && (tweet.text.is_some() || tweet.created_at.is_some() || tweet.tweet_type.is_some())
+}
+
+fn normalize_tweet_from_value(mut tweet: TwitterTweet, value: &Value) -> TwitterTweet {
+    if tweet.get_tweet_id().is_none() && tweet.text.is_some() {
+        if let Some(rest_id) = value
+            .get("rest_id")
+            .and_then(|raw| match raw {
+                Value::String(text) => Some(text.clone()),
+                Value::Number(number) => Some(number.to_string()),
+                _ => None,
+            })
+        {
+            tweet.id = Some(rest_id);
+        }
+    }
+
+    tweet
+}
+
+/// Extract a single tweet from the flexible TikHub tweet-detail response.
+pub fn extract_tweet_from_detail_response(
+    response: &TwitterTweetDetailResponse,
+) -> Option<TwitterTweet> {
+    response.data.as_ref().and_then(extract_tweet_from_value)
+}
+
+/// Extract a single tweet from a raw JSON value.
+pub fn extract_tweet_from_value(value: &Value) -> Option<TwitterTweet> {
+    match value {
+        Value::Null => None,
+        Value::String(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                serde_json::from_str::<Value>(trimmed)
+                    .ok()
+                    .and_then(|parsed| extract_tweet_from_value(&parsed))
+            }
+        }
+        Value::Array(values) => values.iter().find_map(extract_tweet_from_value),
+        Value::Object(object) => {
+            if let Ok(tweet) = serde_json::from_value::<TwitterTweet>(value.clone()) {
+                let tweet = normalize_tweet_from_value(tweet, value);
+                if looks_like_tweet_payload(&tweet) {
+                    return Some(tweet);
+                }
+            }
+
+            for key in [
+                "tweet",
+                "data",
+                "result",
+                "tweet_result",
+                "tweetResult",
+                "status_result",
+                "detail",
+                "post",
+            ] {
+                if let Some(candidate) = object.get(key) {
+                    if let Some(tweet) = extract_tweet_from_value(candidate) {
+                        return Some(tweet);
+                    }
+                }
+            }
+
+            object.values().find_map(extract_tweet_from_value)
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -609,6 +686,7 @@ mod tests {
         let tweet = TwitterTweet {
             tweet_id: Some("123456".to_string()),
             id: None,
+            rest_id: None,
             tweet_type: Some("tweet".to_string()),
             text: Some("Test tweet content".to_string()),
             screen_name: Some("testuser".to_string()),
@@ -645,6 +723,8 @@ mod tests {
         assert_eq!(tweet.author_name(), Some("Test User"));
         assert_eq!(tweet.like_count(), 100);
         assert_eq!(tweet.view_count(), 1000);
+        assert_eq!(tweet.quote_count(), 10);
+        assert_eq!(tweet.bookmark_count(), 5);
         assert!(!tweet.is_reply());
     }
 
@@ -655,5 +735,70 @@ mod tests {
         assert_eq!(params.screen_name, Some("elonmusk".to_string()));
         assert!(params.rest_id.is_none());
         assert_eq!(params.cursor, Some("cursor456".to_string()));
+    }
+
+    #[test]
+    fn test_extract_tweet_detail_from_wrapped_payload() {
+        let response: TwitterTweetDetailResponse = serde_json::from_value(serde_json::json!({
+            "code": 200,
+            "message": "success",
+            "data": {
+                "tweet": {
+                    "tweet_id": "1808168603721650364",
+                    "type": "tweet",
+                    "text": "Detail payload tweet",
+                    "created_at": "Fri Jan 09 22:17:51 +0000 2026",
+                    "user_info": {
+                        "rest_id": "42",
+                        "screen_name": "jack",
+                        "name": "Jack"
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let tweet =
+            extract_tweet_from_detail_response(&response).expect("wrapped payload should yield a tweet");
+        assert_eq!(tweet.get_tweet_id(), Some("1808168603721650364"));
+        assert_eq!(tweet.author_handle(), Some("jack"));
+    }
+
+    #[test]
+    fn test_extract_tweet_detail_from_stringified_payload() {
+        let response: TwitterTweetDetailResponse = serde_json::from_value(serde_json::json!({
+            "code": 200,
+            "message": "success",
+            "data": "{\"result\":{\"rest_id\":\"1808168603721650364\",\"text\":\"Detail payload tweet\",\"created_at\":\"Fri Jan 09 22:17:51 +0000 2026\",\"user_info\":{\"rest_id\":\"42\",\"screen_name\":\"jack\",\"name\":\"Jack\"}}}"
+        }))
+        .unwrap();
+
+        let tweet = extract_tweet_from_detail_response(&response)
+            .expect("stringified payload should be parsed into a tweet");
+        assert_eq!(tweet.get_tweet_id(), Some("1808168603721650364"));
+        assert_eq!(tweet.content(), "Detail payload tweet");
+    }
+
+    #[test]
+    fn test_stringish_fields_deserialize_for_tweet_counts() {
+        let tweet: TwitterTweet = serde_json::from_value(serde_json::json!({
+            "tweet_id": 1808168603721650364u64,
+            "text": "hello",
+            "favorites": "12",
+            "retweets": 3,
+            "replies": "4",
+            "quotes": 5,
+            "bookmarks": "6",
+            "views": "7"
+        }))
+        .unwrap();
+
+        assert_eq!(tweet.get_tweet_id(), Some("1808168603721650364"));
+        assert_eq!(tweet.like_count(), 12);
+        assert_eq!(tweet.retweet_count(), 3);
+        assert_eq!(tweet.reply_count(), 4);
+        assert_eq!(tweet.quote_count(), 5);
+        assert_eq!(tweet.bookmark_count(), 6);
+        assert_eq!(tweet.view_count(), 7);
     }
 }

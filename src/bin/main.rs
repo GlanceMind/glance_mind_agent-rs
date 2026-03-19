@@ -13,10 +13,11 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use glance_mind_agent_rs::{
-    init_global_registry, AiAnalyzer, CommentGateway, ContentGateway, InstagramAdapter,
-    InstagramStrategy, MultiPlatformWorker, OpenAiAdapter, PlatformLookup, PlatformRegistry,
-    PostgresAdapter, RedditAdapter, RedditStrategy, RedisTaskConsumer, TikHubAdapter,
-    TikTokStrategy, TwitterAdapter, TwitterStrategy, WorkerConfig, WorkflowOrchestrator,
+    init_global_registry, AiAnalyzer, CommentGateway, ContentGateway, FacebookAdapter,
+    FacebookStrategy, InstagramAdapter, InstagramStrategy, MultiPlatformWorker, OpenAiAdapter,
+    PlatformLookup, PlatformRegistry, PostgresAdapter, RedditAdapter, RedditStrategy,
+    RedisTaskConsumer, TikHubAdapter, TikTokStrategy, TwitterAdapter, TwitterStrategy,
+    WorkerConfig, WorkflowOrchestrator,
 };
 
 #[derive(Parser)]
@@ -178,6 +179,39 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    // Facebook adapter (optional - only register when RapidAPI key is configured)
+    let facebook_content: Option<Arc<dyn ContentGateway>> =
+        match std::env::var("FACEBOOK_RAPIDAPI_KEY") {
+            Ok(api_key) if !api_key.trim().is_empty() => match FacebookAdapter::from_env() {
+                Ok(adapter) => Some(Arc::new(adapter) as Arc<dyn ContentGateway>),
+                Err(e) => {
+                    error!("Failed to create Facebook adapter: {}", e);
+                    return Err(anyhow::anyhow!(
+                        "Facebook adapter initialization failed: {}",
+                        e
+                    ));
+                }
+            },
+            _ => {
+                info!("FACEBOOK_RAPIDAPI_KEY not set, skipping Facebook adapter registration");
+                None
+            }
+        };
+    let facebook_comment: Option<Arc<dyn CommentGateway>> =
+        match std::env::var("FACEBOOK_RAPIDAPI_KEY") {
+            Ok(api_key) if !api_key.trim().is_empty() => match FacebookAdapter::from_env() {
+                Ok(adapter) => Some(Arc::new(adapter) as Arc<dyn CommentGateway>),
+                Err(e) => {
+                    error!("Failed to create Facebook comment adapter: {}", e);
+                    return Err(anyhow::anyhow!(
+                        "Facebook adapter initialization failed: {}",
+                        e
+                    ));
+                }
+            },
+            _ => None,
+        };
+
     // OpenAI adapter
     let ai_adapter = match OpenAiAdapter::from_env() {
         Ok(adapter) => Arc::new(adapter) as Arc<dyn glance_mind_agent_rs::AiAnalyzer>,
@@ -204,7 +238,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Build orchestrator with platform-specific gateways
     info!("Building orchestrator...");
-    let orchestrator = WorkflowOrchestrator::builder()
+    let mut builder = WorkflowOrchestrator::builder()
         // Content gateways per platform
         .add_content_gateway("tiktok", tiktok_content)
         .add_content_gateway("instagram", instagram_content)
@@ -224,7 +258,18 @@ async fn main() -> anyhow::Result<()> {
         .add_strategy(Arc::new(TikTokStrategy::new()))
         .add_strategy(Arc::new(InstagramStrategy::new()))
         .add_strategy(Arc::new(RedditStrategy::new()))
-        .add_strategy(Arc::new(TwitterStrategy::new()))
+        .add_strategy(Arc::new(TwitterStrategy::new()));
+
+    if let Some(facebook_content) = facebook_content {
+        builder = builder.add_content_gateway("facebook", facebook_content);
+    }
+    if let Some(facebook_comment) = facebook_comment {
+        builder = builder
+            .add_comment_gateway("facebook", facebook_comment)
+            .add_strategy(Arc::new(FacebookStrategy::new()));
+    }
+
+    let orchestrator = builder
         .build()
         .map_err(|e| anyhow::anyhow!("Failed to build orchestrator: {}", e))?;
 

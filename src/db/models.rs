@@ -216,6 +216,156 @@ pub struct UpdateAgentComment {
 }
 
 // ============================================================
+// Facebook Models
+// ============================================================
+
+/// Facebook post record for querying.
+#[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
+#[diesel(table_name = gm_agent_facebook_posts)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct FacebookPost {
+    pub id: i32,
+    pub task_id: i32,
+    pub campaign_id: Option<i32>,
+    pub facebook_post_id: String,
+    pub post_type: Option<String>,
+    pub url: Option<String>,
+    pub message: Option<String>,
+    pub message_rich: Option<String>,
+    pub timestamp: Option<i64>,
+    pub posted_at: Option<DateTime<Utc>>,
+    pub reactions_count: Option<i32>,
+    pub comments_count: Option<i32>,
+    pub reshare_count: Option<i32>,
+    pub reactions_like: Option<i32>,
+    pub reactions_love: Option<i32>,
+    pub reactions_haha: Option<i32>,
+    pub reactions_wow: Option<i32>,
+    pub reactions_sad: Option<i32>,
+    pub reactions_angry: Option<i32>,
+    pub reactions_care: Option<i32>,
+    pub author_id: Option<String>,
+    pub author_name: Option<String>,
+    pub author_url: Option<String>,
+    pub author_profile_picture_url: Option<String>,
+    pub author_title: Option<String>,
+    pub has_image: Option<bool>,
+    pub image_url: Option<String>,
+    pub image_width: Option<i32>,
+    pub image_height: Option<i32>,
+    pub image_id: Option<String>,
+    pub has_video: Option<bool>,
+    pub video_thumbnail: Option<String>,
+    pub external_url: Option<String>,
+    pub attached_post_url: Option<String>,
+    pub comments_id: Option<String>,
+    pub shares_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+/// Facebook comment record for querying.
+#[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
+#[diesel(table_name = gm_agent_facebook_comments)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct FacebookComment {
+    pub id: i32,
+    pub post_db_id: i32,
+    pub campaign_id: Option<i32>,
+    pub facebook_comment_id: String,
+    pub parent_comment_id: Option<String>,
+    pub comment_url: Option<String>,
+    pub comment_text: String,
+    pub reason: Option<String>,
+    pub suggested_reply: Option<String>,
+    pub suggested_dm: Option<String>,
+    pub suggested_reply_post: Option<String>,
+    pub comment_user_id: Option<String>,
+    pub comment_username: Option<String>,
+    pub comment_user_url: Option<String>,
+    pub comment_user_profile_picture: Option<String>,
+    pub like_count: Option<i32>,
+    pub reply_count: Option<i32>,
+    pub threading_depth: Option<i32>,
+    pub created_at_ts: Option<i64>,
+    pub comment_created_at: Option<DateTime<Utc>>,
+    pub facebook_post_id: Option<String>,
+    pub post_url: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub status: Option<i16>,
+}
+
+/// Twitter tweet record for querying.
+#[derive(Debug, Clone, Queryable, Serialize, Deserialize)]
+#[diesel(table_name = gm_agent_twitter_tweets)]
+pub struct TwitterTweet {
+    pub id: i32,
+    pub task_id: i32,
+    pub campaign_id: Option<i32>,
+    pub twitter_tweet_id: String,
+    pub conversation_id: Option<String>,
+    pub full_text: String,
+    pub lang: Option<String>,
+    pub screen_name: Option<String>,
+    pub user_name: Option<String>,
+    pub user_id: Option<String>,
+    pub user_description: Option<String>,
+    pub user_followers_count: Option<i32>,
+    pub user_avatar: Option<String>,
+    pub user_verified: Option<bool>,
+    pub media_urls: Option<Vec<Option<String>>>,
+    pub has_media: Option<bool>,
+    pub favorite_count: Option<i32>,
+    pub retweet_count: Option<i32>,
+    pub reply_count: Option<i32>,
+    pub quote_count: Option<i32>,
+    pub bookmark_count: Option<i32>,
+    pub view_count: Option<i32>,
+    pub is_reply: Option<bool>,
+    pub in_reply_to_status_id: Option<String>,
+    pub in_reply_to_user_id: Option<String>,
+    pub created_at_str: Option<String>,
+    pub created_at_ts: Option<i64>,
+    pub tweet_created_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+/// Twitter comment record for querying.
+#[derive(Debug, Clone, Queryable, Serialize, Deserialize)]
+#[diesel(table_name = gm_agent_twitter_comments)]
+pub struct TwitterComment {
+    pub id: i32,
+    pub tweet_db_id: i32,
+    pub campaign_id: Option<i32>,
+    pub twitter_comment_id: String,
+    pub conversation_id: Option<String>,
+    pub comment_screen_name: Option<String>,
+    pub comment_user_name: Option<String>,
+    pub comment_user_id: Option<String>,
+    pub comment_user_followers: Option<i32>,
+    pub comment_text: String,
+    pub reason: Option<String>,
+    pub suggested_reply: Option<String>,
+    pub favorite_count: Option<i32>,
+    pub retweet_count: Option<i32>,
+    pub reply_count: Option<i32>,
+    pub in_reply_to_status_id: Option<String>,
+    pub is_reply: Option<bool>,
+    pub media_urls: Option<Vec<Option<String>>>,
+    pub has_media: Option<bool>,
+    pub created_at_str: Option<String>,
+    pub created_at_ts: Option<i64>,
+    pub comment_created_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub suggested_dm: Option<String>,
+    pub suggested_reply_post: Option<String>,
+    pub status: Option<i16>,
+}
+
+// ============================================================
 // Status Constants
 // ============================================================
 

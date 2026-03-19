@@ -150,6 +150,7 @@ impl InstagramAdapter {
     }
 
     /// Convert Instagram V1 node to domain Content
+    #[allow(dead_code)]
     fn convert_v1_node(node: &InstagramV1Node) -> Content {
         let media_id = node.id.clone().unwrap_or_default();
         let shortcode = node.shortcode.clone().unwrap_or_default();
@@ -221,6 +222,7 @@ impl InstagramAdapter {
     }
 
     /// Extract V1 edges from response and convert to Content
+    #[allow(dead_code)]
     fn extract_v1_contents(edges: &[InstagramV1Edge], count: usize) -> Vec<Content> {
         edges
             .iter()

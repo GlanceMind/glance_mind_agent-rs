@@ -595,27 +595,10 @@ impl WorkflowOrchestrator {
         content_gateway: &Arc<dyn ContentGateway>,
     ) -> WorkflowResult<Vec<Content>> {
         let search_options = strategy.build_search_options(config, keyword);
-
-        let contents = match keyword {
-            KeywordType::UserId(user_id) | KeywordType::SecUserId(user_id) => content_gateway
-                .fetch_user_content(user_id, search_options.count)
-                .await
-                .map_err(WorkflowError::Gateway)?,
-            KeywordType::ContentId(content_id) => {
-                match content_gateway.fetch_by_id(content_id).await {
-                    Ok(Some(content)) => vec![content],
-                    Ok(None) => {
-                        warn!(content_id = %content_id, "Content not found");
-                        vec![]
-                    }
-                    Err(e) => return Err(WorkflowError::Gateway(e)),
-                }
-            }
-            KeywordType::Search(_) | KeywordType::Hashtag(_) => content_gateway
-                .search(&search_options)
-                .await
-                .map_err(WorkflowError::Gateway)?,
-        };
+        let contents = content_gateway
+            .fetch_by_keyword(keyword, &search_options)
+            .await
+            .map_err(WorkflowError::Gateway)?;
 
         Ok(contents)
     }

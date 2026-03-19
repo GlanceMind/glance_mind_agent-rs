@@ -4,7 +4,7 @@
 
 .PHONY: help dev dev-build dev-down dev-logs dev-logs-agent dev-logs-scheduler \
         dev-restart dev-restart-agent dev-restart-scheduler dev-ps dev-clean \
-        build test clippy fmt check e2e e2e-instagram e2e-reddit e2e-twitter e2e-clean
+        build test clippy fmt check e2e e2e-instagram e2e-reddit e2e-twitter e2e-facebook e2e-clean
 
 # Default target
 help:
@@ -25,16 +25,17 @@ help:
 	@echo ""
 	@echo "Build & Test:"
 	@echo "  make build               - Build release binary"
-	@echo "  make test                - Run unit tests"
+	@echo "  make test                - Run Rust tests (includes live API/DB gates)"
 	@echo "  make clippy              - Run clippy linter"
 	@echo "  make fmt                 - Format code"
-	@echo "  make check               - Run all checks (fmt, clippy, test)"
+	@echo "  make check               - Run all checks (fmt, clippy, test, e2e-twitter, e2e-facebook)"
 	@echo ""
 	@echo "E2E Tests:"
 	@echo "  make e2e                 - Run TikTok E2E test"
 	@echo "  make e2e-instagram       - Run Instagram E2E test"
 	@echo "  make e2e-reddit          - Run Reddit E2E test"
 	@echo "  make e2e-twitter         - Run Twitter E2E test"
+	@echo "  make e2e-facebook        - Run Facebook E2E test"
 	@echo "  make e2e-clean           - Clean up E2E environment"
 
 # =============================================================================
@@ -103,7 +104,7 @@ build:
 
 # Run unit tests
 test:
-	cargo test
+	cargo test -- --test-threads=1
 
 # Run clippy linter
 clippy:
@@ -114,7 +115,7 @@ fmt:
 	cargo fmt
 
 # Run all checks
-check: fmt clippy test
+check: fmt clippy test e2e-twitter e2e-facebook
 
 # =============================================================================
 # E2E Test Commands
@@ -135,6 +136,10 @@ e2e-reddit:
 # Run Twitter E2E test
 e2e-twitter:
 	cd e2e && ./scripts/run_platform_test.sh twitter
+
+# Run Facebook E2E test
+e2e-facebook:
+	cd e2e && ./scripts/run_platform_test.sh facebook
 
 # Clean up E2E environment
 e2e-clean:

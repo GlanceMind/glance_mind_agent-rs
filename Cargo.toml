@@ -47,6 +47,7 @@ redis = { version = "0.25", features = ["tokio-comp", "connection-manager"] }
 
 # Random (for weighted template selection, matching Python agent)
 rand = "0.8"
+governor = "0.10.4"
 
 [dev-dependencies]
 tokio-test = "0.4"

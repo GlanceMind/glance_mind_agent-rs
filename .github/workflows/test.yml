@@ -1,0 +1,89 @@
+name: Agent-RS Test Gates
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "e2e/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "Makefile"
+      - "docker-compose.dev.yml"
+      - ".github/workflows/test.yml"
+  push:
+    branches:
+      - "main"
+      - "release/**"
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "e2e/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "Makefile"
+      - "docker-compose.dev.yml"
+      - ".github/workflows/test.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-tests:
+    name: Rust Test Gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Create .env for live tests
+        run: |
+          cat > .env << EOF
+          DATABASE_URL=${{ secrets.DATABASE_URL }}
+          TIKHUB_API_KEY=${{ secrets.TIKHUB_API_KEY }}
+          TIKHUB_BASE_URL=${{ vars.TIKHUB_BASE_URL || 'https://api.tikhub.io' }}
+          FACEBOOK_RAPIDAPI_KEY=${{ secrets.FACEBOOK_RAPIDAPI_KEY }}
+          FACEBOOK_RAPIDAPI_HOST=${{ vars.FACEBOOK_RAPIDAPI_HOST || 'facebook-scraper3.p.rapidapi.com' }}
+          FACEBOOK_RAPIDAPI_BASE_URL=${{ vars.FACEBOOK_RAPIDAPI_BASE_URL || 'https://facebook-scraper3.p.rapidapi.com' }}
+          EOF
+
+      - name: Run cargo test
+        run: cargo test -- --test-threads=1
+
+  twitter-e2e:
+    name: Twitter E2E Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    needs: rust-tests
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Twitter E2E suite
+        run: make e2e-twitter
+
+  facebook-e2e:
+    name: Facebook E2E Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    needs: rust-tests
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Facebook E2E suite
+        run: make e2e-facebook

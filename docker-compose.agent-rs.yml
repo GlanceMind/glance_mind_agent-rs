@@ -9,9 +9,13 @@
 #     - DATABASE_URL: PostgreSQL connection string
 #     - TIKHUB_API_KEY: TikHub API key
 #     - OPENAI_API_KEY: AI service API key (timicc)
+#   Optional for Facebook:
+#     - FACEBOOK_RAPIDAPI_KEY: RapidAPI key for Facebook campaigns
 #   Optional (have defaults):
 #     - REDIS_URL: Redis connection (default: redis://host.docker.internal:6379/0)
 #     - TIKHUB_BASE_URL: TikHub API base URL
+#     - FACEBOOK_RAPIDAPI_HOST: RapidAPI host
+#     - FACEBOOK_RAPIDAPI_BASE_URL: RapidAPI base URL
 #     - OPENAI_BASE_URL: AI service base URL (default: https://timicc.com/v1)
 #     - RUST_LOG: Log level
 

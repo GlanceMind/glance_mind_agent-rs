@@ -1506,6 +1506,49 @@ impl TikHubClient {
         .await
     }
 
+    /// Fetch a single Twitter tweet by tweet ID.
+    ///
+    /// Endpoint: `/api/v1/twitter/web/fetch_tweet_detail`
+    pub async fn fetch_twitter_tweet_detail(
+        &self,
+        tweet_id: &str,
+    ) -> Result<TwitterTweetDetailResponse, TikHubError> {
+        let url = format!("{}/api/v1/twitter/web/fetch_tweet_detail", self.base_url);
+
+        info!(tweet_id = %tweet_id, "Twitter: Fetching tweet detail");
+
+        let data: TwitterTweetDetailResponse = self
+            .get_with_status_handling(&url, &[("tweet_id", tweet_id)])
+            .await?;
+
+        if data.code != 200 {
+            warn!(code = data.code, message = %data.message, "Twitter API error");
+            return Err(TikHubError::from_api_code(data.code, &data.message));
+        }
+
+        let detail_found = extract_tweet_from_detail_response(&data).is_some();
+        debug!(
+            tweet_id = %tweet_id,
+            detail_found = detail_found,
+            "Twitter: Tweet detail fetched"
+        );
+
+        Ok(data)
+    }
+
+    /// Fetch a single Twitter tweet with retry.
+    pub async fn fetch_twitter_tweet_detail_with_retry(
+        &self,
+        tweet_id: &str,
+    ) -> Result<TwitterTweetDetailResponse, TikHubError> {
+        let tweet_id = tweet_id.to_string();
+        self.with_retry("fetch_twitter_tweet_detail", || {
+            let id = tweet_id.clone();
+            async move { self.fetch_twitter_tweet_detail(&id).await }
+        })
+        .await
+    }
+
     /// Fetch Twitter tweet comments/replies
     ///
     /// Endpoint: `/api/v1/twitter/web/fetch_post_comments`

@@ -1,19 +1,20 @@
 -- =============================================================================
--- E2E Test Campaign: Twitter Detail Fetch
+-- E2E Test Campaign: Facebook Museum Post
 -- =============================================================================
--- Campaign ID: 99905 - Reserved for Twitter E2E testing
--- Keyword: twitter_tweet_id:1808168603721650364
--- Platform: Twitter (id=5)
+-- Campaign ID: 99906 - Reserved for Facebook E2E testing
+-- Keyword: facebook_post_url:<mock post url>
+-- Platform: Facebook (id=3)
+-- Max Scan: 1 post
 -- =============================================================================
 
 -- ============================================================================
--- 1. Create Social Group for Twitter
+-- 1. Create Social Group for Facebook
 -- ============================================================================
 INSERT INTO gm_social_groups (id, user_id, platform_id, group_name, created_at)
-VALUES (99905, 99999, 5, 'E2E Twitter Group', NOW())
+VALUES (99906, 99999, 3, 'E2E Facebook Group', NOW())
 ON CONFLICT (id) DO UPDATE SET group_name = EXCLUDED.group_name;
 
-SELECT setval(pg_get_serial_sequence('gm_social_groups', 'id'), GREATEST((SELECT MAX(id) FROM gm_social_groups), 99905));
+SELECT setval(pg_get_serial_sequence('gm_social_groups', 'id'), GREATEST((SELECT MAX(id) FROM gm_social_groups), 99906));
 
 -- ============================================================================
 -- 2. Create Campaign
@@ -26,37 +27,40 @@ INSERT INTO gm_campaigns (
     auto_like, auto_follow, auto_dm, auto_reply_comments, auto_reply_post,
     total_scanned, pending_consumption, actual_consumption, is_frozen, created_at
 ) VALUES (
-    99905, 99999, 'E2E Test - Twitter Detail', 'DRAFT',
-    5,        -- Twitter platform
-    10,       -- Twitter GLOBAL region
+    99906, 99999, 'E2E Test - Facebook Museum Post', 'DRAFT',
+    3,        -- Facebook platform
+    7,        -- Facebook US region
     3,        -- DeepSeek-V3 model
-    99905,    -- E2E Twitter Group
-    'twitter_tweet_id:1808168603721650364',
-    'We are a tech community helping developers learn and grow.',
-    'Join our community!',
-    'Friendly and concise',
-    'E2E Test Campaign - Always respond with OK',
+    99906,    -- E2E Facebook Group
+    'facebook_post_url:https://www.facebook.com/natgeomuseum/posts/pfbid02M8f7jLqK5x6vBy3oY7t9R4Lm2S8Qv1Az8Jk4KJr5XJv4q8mWcA2eNnYq8d7vY6L',
+    'We run a museum travel exhibition and convert high-intent visitors into ticket buyers.',
+    'Book your visit this weekend!',
+    'Helpful and conversion-oriented',
+    'E2E Test Campaign - Facebook mock post with deterministic fields',
     'INTERVAL',
-    '{"interval_seconds": 7200}',  -- 2 hours, ensure only 1 task during E2E test
-    '{"twitter":{"search_type":"Top"}}',
-    1, 100.00,  -- Max scan count: 1 detail tweet
+    '{"interval_seconds": 7200}',
+    '{"facebook":{"search_type":"posts","recent_posts":true,"location":"washington dc","start_date":"2025-11-01","end_date":"2025-11-30"}}',
+    1, 100.00,
     true, true, true, true, true,
     0, 0, 0, false, NOW()
 ) ON CONFLICT (id) DO UPDATE SET
-    status = 'DRAFT', is_frozen = false,
-    pending_consumption = 0, actual_consumption = 0, total_scanned = 0;
+    status = 'DRAFT',
+    is_frozen = false,
+    pending_consumption = 0,
+    actual_consumption = 0,
+    total_scanned = 0;
 
-SELECT setval(pg_get_serial_sequence('gm_campaigns', 'id'), GREATEST((SELECT MAX(id) FROM gm_campaigns), 99905));
+SELECT setval(pg_get_serial_sequence('gm_campaigns', 'id'), GREATEST((SELECT MAX(id) FROM gm_campaigns), 99906));
 
 -- ============================================================================
 -- 3. Create Campaign Template
 -- ============================================================================
-DELETE FROM gm_campaign_templates WHERE campaign_id = 99905;
+DELETE FROM gm_campaign_templates WHERE campaign_id = 99906;
 
 INSERT INTO gm_campaign_templates (
     id, campaign_id, weight, reply_prompt, dm_prompt, reply_post_prompt, created_at
 ) VALUES (
-    99905, 99905, 100,
+    99906, 99906, 100,
     E'[E2E TEST MODE] For every selected comment, your suggested_reply MUST be exactly the word "OK". No other content allowed.',
     E'[E2E TEST MODE] For every selected comment, your suggested_dm MUST be exactly the word "OK". No other content allowed.',
     E'[E2E TEST MODE] Do not generate viral comments. All suggested_reply_post values must be null.',
@@ -66,7 +70,7 @@ INSERT INTO gm_campaign_templates (
     dm_prompt = EXCLUDED.dm_prompt,
     reply_post_prompt = EXCLUDED.reply_post_prompt;
 
-SELECT setval(pg_get_serial_sequence('gm_campaign_templates', 'id'), GREATEST((SELECT MAX(id) FROM gm_campaign_templates), 99905));
+SELECT setval(pg_get_serial_sequence('gm_campaign_templates', 'id'), GREATEST((SELECT MAX(id) FROM gm_campaign_templates), 99906));
 
 -- ============================================================================
 -- Verification
@@ -75,11 +79,12 @@ DO $$
 DECLARE
     v_campaign RECORD;
 BEGIN
-    SELECT * INTO v_campaign FROM gm_campaigns WHERE id = 99905;
-    RAISE NOTICE '=== Twitter E2E Campaign Created ===';
+    SELECT * INTO v_campaign FROM gm_campaigns WHERE id = 99906;
+    RAISE NOTICE '=== Facebook E2E Campaign Created ===';
     RAISE NOTICE 'Campaign ID: %', v_campaign.id;
     RAISE NOTICE 'Name: %', v_campaign.name;
     RAISE NOTICE 'Status: %', v_campaign.status;
     RAISE NOTICE 'Keyword: %', v_campaign.keyword;
-    RAISE NOTICE 'Platform ID: % (Twitter)', v_campaign.platform_id;
+    RAISE NOTICE 'Platform ID: % (Facebook)', v_campaign.platform_id;
+    RAISE NOTICE 'Max Scan Count: %', v_campaign.max_scan_count;
 END $$;

@@ -46,6 +46,57 @@ services:
       - e2e-network
 
   # ===========================================================================
+  # TikHub Mock (Twitter/TikTok/Instagram/Reddit supplier for E2E)
+  # ===========================================================================
+  tikhub-mock:
+    build:
+      context: ../../mock-services
+      dockerfile: Dockerfile
+    container_name: e2e-tikhub-mock
+    command: ["python", "-m", "uvicorn", "mock_services.tikhub_mock:app", "--host", "0.0.0.0", "--port", "8500"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8500/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - e2e-network
+
+  # ===========================================================================
+  # Facebook Scraper Mock (RapidAPI-compatible supplier for E2E)
+  # ===========================================================================
+  facebook-scraper-mock:
+    build:
+      context: ../../mock-services
+      dockerfile: Dockerfile
+    container_name: e2e-facebook-scraper-mock
+    command: ["python", "-m", "uvicorn", "mock_services.facebook_scraper_mock:app", "--host", "0.0.0.0", "--port", "8600"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8600/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - e2e-network
+
+  # ===========================================================================
+  # LaoZhang Mock (OpenAI-compatible AI supplier for E2E)
+  # ===========================================================================
+  laozhang-mock:
+    build:
+      context: ../../mock-services
+      dockerfile: Dockerfile
+    container_name: e2e-laozhang-mock
+    command: ["python", "-m", "uvicorn", "mock_services.laozhang_mock:app", "--host", "0.0.0.0", "--port", "8100"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - e2e-network
+
+  # ===========================================================================
   # GlanceMind Scheduler
   # ===========================================================================
   scheduler:
@@ -57,13 +108,15 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379
       RUST_LOG: ${RUST_LOG}
-      LAOZHANG_API_KEY: ${LAOZHANG_API_KEY}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://timicc.com/v1}
+      LAOZHANG_API_KEY: ${LAOZHANG_API_KEY:-mock-laozhang-key}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-mock-openai-key}
+      OPENAI_BASE_URL: http://laozhang-mock:8100/v1
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      laozhang-mock:
         condition: service_healthy
     networks:
       - e2e-network
@@ -82,16 +135,25 @@ services:
       REDIS_URL: redis://redis:6379
       AGENT_QUEUE_NAME: ${AGENT_QUEUE_NAME}
       AGENT_WORKERS: ${AGENT_WORKERS}
-      TIKHUB_API_KEY: ${TIKHUB_API_KEY}
-      TIKHUB_BASE_URL: ${TIKHUB_BASE_URL}
+      TIKHUB_API_KEY: ${TIKHUB_API_KEY:-mock-tikhub-key}
+      TIKHUB_BASE_URL: ${TIKHUB_BASE_URL:-http://tikhub-mock:8500}
+      FACEBOOK_RAPIDAPI_KEY: ${FACEBOOK_RAPIDAPI_KEY:-mock-facebook-key}
+      FACEBOOK_RAPIDAPI_HOST: ${FACEBOOK_RAPIDAPI_HOST:-facebook-scraper3.p.rapidapi.com}
+      FACEBOOK_RAPIDAPI_BASE_URL: ${FACEBOOK_RAPIDAPI_BASE_URL:-http://facebook-scraper-mock:8600}
       # AI API Configuration
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://timicc.com/v1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-mock-openai-key}
+      OPENAI_BASE_URL: http://laozhang-mock:8100/v1
       RUST_LOG: ${RUST_LOG}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      tikhub-mock:
+        condition: service_healthy
+      facebook-scraper-mock:
+        condition: service_healthy
+      laozhang-mock:
         condition: service_healthy
     networks:
       - e2e-network
@@ -123,6 +185,10 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      tikhub-mock:
+        condition: service_healthy
+      facebook-scraper-mock:
         condition: service_healthy
       scheduler:
         condition: service_started

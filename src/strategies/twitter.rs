@@ -2,12 +2,29 @@
 //!
 //! Handles Twitter-specific keyword parsing, search options, and prompt formatting.
 
+use serde_json::json;
+
 use crate::config::platform::get_platform_id;
 use crate::domain::{Comment, Content, KeywordType, SearchOptions, TaskConfig};
 use crate::strategies::PlatformStrategy;
 
+pub mod extra_keys {
+    pub const MODE: &str = "mode";
+    pub const SEARCH_TYPE: &str = "search_type";
+}
+
+pub mod mode {
+    pub const SEARCH: &str = "search";
+    pub const HASHTAG: &str = "hashtag";
+    pub const HANDLE: &str = "handle";
+    pub const REST_ID: &str = "rest_id";
+    pub const TWEET_ID: &str = "tweet_id";
+}
+
 /// Twitter platform strategy implementation
 pub struct TwitterStrategy {
+    /// Default region value kept for TaskConfig/SearchOptions parity.
+    default_region: String,
     /// Default search type (Latest, Top, Media, etc.)
     default_search_type: String,
 }
@@ -16,6 +33,7 @@ impl TwitterStrategy {
     /// Create a new Twitter strategy with default settings
     pub fn new() -> Self {
         Self {
+            default_region: "GLOBAL".to_string(),
             default_search_type: "Latest".to_string(),
         }
     }
@@ -23,7 +41,18 @@ impl TwitterStrategy {
     /// Create with a custom default search type
     pub fn with_search_type(search_type: impl Into<String>) -> Self {
         Self {
-            default_search_type: search_type.into(),
+            default_region: "GLOBAL".to_string(),
+            default_search_type: Self::normalize_search_type(search_type.into()),
+        }
+    }
+
+    fn normalize_search_type(search_type: impl AsRef<str>) -> String {
+        match search_type.as_ref().trim().to_ascii_lowercase().as_str() {
+            "top" => search_type::TOP.to_string(),
+            "media" => search_type::MEDIA.to_string(),
+            "people" => search_type::PEOPLE.to_string(),
+            "lists" => search_type::LISTS.to_string(),
+            _ => search_type::LATEST.to_string(),
         }
     }
 }
@@ -80,21 +109,50 @@ impl PlatformStrategy for TwitterStrategy {
     }
 
     fn build_search_options(&self, config: &TaskConfig, keyword: &KeywordType) -> SearchOptions {
+        let region = config
+            .region
+            .clone()
+            .unwrap_or_else(|| self.default_region.clone());
         let query = keyword.value().to_string();
 
-        let mut options = SearchOptions::new(query).with_platform(self.name());
-
-        // Store search type in region field
-        options = options.with_region(self.default_search_type.clone());
+        let mut options = SearchOptions::new(query)
+            .with_platform(self.name())
+            .with_region(region);
 
         // Set count from config
         let count = config.max_videos.map(|v| v.min(100) as u32).unwrap_or(20);
         options = options.with_count(count);
 
+        let configured_search_type = config
+            .extra
+            .get(extra_keys::SEARCH_TYPE)
+            .and_then(|value| value.as_str())
+            .map(Self::normalize_search_type)
+            .unwrap_or_else(|| self.default_search_type.clone());
+        options = options.with_extra_value(extra_keys::SEARCH_TYPE, json!(configured_search_type));
+
         // Set sort type if specified
         if let Some(sort) = config.sort_type {
             options.sort_type = Some(sort);
         }
+
+        options = match keyword {
+            KeywordType::Search(query) => options
+                .with_query(query.clone())
+                .with_extra_value(extra_keys::MODE, json!(mode::SEARCH)),
+            KeywordType::Hashtag(hashtag) => options
+                .with_query(hashtag.clone())
+                .with_extra_value(extra_keys::MODE, json!(mode::HASHTAG)),
+            KeywordType::UserId(handle) => options
+                .with_query(handle.clone())
+                .with_extra_value(extra_keys::MODE, json!(mode::HANDLE)),
+            KeywordType::SecUserId(rest_id) => options
+                .with_query(rest_id.clone())
+                .with_extra_value(extra_keys::MODE, json!(mode::REST_ID)),
+            KeywordType::ContentId(tweet_id) => options
+                .with_query(tweet_id.clone())
+                .with_extra_value(extra_keys::MODE, json!(mode::TWEET_ID)),
+        };
 
         options
     }
@@ -169,7 +227,7 @@ impl PlatformStrategy for TwitterStrategy {
     }
 
     fn default_region(&self) -> &str {
-        &self.default_search_type
+        &self.default_region
     }
 
     fn max_videos_per_search(&self) -> u32 {
@@ -191,6 +249,8 @@ pub mod search_type {
     pub const MEDIA: &str = "Media";
     /// People search
     pub const PEOPLE: &str = "People";
+    /// Lists search
+    pub const LISTS: &str = "Lists";
 }
 
 #[cfg(test)]
@@ -253,12 +313,26 @@ mod tests {
     #[test]
     fn test_build_search_options() {
         let strategy = TwitterStrategy::new();
-        let config = TaskConfig::new(1, "twitter").with_max_videos(50);
+        let mut config = TaskConfig::new(1, "twitter").with_max_videos(50);
+        config
+            .extra
+            .insert(extra_keys::SEARCH_TYPE.to_string(), json!("top"));
         let keyword = KeywordType::Search("rust".to_string());
 
         let options = strategy.build_search_options(&config, &keyword);
         assert_eq!(options.query, "rust");
         assert_eq!(options.count, 50);
+        assert_eq!(
+            options.extra.get(extra_keys::MODE).and_then(|v| v.as_str()),
+            Some(mode::SEARCH)
+        );
+        assert_eq!(
+            options
+                .extra
+                .get(extra_keys::SEARCH_TYPE)
+                .and_then(|v| v.as_str()),
+            Some(search_type::TOP)
+        );
     }
 
     #[test]
@@ -301,5 +375,26 @@ mod tests {
         assert!(strategy.is_content_keyword("1234567890123456789"));
         assert!(!strategy.is_content_keyword("@username"));
         assert!(!strategy.is_content_keyword("rust"));
+    }
+
+    #[test]
+    fn test_build_search_options_for_tweet_id_mode() {
+        let strategy = TwitterStrategy::new();
+        let config = TaskConfig::new(1, "twitter").with_max_videos(1);
+        let keyword = strategy.parse_keyword("twitter_tweet_id:1808168603721650364");
+
+        let options = strategy.build_search_options(&config, &keyword);
+        assert_eq!(options.query, "1808168603721650364");
+        assert_eq!(
+            options.extra.get(extra_keys::MODE).and_then(|value| value.as_str()),
+            Some(mode::TWEET_ID)
+        );
+        assert_eq!(
+            options
+                .extra
+                .get(extra_keys::SEARCH_TYPE)
+                .and_then(|value| value.as_str()),
+            Some(search_type::LATEST)
+        );
     }
 }

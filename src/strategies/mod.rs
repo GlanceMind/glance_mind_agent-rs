@@ -6,11 +6,13 @@
 //! - Prompt formatting for AI analysis
 //!
 //! Supported platforms:
+//! - Facebook
 //! - TikTok
 //! - Instagram
 //! - Reddit
 //! - Twitter
 
+pub mod facebook;
 pub mod instagram;
 pub mod reddit;
 pub mod tiktok;
@@ -18,6 +20,7 @@ pub mod twitter;
 
 use crate::domain::{Comment, Content, KeywordType, SearchOptions, TaskConfig};
 
+pub use facebook::FacebookStrategy;
 pub use instagram::InstagramStrategy;
 pub use reddit::RedditStrategy;
 pub use tiktok::TikTokStrategy;
@@ -98,6 +101,7 @@ impl StrategyRegistry {
     /// Create a registry with default strategies
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
+        registry.register(Box::new(FacebookStrategy::new()));
         registry.register(Box::new(TikTokStrategy::new()));
         registry.register(Box::new(InstagramStrategy::new()));
         registry.register(Box::new(RedditStrategy::new()));
@@ -145,6 +149,7 @@ mod tests {
         let registry = StrategyRegistry::with_defaults();
 
         // Check all platforms are registered
+        assert!(registry.get("facebook").is_some());
         assert!(registry.get("tiktok").is_some());
         assert!(registry.get("instagram").is_some());
         assert!(registry.get("reddit").is_some());
@@ -154,6 +159,10 @@ mod tests {
         let reddit = registry.get_by_id(1);
         assert!(reddit.is_some());
         assert_eq!(reddit.unwrap().name(), "reddit");
+
+        let facebook = registry.get_by_id(3);
+        assert!(facebook.is_some());
+        assert_eq!(facebook.unwrap().name(), "facebook");
 
         let tiktok = registry.get_by_id(2);
         assert!(tiktok.is_some());

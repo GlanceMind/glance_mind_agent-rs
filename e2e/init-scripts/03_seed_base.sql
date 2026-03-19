@@ -73,6 +73,10 @@ INSERT INTO gm_pricing_rules (id, platform_id, action_type, cost_points) VALUES
 (4, 1, 'SCAN_POST', 0.50),
 (5, 1, 'AI_ANALYZE', 1.00),
 (6, 1, 'REPLY_COMMENT', 2.00),
+-- Facebook pricing (platform_id = 3)
+(13, 3, 'SCAN_POST', 0.50),
+(14, 3, 'AI_ANALYZE', 1.00),
+(15, 3, 'REPLY_COMMENT', 2.00),
 -- Instagram pricing (platform_id = 4)
 (7, 4, 'SCAN_POST', 0.50),
 (8, 4, 'AI_ANALYZE', 1.00),

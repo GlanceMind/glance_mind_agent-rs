@@ -7,7 +7,7 @@
 //! Platform mappings are loaded from the global registry (initialized at startup).
 
 use redis::{aio::ConnectionManager, AsyncCommands, Client};
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use crate::config::platform::{global_registry, PlatformLookup};
@@ -61,13 +61,65 @@ impl TikTokSearchOptions {
     }
 }
 
+fn deserialize_optional_boolish<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    match value {
+        None => Ok(None),
+        Some(serde_json::Value::Bool(value)) => Ok(Some(value)),
+        Some(serde_json::Value::String(value)) => match value.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" => Ok(Some(true)),
+            "false" | "0" | "no" => Ok(Some(false)),
+            other => Err(de::Error::custom(format!(
+                "invalid boolean string for recent_posts: {other}"
+            ))),
+        },
+        Some(other) => Err(de::Error::custom(format!(
+            "invalid boolean value for recent_posts: {other}"
+        ))),
+    }
+}
+
+/// Facebook-specific search options from campaign configuration
+/// Example JSON: {"facebook":{"search_type":"posts","recent_posts":"true","location":"beijing,china"}}
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct FacebookSearchOptions {
+    #[serde(default)]
+    pub search_type: Option<String>,
+
+    #[serde(default, deserialize_with = "deserialize_optional_boolish")]
+    pub recent_posts: Option<bool>,
+
+    #[serde(default)]
+    pub location: Option<String>,
+
+    #[serde(default)]
+    pub start_date: Option<String>,
+
+    #[serde(default)]
+    pub end_date: Option<String>,
+}
+
+/// Twitter-specific search options from campaign configuration.
+/// Example JSON: {"twitter":{"search_type":"Top"}}
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct TwitterSearchOptions {
+    #[serde(default)]
+    pub search_type: Option<String>,
+}
+
 /// Platform-keyed search options wrapper
 /// Example: {"tiktok": {...}, "instagram": {...}}
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SearchOptionsWrapper {
     #[serde(default)]
     pub tiktok: Option<TikTokSearchOptions>,
-    // Future: add other platforms like instagram, facebook, etc.
+    #[serde(default)]
+    pub facebook: Option<FacebookSearchOptions>,
+    #[serde(default)]
+    pub twitter: Option<TwitterSearchOptions>,
 }
 
 /// Parse search_options JSON string into SearchOptionsWrapper
@@ -82,8 +134,25 @@ fn parse_search_options(search_options: Option<&str>) -> SearchOptionsWrapper {
                             "Parsed TikTok search_options: region={:?}, sort_type={:?}, publish_time={:?}",
                             tiktok.region, tiktok.sort_type, tiktok.publish_time
                         );
-                    } else {
-                        info!("search_options parsed but no 'tiktok' field found");
+                    }
+                    if let Some(ref facebook) = opts.facebook {
+                        info!(
+                            "Parsed Facebook search_options: search_type={:?}, recent_posts={:?}, location={:?}, start_date={:?}, end_date={:?}",
+                            facebook.search_type,
+                            facebook.recent_posts,
+                            facebook.location,
+                            facebook.start_date,
+                            facebook.end_date
+                        );
+                    }
+                    if let Some(ref twitter) = opts.twitter {
+                        info!(
+                            "Parsed Twitter search_options: search_type={:?}",
+                            twitter.search_type
+                        );
+                    }
+                    if opts.tiktok.is_none() && opts.facebook.is_none() && opts.twitter.is_none() {
+                        info!("search_options parsed but no supported platform field found");
                     }
                     opts
                 }
@@ -428,6 +497,54 @@ impl CrawlerTaskExt for CrawlerTask {
             let region = self.region().unwrap_or_else(|| "US".to_string());
             config = config.with_region(region.clone());
             debug!("Non-TikTok platform, using filters.region={}", region);
+
+            if platform_name.eq_ignore_ascii_case("facebook") {
+                if let Some(facebook_opts) = search_opts.facebook {
+                    if let Some(search_type) = facebook_opts.search_type {
+                        config.extra.insert(
+                            "search_type".to_string(),
+                            serde_json::Value::String(search_type),
+                        );
+                    }
+                    if let Some(recent_posts) = facebook_opts.recent_posts {
+                        config.extra.insert(
+                            "recent_posts".to_string(),
+                            serde_json::Value::Bool(recent_posts),
+                        );
+                    }
+                    if let Some(location) = facebook_opts.location {
+                        config.extra.insert(
+                            "location".to_string(),
+                            serde_json::Value::String(location),
+                        );
+                    }
+                    if let Some(start_date) = facebook_opts.start_date {
+                        config.extra.insert(
+                            "start_date".to_string(),
+                            serde_json::Value::String(start_date),
+                        );
+                    }
+                    if let Some(end_date) = facebook_opts.end_date {
+                        config.extra.insert(
+                            "end_date".to_string(),
+                            serde_json::Value::String(end_date),
+                        );
+                    }
+
+                    debug!(extra = ?config.extra, "Applied Facebook search_options");
+                }
+            } else if platform_name.eq_ignore_ascii_case("twitter") {
+                if let Some(twitter_opts) = search_opts.twitter {
+                    if let Some(search_type) = twitter_opts.search_type {
+                        config.extra.insert(
+                            "search_type".to_string(),
+                            serde_json::Value::String(search_type),
+                        );
+                    }
+
+                    debug!(extra = ?config.extra, "Applied Twitter search_options");
+                }
+            }
         }
 
         config
@@ -670,9 +787,13 @@ mod tests {
     fn test_parse_search_options_empty() {
         let opts = super::parse_search_options(None);
         assert!(opts.tiktok.is_none());
+        assert!(opts.facebook.is_none());
+        assert!(opts.twitter.is_none());
 
         let opts = super::parse_search_options(Some("{}"));
         assert!(opts.tiktok.is_none());
+        assert!(opts.facebook.is_none());
+        assert!(opts.twitter.is_none());
     }
 
     #[test]
@@ -680,6 +801,22 @@ mod tests {
         // Invalid JSON should return default
         let opts = super::parse_search_options(Some("not json"));
         assert!(opts.tiktok.is_none());
+        assert!(opts.facebook.is_none());
+        assert!(opts.twitter.is_none());
+    }
+
+    #[test]
+    fn test_parse_search_options_facebook() {
+        let json = r#"{"facebook":{"search_type":"places","recent_posts":"true","location":"beijing,china","start_date":"2026-01-01","end_date":"2026-01-31"}}"#;
+
+        let opts = super::parse_search_options(Some(json));
+        let facebook = opts.facebook.expect("facebook search options should exist");
+
+        assert_eq!(facebook.search_type.as_deref(), Some("places"));
+        assert_eq!(facebook.recent_posts, Some(true));
+        assert_eq!(facebook.location.as_deref(), Some("beijing,china"));
+        assert_eq!(facebook.start_date.as_deref(), Some("2026-01-01"));
+        assert_eq!(facebook.end_date.as_deref(), Some("2026-01-31"));
     }
 
     #[test]
@@ -720,5 +857,109 @@ mod tests {
         assert_eq!(config.sort_type, Some(1)); // most_liked
         assert_eq!(config.publish_time, Some(7)); // last week
         assert_eq!(config.max_videos, Some(10));
+    }
+
+    #[test]
+    fn test_facebook_crawler_task_with_search_options() {
+        init_test_registry();
+
+        let json = r#"{
+            "meta": {
+                "task_id": 790,
+                "campaign_id": 17,
+                "source": "scheduler",
+                "timestamp": 1700000000.0
+            },
+            "spec": {
+                "platform": 3,
+                "data_type": 1
+            },
+            "config": {
+                "keywords": ["facebook_page:NatGeoMuseum"],
+                "max_count": 5,
+                "search_offset": 0,
+                "search_limit": 10,
+                "filters": {
+                    "region": "GLOBAL"
+                },
+                "search_options": "{\"facebook\":{\"search_type\":\"pages\",\"recent_posts\":\"true\",\"location\":\"washington,usa\",\"start_date\":\"2026-01-01\",\"end_date\":\"2026-01-31\"}}"
+            }
+        }"#;
+
+        let task: CrawlerTask = serde_json::from_str(json).unwrap();
+        let config = task.to_domain_task_config(17);
+
+        assert_eq!(config.campaign_id, 17);
+        assert_eq!(config.platform, "facebook");
+        assert_eq!(config.region, Some("GLOBAL".to_string()));
+        assert_eq!(
+            config.extra.get("search_type").and_then(|v| v.as_str()),
+            Some("pages")
+        );
+        assert_eq!(
+            config.extra.get("recent_posts").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            config.extra.get("location").and_then(|v| v.as_str()),
+            Some("washington,usa")
+        );
+        assert_eq!(
+            config.extra.get("start_date").and_then(|v| v.as_str()),
+            Some("2026-01-01")
+        );
+        assert_eq!(
+            config.extra.get("end_date").and_then(|v| v.as_str()),
+            Some("2026-01-31")
+        );
+    }
+
+    #[test]
+    fn test_parse_search_options_twitter() {
+        let json = r#"{"twitter":{"search_type":"Top"}}"#;
+
+        let opts = super::parse_search_options(Some(json));
+        let twitter = opts.twitter.expect("twitter search options should exist");
+
+        assert_eq!(twitter.search_type.as_deref(), Some("Top"));
+    }
+
+    #[test]
+    fn test_twitter_crawler_task_with_search_options() {
+        init_test_registry();
+
+        let json = r##"{
+            "meta": {
+                "task_id": 791,
+                "campaign_id": 18,
+                "source": "scheduler",
+                "timestamp": 1700000000.0
+            },
+            "spec": {
+                "platform": 5,
+                "data_type": 1
+            },
+            "config": {
+                "keywords": ["#rustlang"],
+                "max_count": 5,
+                "search_offset": 0,
+                "search_limit": 10,
+                "filters": {
+                    "region": "GLOBAL"
+                },
+                "search_options": "{\"twitter\":{\"search_type\":\"Top\"}}"
+            }
+        }"##;
+
+        let task: CrawlerTask = serde_json::from_str(json).unwrap();
+        let config = task.to_domain_task_config(18);
+
+        assert_eq!(config.campaign_id, 18);
+        assert_eq!(config.platform, "twitter");
+        assert_eq!(config.region, Some("GLOBAL".to_string()));
+        assert_eq!(
+            config.extra.get("search_type").and_then(|value| value.as_str()),
+            Some("Top")
+        );
     }
 }

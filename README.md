@@ -7,13 +7,14 @@ AI-powered social media comment analysis agent - High-performance Rust implement
 
 ## Overview
 
-`glance_mind_agent_rs` is a Rust rewrite of the Python-based GlanceMind Agent, designed for high-performance, concurrent processing of social media content analysis tasks. It consumes tasks from Redis queue, fetches content via TikHub API, performs AI analysis, and stores results to PostgreSQL.
+`glance_mind_agent_rs` is a Rust rewrite of the Python-based GlanceMind Agent, designed for high-performance, concurrent processing of social media content analysis tasks. It consumes tasks from Redis queue, fetches content via TikHub API and Facebook RapidAPI, performs AI analysis, and stores results to PostgreSQL.
 
 ### Key Features
 
 - **High Concurrency**: Tokio-based async runtime with configurable rate limiters
 - **Hexagonal Architecture**: Clean separation of domain, ports, and adapters
 - **Multi-Platform Support**: Extensible platform strategy pattern (TikTok, Instagram, etc.)
+- **Facebook Support**: RapidAPI `facebook-scraper3` integration for posts, pages, places, and post URL workflows
 - **AI Integration**: OpenAI-compatible API support for comment analysis
 - **Robust Error Handling**: Typed errors with retry mechanisms for transient failures
 - **E2E Testing**: Complete Docker-based test environment
@@ -94,16 +95,23 @@ RUST_LOG=debug cargo run --release --bin gm-agent
 
 ## Configuration
 
+Twitter deployment notes and coverage status:
+
+- `docs/twitter-support.md`
+
 ### Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `DATABASE_URL` | Yes | - | PostgreSQL connection string |
 | `TIKHUB_API_KEY` | Yes | - | TikHub API key |
-| `AGENT_API_KEY` | Yes | - | AI service API key |
+| `OPENAI_API_KEY` | Yes | - | AI service API key |
+| `FACEBOOK_RAPIDAPI_KEY` | Facebook only | - | RapidAPI key for Facebook campaigns |
 | `REDIS_URL` | No | `redis://localhost:6379/0` | Redis connection URL |
 | `TIKHUB_BASE_URL` | No | `https://api.tikhub.io` | TikHub API base URL |
-| `AGENT_BASE_URL` | No | `https://api.siliconflow.cn/v1` | AI service base URL |
+| `FACEBOOK_RAPIDAPI_HOST` | No | `facebook-scraper3.p.rapidapi.com` | RapidAPI host header |
+| `FACEBOOK_RAPIDAPI_BASE_URL` | No | `https://facebook-scraper3.p.rapidapi.com` | Facebook RapidAPI base URL |
+| `OPENAI_BASE_URL` | No | `https://timicc.com/v1` | AI service base URL |
 | `RUST_LOG` | No | `info` | Log level |
 
 ### Concurrency Settings
@@ -203,11 +211,23 @@ The project includes a CD workflow (`.github/workflows/deploy.yml`) that:
 2. Deploys to the configured server
 3. Uses GitHub Secrets for sensitive configuration
 
+The deployment workflow reads configuration from GitHub `secrets.*` and `vars.*`, so you can configure these at the organization, repository, or environment level.
+
 Required GitHub Secrets:
 - `DATABASE_URL`
 - `TIKHUB_API_KEY`
-- `AGENT_API_KEY`
-- `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`
+- `OPENAI_API_KEY`
+
+Optional GitHub Secret:
+- `FACEBOOK_RAPIDAPI_KEY` (required only if you want Facebook campaigns enabled in production or live Facebook tests)
+
+Optional GitHub Variables:
+- `REDIS_URL` (default: `redis://host.docker.internal:6379/0`)
+- `TIKHUB_BASE_URL` (default: `https://api.tikhub.io`)
+- `FACEBOOK_RAPIDAPI_HOST` (default: `facebook-scraper3.p.rapidapi.com`)
+- `FACEBOOK_RAPIDAPI_BASE_URL` (default: `https://facebook-scraper3.p.rapidapi.com`)
+- `OPENAI_BASE_URL` (default: `https://timicc.com/v1`)
+- `RUST_LOG` (default: `info,glance_mind_agent_rs=debug`)
 
 ## Protocol Sync
 
@@ -230,6 +250,17 @@ This syncs `lib_inline.rs` to `src/protocol_gen/mod.rs`.
 | `/api/v1/tiktok/web/fetch_post_comment` | Fetch video comments |
 | `/api/v1/tiktok/app/v3/fetch_user_post_videos` | Fetch user's videos |
 
+### Facebook RapidAPI
+
+| Endpoint | Description |
+|----------|-------------|
+| `/search/posts` | Search Facebook posts by keyword |
+| `/search/pages` | Resolve page search queries to Facebook page IDs |
+| `/search/places` | Resolve place queries to place/page IDs |
+| `/page/posts` | Fetch posts for a Facebook page or place |
+| `/post` | Fetch a single Facebook post by `post_id`/`pfbid` |
+| `/post/comments` | Fetch comments for a Facebook post |
+
 ### AI Service
 
 Compatible with OpenAI Chat Completions API format:
@@ -243,6 +274,8 @@ Compatible with OpenAI Chat Completions API format:
 | `gm_crawler_tasks` | Task queue status |
 | `gm_agent_videos` | Processed video metadata |
 | `gm_agent_comments` | Comment analysis results |
+| `gm_agent_facebook_posts` | Processed Facebook post metadata |
+| `gm_agent_facebook_comments` | Facebook comment analysis results |
 | `gm_wallet_bill` | Consumption tracking |
 
 ## Related Projects
