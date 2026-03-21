@@ -124,8 +124,8 @@ jobs:
           FACEBOOK_RAPIDAPI_HOST=${{ vars.FACEBOOK_RAPIDAPI_HOST || 'facebook-scraper3.p.rapidapi.com' }}
           FACEBOOK_RAPIDAPI_BASE_URL=${{ vars.FACEBOOK_RAPIDAPI_BASE_URL || 'https://facebook-scraper3.p.rapidapi.com' }}
 
-          # AI Service Base URL (optional org/repo/environment variable)
-          OPENAI_BASE_URL=${{ vars.OPENAI_BASE_URL || 'https://timicc.com/v1' }}
+          # AI Service Base URL (optional org/repo/environment variable or secret)
+          OPENAI_BASE_URL=${{ vars.OPENAI_BASE_URL || secrets.OPENAI_BASE_URL || 'https://api.laozhang.ai/v1' }}
 
           # Logging
           RUST_LOG=${{ vars.RUST_LOG || 'info,glance_mind_agent_rs=debug' }}
