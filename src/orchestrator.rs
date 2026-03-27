@@ -27,7 +27,7 @@ use crate::ports::{
     ai_analyzer::AnalysisContext, progress_tracker::TaskStatus, AiAnalyzer, CommentGateway,
     ContentGateway, ContentRepository, ProgressTracker, PromptRepository,
 };
-use crate::strategies::PlatformStrategy;
+use crate::strategies::{FacebookStrategy, PlatformStrategy};
 
 /// Result of processing a single video
 ///
@@ -654,8 +654,10 @@ impl WorkflowOrchestrator {
             .map(|m| m as u32)
             .unwrap_or(self.config.max_comments_per_video);
 
+        let comment_lookup_id = Self::resolve_comment_lookup_id(content);
+
         let comments = match comment_gateway
-            .fetch_all_comments(&content.content_id, max_comments)
+            .fetch_all_comments(&comment_lookup_id, max_comments)
             .await
         {
             Ok(comments) => comments,
@@ -664,6 +666,7 @@ impl WorkflowOrchestrator {
                 warn!(
                     task_id,
                     content_id = %content.content_id,
+                    comment_lookup_id = %comment_lookup_id,
                     error = %e,
                     "Failed to fetch comments, skipping AI analysis"
                 );
@@ -674,6 +677,7 @@ impl WorkflowOrchestrator {
         debug!(
             task_id,
             content_id = %content.content_id,
+            comment_lookup_id = %comment_lookup_id,
             count = comments.len(),
             "Fetched comments"
         );
@@ -771,6 +775,28 @@ impl WorkflowOrchestrator {
         Ok((is_new, comments_saved, analyses_count))
     }
 
+    fn resolve_comment_lookup_id(content: &Content) -> String {
+        if content.platform != "facebook" {
+            return content.content_id.clone();
+        }
+
+        let raw_lookup = content.raw_data.as_ref().and_then(|raw| {
+            ["url", "attached_post_url"]
+                .iter()
+                .find_map(|key| raw.get(*key).and_then(|value| value.as_str()))
+        });
+
+        raw_lookup
+            .and_then(FacebookStrategy::extract_post_lookup_id)
+            .or_else(|| {
+                content
+                    .url
+                    .as_deref()
+                    .and_then(FacebookStrategy::extract_post_lookup_id)
+            })
+            .unwrap_or_else(|| content.content_id.clone())
+    }
+
     /// Get a strategy by platform name
     pub fn get_strategy(&self, platform: &str) -> Option<&Arc<dyn PlatformStrategy>> {
         self.strategies.get(platform)
@@ -785,6 +811,48 @@ impl WorkflowOrchestrator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use serde_json::json;
+
+    use crate::ports::{
+        progress_tracker::{TaskInfo, TaskStatus},
+        prompt_repository::{CampaignConfig, CampaignStatus},
+    };
+    use crate::testing::{MockAiAnalyzer, MockCommentGateway, MockRepository};
+    use crate::{Comment, Content, FacebookStrategy};
+
+    struct StaticFacebookContentGateway {
+        content: Content,
+    }
+
+    #[async_trait]
+    impl crate::ContentGateway for StaticFacebookContentGateway {
+        async fn search(&self, _options: &crate::SearchOptions) -> crate::GatewayResult<Vec<Content>> {
+            Ok(vec![self.content.clone()])
+        }
+
+        async fn fetch_by_keyword(
+            &self,
+            _keyword: &crate::KeywordType,
+            _options: &crate::SearchOptions,
+        ) -> crate::GatewayResult<Vec<Content>> {
+            Ok(vec![self.content.clone()])
+        }
+
+        async fn fetch_user_content(&self, _user_id: &str, _count: u32) -> crate::GatewayResult<Vec<Content>> {
+            Ok(vec![self.content.clone()])
+        }
+
+        async fn fetch_by_id(&self, _content_id: &str) -> crate::GatewayResult<Option<Content>> {
+            Ok(Some(self.content.clone()))
+        }
+
+        fn platform(&self) -> &str {
+            "facebook"
+        }
+    }
 
     #[test]
     fn test_orchestrator_config_defaults() {
@@ -793,5 +861,103 @@ mod tests {
         assert_eq!(config.max_comments_per_video, 50);
         assert_eq!(config.ai_batch_size, 150);
         assert!(config.continue_on_error);
+    }
+
+    #[tokio::test]
+    async fn test_process_task_uses_facebook_url_lookup_for_comments() {
+        let comment_gateway = Arc::new(MockCommentGateway::new());
+        let ai_analyzer = Arc::new(MockAiAnalyzer::simple());
+        let repository = Arc::new(MockRepository::new());
+
+        repository.add_campaign(CampaignConfig {
+            id: 98,
+            user_id: 1,
+            name: "facebook photo comments".to_string(),
+            platform_id: 3,
+            status: CampaignStatus::Active,
+            target_audience: None,
+            product_prompt: None,
+            reply_strategy: Some("Be helpful".to_string()),
+            dm_strategy: None,
+            reply_post_strategy: None,
+            max_comments: Some(10),
+            processed_comments: 0,
+        });
+        repository.add_task(TaskInfo {
+            id: 3835,
+            campaign_id: 98,
+            platform_id: 3,
+            keywords: Some(json!(["facebook_post_url:https://www.facebook.com/photo?fbid=928322816583907&set=a.235444075871788"])),
+            status: TaskStatus::Pending,
+            progress: 0,
+            error_message: None,
+        });
+
+        let content_gateway = Arc::new(StaticFacebookContentGateway {
+            content: Content::new(
+                "facebook",
+                "928322816583907",
+            )
+            .with_author("100082185911689")
+            .with_author_name("Gossip Harbor")
+            .with_description("photo post")
+            .with_url("https://www.facebook.com/GossipHarbor/posts/pfbid023XrzksHBkgtAN1ErALXUUrtAAHTfj9A8r3kDG6PqB8777auXLE1BAhUE93A9bKwel")
+            .with_raw_data(json!({
+                "post_id": "928322816583907",
+                "url": "https://www.facebook.com/GossipHarbor/posts/pfbid023XrzksHBkgtAN1ErALXUUrtAAHTfj9A8r3kDG6PqB8777auXLE1BAhUE93A9bKwel"
+            })),
+        });
+
+        for index in 0..5 {
+            comment_gateway.add_comment(
+                "pfbid023XrzksHBkgtAN1ErALXUUrtAAHTfj9A8r3kDG6PqB8777auXLE1BAhUE93A9bKwel",
+                Comment::new(
+                    "facebook",
+                    format!("87122560596616{index}"),
+                    "pfbid023XrzksHBkgtAN1ErALXUUrtAAHTfj9A8r3kDG6PqB8777auXLE1BAhUE93A9bKwel",
+                )
+                .with_author(format!("user-{index}"))
+                .with_text(format!("comment-{index}")),
+            );
+        }
+
+        let orchestrator = WorkflowOrchestrator::builder()
+            .add_content_gateway("facebook", content_gateway)
+            .add_comment_gateway("facebook", comment_gateway.clone())
+            .ai_analyzer(ai_analyzer)
+            .content_repository(repository.clone())
+            .prompt_repository(repository.clone())
+            .progress_tracker(repository)
+            .add_strategy(Arc::new(FacebookStrategy::new()))
+            .build()
+            .expect("orchestrator should build");
+
+        let result = orchestrator
+            .process_task(
+                3835,
+                TaskConfig::new(98, "facebook")
+                    .with_keywords(vec![
+                        "facebook_post_url:https://www.facebook.com/photo?fbid=928322816583907&set=a.235444075871788".to_string(),
+                    ])
+                    .with_max_videos(1)
+                    .with_max_comments_per_video(5),
+            )
+            .await
+            .expect("facebook photo task should complete");
+
+        assert!(result.success);
+        assert_eq!(result.contents_processed, 1);
+        assert_eq!(
+            result.comments_processed, 5,
+            "facebook photo URLs should resolve the pfbid lookup id before fetching comments"
+        );
+        assert_eq!(result.analyses_generated, 5);
+
+        let calls = comment_gateway.get_calls();
+        assert!(matches!(
+            calls.as_slice(),
+            [crate::testing::mock_gateway::GatewayCall::FetchAllComments { content_id, max: 5 }]
+                if content_id == "pfbid023XrzksHBkgtAN1ErALXUUrtAAHTfj9A8r3kDG6PqB8777auXLE1BAhUE93A9bKwel"
+        ));
     }
 }
