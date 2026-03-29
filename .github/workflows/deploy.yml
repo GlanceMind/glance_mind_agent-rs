@@ -1,26 +1,18 @@
-name: Deploy Agent-RS to Production
+name: Deploy Agent-RS
 
 on:
-  # Manual trigger
   workflow_dispatch:
     inputs:
       no_cache:
-        description: "Build without cache (for troubleshooting)"
+        description: "Build without cache"
         required: false
         default: "false"
         type: choice
-        options:
-          - "false"
-          - "true"
+        options: ["false", "true"]
 
-  # Auto trigger on push to release branches
   push:
-    branches:
-      - "release/**"
-      - "main"
-    tags:
-      - "**"
-    # Only trigger when source code or workflow changes
+    branches: ["release/**", "main"]
+    tags: ["**"]
     paths:
       - "src/**"
       - "Cargo.toml"
@@ -29,243 +21,27 @@ on:
       - "docker-compose.agent-rs.yml"
       - ".github/workflows/deploy.yml"
 
-env:
-  IMAGE_NAME: gm_agent_rs
-  BUILDKIT_CACHE_DIR: /var/cache/buildkit
-
 jobs:
   deploy:
-    name: Deploy Agent-RS
-    runs-on: [self-hosted, backend, p1]
-    environment: prod
-    timeout-minutes: 30
-    concurrency:
-      group: deploy-agent-rs-${{ github.ref }}
-      cancel-in-progress: true
-
-    steps:
-      - name: Pre-Cleanup Workspace
-        run: |
-          # Change ownership of the workspace to the runner user
-          sudo chown -R $USER:$USER ${{ github.workspace }} || true
-
-      - name: Checkout Code
-        uses: actions/checkout@v4
-        with:
-          clean: true
-
-      - name: Display deployment info
-        run: |
-          echo "=============================================="
-          echo "🚀 Deploying Agent-RS"
-          echo "   Commit: ${{ github.sha }}"
-          echo "   Branch: ${{ github.ref_name }}"
-          echo "=============================================="
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          driver: docker-container
-          driver-opts: |
-            image=moby/buildkit:latest
-            network=host
-
-      - name: Create .env file
-        run: |
-          # ============================================================
-          # Environment Variables for Agent-RS
-          # ============================================================
-          # 
-          # Required Secrets (GitHub Secrets):
-          #   - DATABASE_URL: PostgreSQL connection string
-          #   - TIKHUB_API_KEY: TikHub API key
-          #   - OPENAI_API_KEY: AI service API key (timicc)
-          #
-          # Optional Secrets (GitHub Secrets):
-          #   - FACEBOOK_RAPIDAPI_KEY: RapidAPI key for Facebook campaigns.
-          #     Leave empty to disable Facebook adapter registration in production.
-          #
-          # Optional Vars (GitHub Vars, have defaults):
-          #   - REDIS_URL: Redis connection URL (default: redis://host.docker.internal:6379/0)
-          #   - TIKHUB_BASE_URL: TikHub API base URL (default: https://api.tikhub.io)
-          #   - FACEBOOK_RAPIDAPI_HOST: RapidAPI host (default: facebook-scraper3.p.rapidapi.com)
-          #   - FACEBOOK_RAPIDAPI_BASE_URL: RapidAPI base URL (default: https://facebook-scraper3.p.rapidapi.com)
-          #   - OPENAI_BASE_URL: AI service base URL override (default: https://timicc.com/v1)
-          #   - RUST_LOG: Log level (default: info,glance_mind_agent_rs=debug)
-          #
-          # ============================================================
-
-          cat > .env << EOF
-          # ===================
-          # Required - Secrets
-          # ===================
-
-          # Database (PostgreSQL)
-          DATABASE_URL=${{ secrets.DATABASE_URL }}
-
-          # TikHub API
-          TIKHUB_API_KEY=${{ secrets.TIKHUB_API_KEY }}
-
-          # AI Service (OpenAI compatible, via timicc)
-          OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
-
-          # ===================
-          # Optional - Vars
-          # ===================
-
-          # Redis (use host.docker.internal, same as scheduler)
-          REDIS_URL=${{ vars.REDIS_URL || 'redis://host.docker.internal:6379/0' }}
-
-          # TikHub Base URL
-          TIKHUB_BASE_URL=${{ vars.TIKHUB_BASE_URL || 'https://api.tikhub.io' }}
-
-          # Facebook RapidAPI (leave key empty to disable Facebook adapter)
-          FACEBOOK_RAPIDAPI_KEY=${{ secrets.FACEBOOK_RAPIDAPI_KEY }}
-          FACEBOOK_RAPIDAPI_HOST=${{ vars.FACEBOOK_RAPIDAPI_HOST || 'facebook-scraper3.p.rapidapi.com' }}
-          FACEBOOK_RAPIDAPI_BASE_URL=${{ vars.FACEBOOK_RAPIDAPI_BASE_URL || 'https://facebook-scraper3.p.rapidapi.com' }}
-
-          # AI Service Base URL (optional org/repo/environment variable or secret)
-          OPENAI_BASE_URL=${{ vars.OPENAI_BASE_URL || secrets.OPENAI_BASE_URL || 'https://api.laozhang.ai/v1' }}
-
-          # Logging
-          RUST_LOG=${{ vars.RUST_LOG || 'info,glance_mind_agent_rs=debug' }}
-          EOF
-
-          echo "✅ Created .env file"
-
-      - name: Create BuildKit cache directory
-        run: |
-          sudo mkdir -p ${{ env.BUILDKIT_CACHE_DIR }}
-          sudo chown -R $USER:$USER ${{ env.BUILDKIT_CACHE_DIR }}
-
-      - name: Build Docker Image with Cache
-        run: |
-          echo "🔨 Building Docker image..."
-
-          # Determine cache flags
-          CACHE_FROM=""
-          CACHE_TO=""
-
-          if [ "${{ github.event.inputs.no_cache }}" != "true" ]; then
-            CACHE_FROM="--cache-from=type=local,src=${{ env.BUILDKIT_CACHE_DIR }}"
-            CACHE_TO="--cache-to=type=local,dest=${{ env.BUILDKIT_CACHE_DIR }},mode=max"
-            echo "📦 Using BuildKit cache at ${{ env.BUILDKIT_CACHE_DIR }}"
-          else
-            echo "⚠️ Building without cache (no_cache=true)"
-          fi
-
-          # Build with buildx
-          docker buildx build \
-            --file Dockerfile \
-            --tag ${{ env.IMAGE_NAME }}:latest \
-            --tag ${{ env.IMAGE_NAME }}:${{ github.sha }} \
-            $CACHE_FROM \
-            $CACHE_TO \
-            --load \
-            --progress=plain \
-            .
-
-          echo "✅ Build complete!"
-
-      - name: Deploy Application
-        run: |
-          # Try to use docker-compose (v1) or fall back to docker compose (v2)
-          if command -v docker-compose &> /dev/null; then
-            COMPOSE_CMD="docker-compose"
-          else
-            COMPOSE_CMD="docker compose"
-          fi
-
-          echo "Using compose command: $COMPOSE_CMD"
-
-          # Step 1: Stop old containers
-          echo "🛑 Stopping old containers..."
-          $COMPOSE_CMD -f docker-compose.agent-rs.yml down || true
-
-          # Step 2: Start new containers with the pre-built image
-          echo "🚀 Starting new containers..."
-          $COMPOSE_CMD -f docker-compose.agent-rs.yml up -d --build --remove-orphans
-
-          echo "✅ Deployment complete!"
-
-      - name: Verify Deployment
-        id: verify
-        run: |
-          echo "🔍 Verifying deployment..."
-          sleep 10
-
-          # Get container ID (running or not)
-          CONTAINER_ID=$(docker ps -a --filter "name=agent-rs" -q --latest 2>/dev/null || true)
-
-          # Check if container is running
-          if docker ps --filter "name=agent-rs" --format "{{.Names}}" | grep -q "agent-rs"; then
-            echo "✅ Container is running"
-            echo "status=success" >> $GITHUB_OUTPUT
-            
-            # Show container info
-            echo ""
-            echo "📦 Container Status:"
-            docker ps --filter "name=agent-rs" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-            
-            # Show recent logs
-            echo ""
-            echo "📋 Recent Logs:"
-            if [ -n "$CONTAINER_ID" ]; then
-              docker logs --tail 20 "$CONTAINER_ID" || true
-            fi
-          else
-            echo "❌ Container is not running!"
-            echo "status=failed" >> $GITHUB_OUTPUT
-            
-            # Show logs if container exists
-            if [ -n "$CONTAINER_ID" ]; then
-              echo ""
-              echo "📋 Container Logs:"
-              docker logs --tail 50 "$CONTAINER_ID" || true
-            else
-              echo "No container found"
-            fi
-            exit 1
-          fi
-
-      - name: Prune Unused Docker Objects
-        if: always()
-        run: |
-          echo "🧹 Cleaning up unused Docker objects..."
-          docker system prune -f
-
-      - name: Show Cache Stats
-        if: always()
-        run: |
-          echo "📊 BuildKit Cache Stats:"
-          if [ -d "${{ env.BUILDKIT_CACHE_DIR }}" ]; then
-            du -sh ${{ env.BUILDKIT_CACHE_DIR }} || echo "Could not get cache size"
-          else
-            echo "Cache directory does not exist"
-          fi
-
-  # Deployment summary
-  summary:
-    name: Deployment Summary
-    runs-on: ubuntu-latest
-    needs: [deploy]
-    if: always()
-
-    steps:
-      - name: Generate Summary
-        run: |
-          echo "## 🚀 Agent-RS Deployment Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          if [ "${{ needs.deploy.result }}" == "success" ]; then
-            echo "| Status | ✅ Success |" >> $GITHUB_STEP_SUMMARY
-          elif [ "${{ needs.deploy.result }}" == "failure" ]; then
-            echo "| Status | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "| Status | ⚠️ ${{ needs.deploy.result }} |" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Branch:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+    uses: GlanceMind/platform-infra/.github/workflows/deploy-service.yml@main
+    with:
+      service_name: agent-rs
+      image_name: gm_agent_rs
+      dockerfile: Dockerfile
+      compose_file: docker-compose.agent-rs.yml
+      runner_labels: '["self-hosted", "backend", "p1"]'
+      use_buildx: true
+      no_cache: ${{ github.event.inputs.no_cache == 'true' }}
+      container_name_filter: agent-rs
+    secrets:
+      ENV_FILE: |
+        DATABASE_URL=${{ secrets.DATABASE_URL }}
+        TIKHUB_API_KEY=${{ secrets.TIKHUB_API_KEY }}
+        OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+        REDIS_URL=${{ vars.REDIS_URL || 'redis://host.docker.internal:6379/0' }}
+        TIKHUB_BASE_URL=${{ vars.TIKHUB_BASE_URL || 'https://api.tikhub.io' }}
+        FACEBOOK_RAPIDAPI_KEY=${{ secrets.FACEBOOK_RAPIDAPI_KEY }}
+        FACEBOOK_RAPIDAPI_HOST=${{ vars.FACEBOOK_RAPIDAPI_HOST || 'facebook-scraper3.p.rapidapi.com' }}
+        FACEBOOK_RAPIDAPI_BASE_URL=${{ vars.FACEBOOK_RAPIDAPI_BASE_URL || 'https://facebook-scraper3.p.rapidapi.com' }}
+        OPENAI_BASE_URL=${{ vars.OPENAI_BASE_URL || 'https://api.laozhang.ai/v1' }}
+        RUST_LOG=${{ vars.RUST_LOG || 'info,glance_mind_agent_rs=debug' }}
