@@ -21,9 +21,11 @@
 
 services:
   agent-rs:
+    image: gm_agent_rs:latest
     build:
       context: .
       dockerfile: Dockerfile
+    container_name: agent-rs
     restart: unless-stopped
     env_file:
       - .env
