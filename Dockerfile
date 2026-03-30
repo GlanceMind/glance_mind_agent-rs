@@ -4,19 +4,19 @@ FROM rust:1.88-bookworm AS chef
 RUN cargo install cargo-chef --locked
 WORKDIR /app
 
-RUN mkdir -p /usr/local/cargo && cat > /usr/local/cargo/config.toml << 'CARGO_EOF'
-[source.crates-io]
-replace-with = "rsproxy-sparse"
-
-[source.rsproxy-sparse]
-registry = "sparse+https://rsproxy.cn/index/"
-
-[registries.rsproxy]
-index = "https://rsproxy.cn/crates.io-index"
-
-[net]
-git-fetch-with-cli = true
-CARGO_EOF
+RUN printf '%s\n' \
+      '[source.crates-io]' \
+      'replace-with = "rsproxy-sparse"' \
+      '' \
+      '[source.rsproxy-sparse]' \
+      'registry = "sparse+https://rsproxy.cn/index/"' \
+      '' \
+      '[registries.rsproxy]' \
+      'index = "https://rsproxy.cn/crates.io-index"' \
+      '' \
+      '[net]' \
+      'git-fetch-with-cli = true' \
+      > /usr/local/cargo/config.toml
 
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
