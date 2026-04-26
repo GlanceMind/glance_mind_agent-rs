@@ -139,9 +139,9 @@ pub struct CrawlerTaskMeta {
 /// Task specification
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct CrawlerTaskSpec {
-    #[serde(default)]
+    #[serde(default, with = "crate::protocol_gen::serde_helpers::platform")]
     pub platform: i32,
-    #[serde(default)]
+    #[serde(default, with = "crate::protocol_gen::serde_helpers::data_type")]
     pub data_type: i32,
 }
 
@@ -165,7 +165,11 @@ pub struct TaskConfig {
 /// Task filters
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct TaskFilters {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::protocol_gen::serde_helpers::time_range_opt"
+    )]
     pub time_range: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub region: Option<String>,
@@ -600,6 +604,95 @@ pub struct AiPubImageConfig {
     /// URL of the end frame image (for FL models that support transitions)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end_frame_url: Option<String>,
+}
+
+/// v2 ImageGenerationSpec — describes ONE image generation job in
+/// `UnifiedAiPubInput.image_generations[]` (or, for back-compat,
+/// `gm_aipub_plans.ai_input.image_generations[]` JSONB).
+///
+/// Provider routing:
+///   - `model.starts_with("flux-kontext-")` -> FluxClient
+///   - `model.starts_with("seedream-")`     -> SeedreamClient
+///   - else / "gpt-4o-image"                -> LegacyOpenAIClient
+///   - `provider_hint` overrides the prefix-based routing.
+///
+/// See `docs/image-provider-param-matrix.md` for per-field provider
+/// HTTP mapping.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+pub struct ImageGenerationSpec {
+    /// Prompt(s). v2.0: callers pass length 1; longer is reserved for
+    /// per-variation prompts.
+    #[serde(default)]
+    pub prompts: Vec<String>,
+
+    /// Number of images to produce for this spec. Default 1; range 1..=10.
+    #[serde(default)]
+    pub count: u32,
+
+    /// Specific image model id (e.g. "flux-kontext-pro",
+    /// "seedream-4-5-251128", "gpt-4o-image").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+
+    /// Output dimensions. 0 = use model default. SeeDream / Nano Banana
+    /// honor explicit pixel sizes; Flux ignores and uses aspect_ratio.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub width_px: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub height_px: u32,
+
+    /// What role the produced images should fill in the publish payload.
+    /// Stored as int32 (matches MediaRole enum on the proto side).
+    #[serde(default)]
+    pub role_hint: i32,
+
+    /// Reference images for image-to-image / style transfer / edit.
+    #[serde(default)]
+    pub reference_image_urls: Vec<String>,
+
+    /// Aspect ratio "W:H". Primary knob for Flux; SeeDream also accepts
+    /// common ratios. If both this and width_px/height_px are set,
+    /// explicit pixels win (validator must reject conflicting input).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aspect_ratio: Option<String>,
+
+    /// "jpeg" | "png" | "webp". Honored by Flux only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_format: Option<String>,
+
+    /// Provider-specific knobs that haven't graduated to typed fields.
+    /// See matrix doc for whitelisted keys per provider. Unknown keys
+    /// are forwarded as-is by the client; validator enforces a global
+    /// blacklist (api_key/authorization/base_url/n/response_format).
+    #[serde(default)]
+    pub extras: std::collections::HashMap<String, String>,
+
+    /// Random seed (Flux only; SeeDream silently ignores).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
+
+    /// Watermark output (SeeDream only). Defaults to false when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub watermark: Option<bool>,
+
+    /// Force routing to "flux" | "seedream" | "openai".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_hint: Option<String>,
+
+    /// "text_to_image" | "image_edit". When unset, scheduler infers
+    /// from `reference_image_urls.is_empty()`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+
+    /// Flux content safety strictness, 0..=6 (0 strictest). SeeDream
+    /// ignores.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub safety_tolerance: Option<u32>,
+}
+
+#[allow(dead_code)]
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
 }
 
 // ============================================================
@@ -1309,6 +1402,161 @@ impl Default for PatrolConfig {
 fn default_profile_interval() -> i32 { 600 }
 fn default_notif_interval() -> i32 { 180 }
 
+// =====================================================================
+// String-enum wire compatibility helpers.
+//
+// Scheduler (via glance_mind_protocol prost adapters) sends enum fields
+// as lowercase JSON strings, e.g. `"platform":"tiktok"`. The hand-written
+// CrawlerTaskSpec / TaskFilters in this module store them as i32 to keep
+// internal arithmetic simple, so we expose serde adapters that:
+//   - serialize i32 -> lowercase string (writers stay aligned with the
+//     canonical glance_mind_protocol wire format)
+//   - deserialize either string OR int -> i32 (readers accept both wire
+//     formats, so existing fixtures with integer enums keep working)
+//
+// This is a temporary compatibility shim until agent-rs migrates to the
+// canonical glance_mind_protocol crate; see plans/2026-04-26 Phase 6.
+// =====================================================================
+pub mod serde_helpers {
+    use serde::{de, Deserialize, Deserializer, Serializer};
+
+    fn platform_to_str(v: i32) -> &'static str {
+        match v {
+            1 => "reddit",
+            2 => "tiktok",
+            3 => "facebook",
+            4 => "instagram",
+            5 => "twitter",
+            6 => "youtube",
+            _ => "unspecified",
+        }
+    }
+    fn platform_from_str(s: &str) -> Option<i32> {
+        match s.to_ascii_lowercase().as_str() {
+            "reddit" => Some(1),
+            "tiktok" => Some(2),
+            "facebook" => Some(3),
+            "instagram" => Some(4),
+            "twitter" => Some(5),
+            "youtube" => Some(6),
+            "unspecified" => Some(0),
+            _ => None,
+        }
+    }
+
+    fn data_type_to_str(v: i32) -> &'static str {
+        match v {
+            1 => "video_content",
+            2 => "video_metadata",
+            3 => "video_comments",
+            4 => "keyword_search",
+            _ => "unspecified",
+        }
+    }
+    fn data_type_from_str(s: &str) -> Option<i32> {
+        match s {
+            "video_content" => Some(1),
+            "video_metadata" => Some(2),
+            "video_comments" => Some(3),
+            "keyword_search" => Some(4),
+            "unspecified" => Some(0),
+            _ => None,
+        }
+    }
+
+    fn time_range_to_str(v: i32) -> &'static str {
+        match v {
+            1 => "all_time",
+            2 => "last_24h",
+            3 => "last_7d",
+            4 => "last_30d",
+            5 => "last_180d",
+            _ => "unspecified",
+        }
+    }
+    fn time_range_from_str(s: &str) -> Option<i32> {
+        match s {
+            "all_time" => Some(1),
+            "last_24h" => Some(2),
+            "last_7d" => Some(3),
+            "last_30d" => Some(4),
+            "last_180d" => Some(5),
+            "unspecified" => Some(0),
+            _ => None,
+        }
+    }
+
+    /// Accept either a string ("tiktok") or an integer (2). Always emit string.
+    pub mod platform {
+        use super::*;
+        pub fn serialize<S: Serializer>(v: &i32, s: S) -> Result<S::Ok, S::Error> {
+            s.serialize_str(platform_to_str(*v))
+        }
+        pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<i32, D::Error> {
+            #[derive(Deserialize)]
+            #[serde(untagged)]
+            enum StrOrInt {
+                S(String),
+                I(i32),
+            }
+            match StrOrInt::deserialize(d)? {
+                StrOrInt::I(n) => Ok(n),
+                StrOrInt::S(s) => platform_from_str(&s)
+                    .ok_or_else(|| de::Error::custom(format!("unknown platform variant: {}", s))),
+            }
+        }
+    }
+
+    pub mod data_type {
+        use super::*;
+        pub fn serialize<S: Serializer>(v: &i32, s: S) -> Result<S::Ok, S::Error> {
+            s.serialize_str(data_type_to_str(*v))
+        }
+        pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<i32, D::Error> {
+            #[derive(Deserialize)]
+            #[serde(untagged)]
+            enum StrOrInt {
+                S(String),
+                I(i32),
+            }
+            match StrOrInt::deserialize(d)? {
+                StrOrInt::I(n) => Ok(n),
+                StrOrInt::S(s) => data_type_from_str(&s)
+                    .ok_or_else(|| de::Error::custom(format!("unknown data_type variant: {}", s))),
+            }
+        }
+    }
+
+    /// Optional variant: `TaskFilters.time_range` is `Option<i32>`.
+    pub mod time_range_opt {
+        use super::*;
+        pub fn serialize<S: Serializer>(v: &Option<i32>, s: S) -> Result<S::Ok, S::Error> {
+            match v {
+                Some(n) => s.serialize_str(time_range_to_str(*n)),
+                None => s.serialize_none(),
+            }
+        }
+        pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<i32>, D::Error> {
+            #[derive(Deserialize)]
+            #[serde(untagged)]
+            enum StrOrInt {
+                S(String),
+                I(i32),
+            }
+            let opt: Option<StrOrInt> = Option::deserialize(d)?;
+            match opt {
+                None => Ok(None),
+                Some(StrOrInt::I(n)) => Ok(Some(n)),
+                Some(StrOrInt::S(s)) => time_range_from_str(&s)
+                    .map(Some)
+                    .ok_or_else(|| {
+                        de::Error::custom(format!("unknown time_range variant: {}", s))
+                    }),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1431,6 +1679,75 @@ mod tests {
         assert_eq!(parsed.spec.unwrap().platform, 2); // TikTok
     }
 
+    /// Regression for Bug A (campaign 121 / task 3972, 2026-04-26):
+    /// the Scheduler (via vendored glance_mind_protocol) emits enum fields
+    /// as lowercase JSON strings. Agent-rs must accept them.
+    #[test]
+    fn test_crawler_task_string_wire_compat() {
+        let json = r#"{
+            "meta": {"task_id":3972,"source":"campaign-121","timestamp":1.0,"campaign_id":121},
+            "spec": {"platform":"tiktok","data_type":"video_comments"},
+            "config": {
+                "keywords":["test"],
+                "max_count":50, "search_offset":0, "search_limit":10,
+                "filters": {"time_range":"last_180d","region":"US"}
+            }
+        }"#;
+        let task: CrawlerTask =
+            serde_json::from_str(json).expect("string wire format must parse");
+        let spec = task.spec.expect("spec");
+        assert_eq!(spec.platform, 2, "platform 'tiktok' should map to i32 = 2");
+        assert_eq!(spec.data_type, 3, "data_type 'video_comments' should map to i32 = 3");
+        let filters = task.config.unwrap().filters.unwrap();
+        assert_eq!(filters.time_range, Some(5), "time_range 'last_180d' should map to i32 = 5");
+    }
+
+    /// Pre-existing fixtures still emit integer enums; we must accept both.
+    #[test]
+    fn test_crawler_task_int_wire_back_compat() {
+        let json = r#"{
+            "meta": {"task_id":1,"source":"x","timestamp":1.0,"campaign_id":1},
+            "spec": {"platform":2,"data_type":3},
+            "config": {"keywords":["k"], "max_count":1, "search_offset":0, "search_limit":1, "filters": null}
+        }"#;
+        let task: CrawlerTask = serde_json::from_str(json)
+            .expect("int wire format must still parse");
+        assert_eq!(task.spec.unwrap().platform, 2);
+    }
+
+    /// Outgoing JSON must use lowercase string enum names so other consumers
+    /// (Python executor, glance_mind_protocol-based services) stay aligned.
+    #[test]
+    fn test_crawler_task_serialize_emits_strings() {
+        let task = CrawlerTask {
+            meta: Some(CrawlerTaskMeta {
+                task_id: 1,
+                source: "x".into(),
+                timestamp: 0.0,
+                campaign_id: 1,
+            }),
+            spec: Some(CrawlerTaskSpec {
+                platform: 2,
+                data_type: 3,
+            }),
+            config: Some(TaskConfig {
+                keywords: vec!["k".into()],
+                max_count: 1,
+                search_offset: 0,
+                search_limit: 1,
+                filters: Some(TaskFilters {
+                    time_range: Some(5),
+                    region: None,
+                }),
+                search_options: None,
+            }),
+        };
+        let json = serde_json::to_string(&task).unwrap();
+        assert!(json.contains("\"platform\":\"tiktok\""), "got: {}", json);
+        assert!(json.contains("\"data_type\":\"video_comments\""), "got: {}", json);
+        assert!(json.contains("\"time_range\":\"last_180d\""), "got: {}", json);
+    }
+
     #[test]
     fn test_data_type_json() {
         let dt = DataType::VideoComments;
@@ -1551,17 +1868,20 @@ mod tests {
             followers_count: 1500,
             following_count: 200,
             posts_count: 42,
+            total_likes: 0,
             new_followers: 5,
             received_likes: 120,
             received_comments: 8,
             received_dms: 3,
             received_shares: 2,
             received_mentions: 1,
+            received_friend_requests: 0,
             collected_at: "2026-04-15T10:00:00Z".to_string(),
             collection_type: "profile".to_string(),
             partial: false,
             warnings: vec![],
             error: String::new(),
+            unread_total: 0,
         };
         let json = serde_json::to_string(&stats).unwrap();
         let parsed: AccountStats = serde_json::from_str(&json).unwrap();
