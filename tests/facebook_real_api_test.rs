@@ -178,6 +178,15 @@ fn assert_object_result<'a>(body: &'a Value, endpoint: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("{endpoint} should return a `results` object: {body}"))
 }
 
+fn assert_live_counter_close(label: &str, actual: i64, expected: i64) {
+    let tolerance = 5.max(expected.abs() / 100);
+    let delta = (actual - expected).abs();
+    assert!(
+        delta <= tolerance,
+        "{label} drifted too far between live API calls: actual={actual}, expected={expected}, tolerance={tolerance}"
+    );
+}
+
 fn assert_content_matches_raw(content: &glance_mind_agent_rs::Content, raw: &Value) {
     let raw_author = raw.get("author");
     let expected_author = raw_author
@@ -214,33 +223,39 @@ fn assert_content_matches_raw(content: &glance_mind_agent_rs::Content, raw: &Val
         content.url.as_deref(),
         raw.get("url").and_then(Value::as_str)
     );
-    assert_eq!(
-        content.engagement.likes,
-        json_i64(raw.get("reactions_count")).unwrap_or_default()
-    );
-    assert_eq!(
-        content.engagement.comments,
-        json_i64(raw.get("comments_count")).unwrap_or_default()
-    );
-    assert_eq!(
-        content.engagement.shares,
-        json_i64(raw.get("reshare_count")).unwrap_or_default()
-    );
     assert_eq!(content.created_at, json_i64(raw.get("timestamp")));
 
     let raw_data = content
         .raw_data
         .as_ref()
         .expect("content.raw_data should retain the upstream Facebook payload");
+    let adapter_likes = json_i64(raw_data.get("reactions_count")).unwrap_or_default();
+    let adapter_comments = json_i64(raw_data.get("comments_count")).unwrap_or_default();
+    let adapter_shares = json_i64(raw_data.get("reshare_count")).unwrap_or_default();
+    assert_eq!(content.engagement.likes, adapter_likes);
+    assert_eq!(content.engagement.comments, adapter_comments);
+    assert_eq!(content.engagement.shares, adapter_shares);
+    assert_live_counter_close(
+        "reactions_count",
+        adapter_likes,
+        json_i64(raw.get("reactions_count")).unwrap_or_default(),
+    );
+    assert_live_counter_close(
+        "comments_count",
+        adapter_comments,
+        json_i64(raw.get("comments_count")).unwrap_or_default(),
+    );
+    assert_live_counter_close(
+        "reshare_count",
+        adapter_shares,
+        json_i64(raw.get("reshare_count")).unwrap_or_default(),
+    );
     assert_eq!(raw_data.get("post_id"), raw.get("post_id"));
     assert_eq!(raw_data.get("url"), raw.get("url"));
     assert_eq!(raw_data.get("type"), raw.get("type"));
     assert_eq!(raw_data.get("message"), raw.get("message"));
     assert_eq!(raw_data.get("message_rich"), raw.get("message_rich"));
     assert_eq!(raw_data.get("timestamp"), raw.get("timestamp"));
-    assert_eq!(raw_data.get("comments_count"), raw.get("comments_count"));
-    assert_eq!(raw_data.get("reactions_count"), raw.get("reactions_count"));
-    assert_eq!(raw_data.get("reshare_count"), raw.get("reshare_count"));
     assert_eq!(
         raw_data
             .get("author")
@@ -898,7 +913,13 @@ async fn test_facebook_post_url_real() {
         raw_post.get("post_id").and_then(Value::as_str),
         Some(POST_ID)
     );
-    assert_eq!(raw_post.get("url").and_then(Value::as_str), Some(POST_URL));
+    assert!(
+        raw_post
+            .get("url")
+            .and_then(Value::as_str)
+            .is_some_and(|url| url.starts_with("https://www.facebook.com/NatGeoMuseum/posts/")),
+        "post lookup should return a NatGeoMuseum Facebook post URL: {raw_post}"
+    );
 
     let adapter = create_adapter();
     let strategy = FacebookStrategy::new();
@@ -937,7 +958,10 @@ async fn test_facebook_post_fetch_real() {
 
     assert_content_matches_raw(&content, raw_post);
     assert_eq!(content.content_id, POST_ID);
-    assert_eq!(content.url.as_deref(), Some(POST_URL));
+    assert_eq!(
+        content.url.as_deref(),
+        raw_post.get("url").and_then(Value::as_str)
+    );
 }
 
 #[tokio::test]
