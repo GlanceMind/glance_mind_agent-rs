@@ -76,6 +76,11 @@ struct InstagramCommentRow {
 
 fn database_url() -> Option<String> {
     let _ = dotenvy::dotenv();
+    if std::env::var_os("GITHUB_ACTIONS").is_some()
+        && std::env::var_os("RUN_REAL_DB_TESTS").is_none()
+    {
+        return None;
+    }
     std::env::var("DATABASE_URL").ok()
 }
 
@@ -163,7 +168,9 @@ fn cleanup_supporting_rows(conn: &mut PgConnection, campaign_id: i32, task_id: i
 #[tokio::test]
 async fn test_instagram_v3_fetch_parse_and_save_real_db() {
     let Some(database_url) = database_url() else {
-        eprintln!("Skipping test - DATABASE_URL is not set");
+        eprintln!(
+            "Skipping Instagram real DB test - DATABASE_URL is unset or real DB tests are disabled on GitHub Actions"
+        );
         return;
     };
 

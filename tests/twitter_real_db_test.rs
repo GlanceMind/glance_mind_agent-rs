@@ -30,15 +30,16 @@ use glance_mind_agent_rs::{
         prompt_repository::{CampaignConfig, CampaignStatus, PlatformConfig},
     },
     tikhub::{TwitterSearchParams, TwitterTweet as RawTwitterTweet},
-    AiAnalyzer, Comment, CommentGateway, Content, ContentGateway, KeywordType,
-    OrchestratorConfig, PostgresAdapter, ProgressTracker, PromptRepository, ReplySuggestion,
-    SearchOptions, TaskConfig, TwitterAdapter, TwitterStrategy, WorkflowOrchestrator,
+    AiAnalyzer, Comment, CommentGateway, Content, ContentGateway, KeywordType, OrchestratorConfig,
+    PostgresAdapter, ProgressTracker, PromptRepository, ReplySuggestion, SearchOptions, TaskConfig,
+    TwitterAdapter, TwitterStrategy, WorkflowOrchestrator,
 };
 
 use twitter_live::{
-    candidate_exact_queries, create_adapter, create_client, create_strategy, fetch_comments_for_content,
-    fetch_first_content_for_keyword, live_test_mutex, pick_comment_seed, pick_rest_id_seed,
-    pick_search_seed, push_unique_query, retry_tikhub_rate_limit, COMMENT_TARGET_COUNT,
+    candidate_exact_queries, create_adapter, create_client, create_strategy,
+    fetch_comments_for_content, fetch_first_content_for_keyword, live_test_mutex,
+    pick_comment_seed, pick_rest_id_seed, pick_search_seed, push_unique_query,
+    retry_tikhub_rate_limit, COMMENT_TARGET_COUNT,
 };
 
 const TEST_REPLY: &str = "Thanks from twitter real db test";
@@ -324,9 +325,24 @@ impl CommentGateway for RecordingTwitterGateway {
     }
 }
 
-fn database_url() -> String {
+fn database_url() -> Option<String> {
     let _ = dotenvy::dotenv();
-    std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for the real Twitter DB test")
+    if std::env::var_os("GITHUB_ACTIONS").is_some()
+        && std::env::var_os("RUN_REAL_DB_TESTS").is_none()
+    {
+        return None;
+    }
+    std::env::var("DATABASE_URL").ok()
+}
+
+fn real_db_tests_enabled() -> bool {
+    let enabled = database_url().is_some();
+    if !enabled {
+        eprintln!(
+            "Skipping Twitter real DB workflow test - DATABASE_URL is unset or real DB tests are disabled on GitHub Actions"
+        );
+    }
+    enabled
 }
 
 fn connect(database_url: &str) -> PgConnection {
@@ -342,16 +358,19 @@ fn query_single_id(conn: &mut PgConnection, sql: &str) -> i32 {
 
 fn create_supporting_campaign_and_task(conn: &mut PgConnection) -> (i32, i32) {
     let user_id = query_single_id(conn, "SELECT id FROM gm_users ORDER BY id LIMIT 1");
-    let region_id = diesel::sql_query(
-        "SELECT id FROM gm_regions WHERE platform_id = 5 ORDER BY id LIMIT 1",
-    )
-    .get_result::<IdRow>(conn)
-    .or_else(|_| diesel::sql_query("SELECT id FROM gm_regions ORDER BY id LIMIT 1").get_result(conn))
-    .map(|row| row.id)
-    .expect("failed to resolve a region for the Twitter test campaign");
+    let region_id =
+        diesel::sql_query("SELECT id FROM gm_regions WHERE platform_id = 5 ORDER BY id LIMIT 1")
+            .get_result::<IdRow>(conn)
+            .or_else(|_| {
+                diesel::sql_query("SELECT id FROM gm_regions ORDER BY id LIMIT 1").get_result(conn)
+            })
+            .map(|row| row.id)
+            .expect("failed to resolve a region for the Twitter test campaign");
     let ai_model_id = query_single_id(conn, "SELECT id FROM gm_ai_models ORDER BY id LIMIT 1");
-    let campaign_id =
-        query_single_id(conn, "SELECT COALESCE(MAX(id), 0) + 1000 AS id FROM gm_campaigns");
+    let campaign_id = query_single_id(
+        conn,
+        "SELECT COALESCE(MAX(id), 0) + 1000 AS id FROM gm_campaigns",
+    );
     let task_id = query_single_id(
         conn,
         "SELECT COALESCE(MAX(id), 0) + 1000 AS id FROM gm_crawler_tasks",
@@ -401,8 +420,10 @@ fn cleanup_supporting_rows(conn: &mut PgConnection, campaign_id: i32, task_id: i
         "DELETE FROM gm_agent_twitter_tweets WHERE task_id = {task_id}"
     ))
     .execute(conn);
-    let _ = diesel::sql_query(format!("DELETE FROM gm_crawler_tasks WHERE id = {task_id}")).execute(conn);
-    let _ = diesel::sql_query(format!("DELETE FROM gm_campaigns WHERE id = {campaign_id}")).execute(conn);
+    let _ = diesel::sql_query(format!("DELETE FROM gm_crawler_tasks WHERE id = {task_id}"))
+        .execute(conn);
+    let _ = diesel::sql_query(format!("DELETE FROM gm_campaigns WHERE id = {campaign_id}"))
+        .execute(conn);
 }
 
 fn as_i32(value: i64) -> i32 {
@@ -420,9 +441,7 @@ fn assert_timestamp_close(actual: Option<i64>, expected: Option<i64>, field_name
             "{field_name} should match within 5 seconds: actual={actual}, expected={expected}"
         ),
         (None, None) => {}
-        _ => panic!(
-            "{field_name} presence mismatch: actual={actual:?}, expected={expected:?}"
-        ),
+        _ => panic!("{field_name} presence mismatch: actual={actual:?}, expected={expected:?}"),
     }
 }
 
@@ -460,7 +479,12 @@ fn raw_user_description(tweet: &RawTwitterTweet) -> Option<&str> {
         .user_info
         .as_ref()
         .and_then(|user| user.description.as_deref())
-        .or_else(|| tweet.author.as_ref().and_then(|user| user.description.as_deref()))
+        .or_else(|| {
+            tweet
+                .author
+                .as_ref()
+                .and_then(|user| user.description.as_deref())
+        })
 }
 
 fn raw_user_followers(tweet: &RawTwitterTweet) -> Option<i32> {
@@ -477,7 +501,12 @@ fn raw_user_avatar(tweet: &RawTwitterTweet) -> Option<&str> {
         .user_info
         .as_ref()
         .and_then(|user| user.avatar.as_deref())
-        .or_else(|| tweet.author.as_ref().and_then(|user| user.avatar.as_deref()))
+        .or_else(|| {
+            tweet
+                .author
+                .as_ref()
+                .and_then(|user| user.avatar.as_deref())
+        })
 }
 
 fn raw_user_verified(tweet: &RawTwitterTweet) -> Option<bool> {
@@ -513,7 +542,11 @@ async fn candidate_handle_names() -> Vec<String> {
         })
         .await;
 
-        if let Some(timeline) = response.data.as_ref().and_then(|data| data.timeline.as_ref()) {
+        if let Some(timeline) = response
+            .data
+            .as_ref()
+            .and_then(|data| data.timeline.as_ref())
+        {
             for tweet in timeline {
                 if let Some(handle) = tweet.author_handle() {
                     push_unique_query(&mut handles, handle.to_string());
@@ -689,13 +722,21 @@ async fn prepare_rest_id_case(
     }
 }
 
-async fn run_real_workflow_case(adapter: glance_mind_agent_rs::TwitterAdapter, case: WorkflowCaseInput) {
+async fn run_real_workflow_case(
+    adapter: glance_mind_agent_rs::TwitterAdapter,
+    case: WorkflowCaseInput,
+) {
     let WorkflowCaseInput {
         raw_keyword,
         extra_pairs,
     } = case;
 
-    let database_url = database_url();
+    let Some(database_url) = database_url() else {
+        eprintln!(
+            "Skipping Twitter real DB workflow case - DATABASE_URL is unset or real DB tests are disabled on GitHub Actions"
+        );
+        return;
+    };
     let mut conn = connect(&database_url);
     let (campaign_id, task_id) = create_supporting_campaign_and_task(&mut conn);
 
@@ -770,8 +811,14 @@ async fn run_real_workflow_case(adapter: glance_mind_agent_rs::TwitterAdapter, c
     let expected_raw_tweet = raw_tweet_from_content(&expected_content);
     assert_eq!(persisted_tweet.task_id, task_id);
     assert_eq!(persisted_tweet.campaign_id, Some(campaign_id));
-    assert_eq!(persisted_tweet.twitter_tweet_id, expected_content.content_id);
-    assert_eq!(persisted_tweet.conversation_id, expected_raw_tweet.conversation_id);
+    assert_eq!(
+        persisted_tweet.twitter_tweet_id,
+        expected_content.content_id
+    );
+    assert_eq!(
+        persisted_tweet.conversation_id,
+        expected_raw_tweet.conversation_id
+    );
     assert_eq!(persisted_tweet.full_text, expected_content.description);
     assert_eq!(persisted_tweet.lang, expected_raw_tweet.lang);
     assert_eq!(
@@ -798,9 +845,18 @@ async fn run_real_workflow_case(adapter: glance_mind_agent_rs::TwitterAdapter, c
         normalize_optional_str(persisted_tweet.user_avatar.as_deref()),
         normalize_optional_str(raw_user_avatar(&expected_raw_tweet))
     );
-    assert_eq!(persisted_tweet.user_verified, raw_user_verified(&expected_raw_tweet));
-    assert_eq!(persisted_tweet.media_urls, raw_media_urls(&expected_raw_tweet));
-    assert_eq!(persisted_tweet.has_media, Some(expected_raw_tweet.has_media()));
+    assert_eq!(
+        persisted_tweet.user_verified,
+        raw_user_verified(&expected_raw_tweet)
+    );
+    assert_eq!(
+        persisted_tweet.media_urls,
+        raw_media_urls(&expected_raw_tweet)
+    );
+    assert_eq!(
+        persisted_tweet.has_media,
+        Some(expected_raw_tweet.has_media())
+    );
     assert_eq!(
         persisted_tweet.favorite_count,
         expected_raw_tweet
@@ -824,8 +880,14 @@ async fn run_real_workflow_case(adapter: glance_mind_agent_rs::TwitterAdapter, c
         persisted_tweet.bookmark_count,
         expected_raw_tweet.bookmarks.map(as_i32)
     );
-    assert_eq!(persisted_tweet.view_count, expected_raw_tweet.views.map(as_i32));
-    assert_eq!(persisted_tweet.is_reply, Some(expected_raw_tweet.is_reply()));
+    assert_eq!(
+        persisted_tweet.view_count,
+        expected_raw_tweet.views.map(as_i32)
+    );
+    assert_eq!(
+        persisted_tweet.is_reply,
+        Some(expected_raw_tweet.is_reply())
+    );
     assert_eq!(
         persisted_tweet.in_reply_to_status_id,
         expected_raw_tweet.in_reply_to_status_id_str
@@ -834,14 +896,19 @@ async fn run_real_workflow_case(adapter: glance_mind_agent_rs::TwitterAdapter, c
         persisted_tweet.in_reply_to_user_id,
         expected_raw_tweet.in_reply_to_user_id_str
     );
-    assert_eq!(persisted_tweet.created_at_str, expected_raw_tweet.created_at);
+    assert_eq!(
+        persisted_tweet.created_at_str,
+        expected_raw_tweet.created_at
+    );
     assert_timestamp_close(
         persisted_tweet.created_at_ts,
         expected_raw_tweet.created_at_timestamp(),
         "persisted_tweet.created_at_ts",
     );
     assert_timestamp_close(
-        persisted_tweet.tweet_created_at.map(|value| value.timestamp()),
+        persisted_tweet
+            .tweet_created_at
+            .map(|value| value.timestamp()),
         expected_raw_tweet.created_at_timestamp(),
         "persisted_tweet.tweet_created_at",
     );
@@ -870,7 +937,10 @@ async fn run_real_workflow_case(adapter: glance_mind_agent_rs::TwitterAdapter, c
 
         assert_eq!(persisted_comment.tweet_db_id, persisted_tweet.id);
         assert_eq!(persisted_comment.campaign_id, Some(campaign_id));
-        assert_eq!(persisted_comment.twitter_comment_id, source_comment.comment_id);
+        assert_eq!(
+            persisted_comment.twitter_comment_id,
+            source_comment.comment_id
+        );
         assert_eq!(persisted_comment.conversation_id, raw.conversation_id);
         assert_eq!(
             normalize_optional_str(persisted_comment.comment_screen_name.as_deref()),
@@ -884,10 +954,16 @@ async fn run_real_workflow_case(adapter: glance_mind_agent_rs::TwitterAdapter, c
             normalize_optional_str(persisted_comment.comment_user_id.as_deref()),
             normalize_optional_str(raw.user_id())
         );
-        assert_eq!(persisted_comment.comment_user_followers, raw_user_followers(&raw));
+        assert_eq!(
+            persisted_comment.comment_user_followers,
+            raw_user_followers(&raw)
+        );
         assert_eq!(persisted_comment.comment_text, source_comment.text);
         assert_eq!(persisted_comment.reason.as_deref(), Some(TEST_REASON));
-        assert_eq!(persisted_comment.suggested_reply.as_deref(), Some(TEST_REPLY));
+        assert_eq!(
+            persisted_comment.suggested_reply.as_deref(),
+            Some(TEST_REPLY)
+        );
         assert_eq!(persisted_comment.suggested_dm.as_deref(), Some(TEST_DM));
         assert_eq!(
             persisted_comment.suggested_reply_post.as_deref(),
@@ -913,7 +989,9 @@ async fn run_real_workflow_case(adapter: glance_mind_agent_rs::TwitterAdapter, c
             "persisted_comment.created_at_ts",
         );
         assert_timestamp_close(
-            persisted_comment.comment_created_at.map(|value| value.timestamp()),
+            persisted_comment
+                .comment_created_at
+                .map(|value| value.timestamp()),
             raw.created_at_timestamp(),
             "persisted_comment.comment_created_at",
         );
@@ -930,6 +1008,9 @@ async fn run_real_workflow_case(adapter: glance_mind_agent_rs::TwitterAdapter, c
 
 #[tokio::test]
 async fn test_twitter_real_workflow_search_persists_all_fields() {
+    if !real_db_tests_enabled() {
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let adapter = create_adapter();
     let strategy = create_strategy();
@@ -939,6 +1020,9 @@ async fn test_twitter_real_workflow_search_persists_all_fields() {
 
 #[tokio::test]
 async fn test_twitter_real_workflow_handle_persists_all_fields() {
+    if !real_db_tests_enabled() {
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let adapter = create_adapter();
     let strategy = create_strategy();
@@ -948,6 +1032,9 @@ async fn test_twitter_real_workflow_handle_persists_all_fields() {
 
 #[tokio::test]
 async fn test_twitter_real_workflow_tweet_id_persists_all_fields() {
+    if !real_db_tests_enabled() {
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let adapter = create_adapter();
     let strategy = create_strategy();
@@ -957,6 +1044,9 @@ async fn test_twitter_real_workflow_tweet_id_persists_all_fields() {
 
 #[tokio::test]
 async fn test_twitter_real_workflow_rest_id_persists_all_fields() {
+    if !real_db_tests_enabled() {
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let adapter = create_adapter();
     let strategy = create_strategy();

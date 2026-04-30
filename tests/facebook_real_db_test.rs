@@ -9,7 +9,10 @@
 //! Run with:
 //! `DATABASE_URL=... FACEBOOK_RAPIDAPI_KEY=... cargo test --test facebook_real_db_test -- --nocapture`
 
-use std::{future::Future, sync::{Arc, OnceLock}};
+use std::{
+    future::Future,
+    sync::{Arc, OnceLock},
+};
 
 use async_trait::async_trait;
 use chrono::{Duration as ChronoDuration, TimeZone, Utc};
@@ -149,7 +152,10 @@ impl PromptRepository for StaticPromptRepository {
     }
 
     async fn get_analysis_context(&self, campaign_id: i32) -> DbResult<Option<AnalysisContext>> {
-        Ok(self.get_campaign(campaign_id).await?.map(|campaign| campaign.to_analysis_context()))
+        Ok(self
+            .get_campaign(campaign_id)
+            .await?
+            .map(|campaign| campaign.to_analysis_context()))
     }
 
     async fn get_platform(&self, platform_id: i32) -> DbResult<Option<PlatformConfig>> {
@@ -245,10 +251,24 @@ impl ProgressTracker for NoOpProgressTracker {
     }
 }
 
-fn database_url() -> String {
+fn database_url() -> Option<String> {
     let _ = dotenvy::dotenv();
-    std::env::var("DATABASE_URL")
-        .expect("DATABASE_URL must be set for the real Facebook workflow test")
+    if std::env::var_os("GITHUB_ACTIONS").is_some()
+        && std::env::var_os("RUN_REAL_DB_TESTS").is_none()
+    {
+        return None;
+    }
+    std::env::var("DATABASE_URL").ok()
+}
+
+fn real_db_tests_enabled() -> bool {
+    let enabled = database_url().is_some();
+    if !enabled {
+        eprintln!(
+            "Skipping Facebook real DB workflow test - DATABASE_URL is unset or real DB tests are disabled on GitHub Actions"
+        );
+    }
+    enabled
 }
 
 fn create_adapter() -> FacebookAdapter {
@@ -303,7 +323,10 @@ async fn fetch_raw_json(path: &str, params: &[(&str, &str)]) -> Value {
             .unwrap_or_else(|err| panic!("response should be valid JSON: {err}; body={body_text}"));
 
         if status == StatusCode::TOO_MANY_REQUESTS {
-            sleep(Duration::from_secs(retry_after_secs.unwrap_or(fallback_delay_secs))).await;
+            sleep(Duration::from_secs(
+                retry_after_secs.unwrap_or(fallback_delay_secs),
+            ))
+            .await;
             continue;
         }
 
@@ -463,12 +486,9 @@ async fn workflow_input_has_enough_comments(
         return false;
     }
 
-    let comments = fetch_comments_for_content(
-        adapter,
-        &format!("{label} comments"),
-        &content.content_id,
-    )
-    .await;
+    let comments =
+        fetch_comments_for_content(adapter, &format!("{label} comments"), &content.content_id)
+            .await;
 
     comments.len() >= COMMENT_TARGET_COUNT as usize
 }
@@ -579,7 +599,9 @@ async fn prepare_exact_workflow_case(
     raw_keyword: &str,
     base_extra_pairs: &[(String, Value)],
 ) -> Option<WorkflowCaseInput> {
-    if workflow_input_has_enough_comments(adapter, strategy, label, raw_keyword, base_extra_pairs).await {
+    if workflow_input_has_enough_comments(adapter, strategy, label, raw_keyword, base_extra_pairs)
+        .await
+    {
         return Some(WorkflowCaseInput {
             raw_keyword: raw_keyword.to_string(),
             extra_pairs: base_extra_pairs.to_vec(),
@@ -667,9 +689,7 @@ fn assert_asset_url_eq(actual: Option<&str>, expected: Option<&str>, field_name:
             "{field_name} should point to the same asset"
         ),
         (None, None) => {}
-        _ => panic!(
-            "{field_name} presence mismatch: actual={actual:?}, expected={expected:?}"
-        ),
+        _ => panic!("{field_name} presence mismatch: actual={actual:?}, expected={expected:?}"),
     }
 }
 
@@ -684,9 +704,7 @@ fn assert_timestamp_close(actual: Option<i64>, expected: Option<i64>, field_name
             "{field_name} should match within 5 seconds: actual={actual}, expected={expected}"
         ),
         (None, None) => {}
-        _ => panic!(
-            "{field_name} presence mismatch: actual={actual:?}, expected={expected:?}"
-        ),
+        _ => panic!("{field_name} presence mismatch: actual={actual:?}, expected={expected:?}"),
     }
 }
 
@@ -720,16 +738,19 @@ where
 
 fn create_supporting_campaign_and_task(conn: &mut PgConnection) -> (i32, i32) {
     let user_id = query_single_id(conn, "SELECT id FROM gm_users ORDER BY id LIMIT 1");
-    let region_id = diesel::sql_query(
-        "SELECT id FROM gm_regions WHERE platform_id = 3 ORDER BY id LIMIT 1",
-    )
-    .get_result::<IdRow>(conn)
-    .or_else(|_| diesel::sql_query("SELECT id FROM gm_regions ORDER BY id LIMIT 1").get_result(conn))
-    .map(|row| row.id)
-    .expect("failed to resolve a region for the Facebook test campaign");
+    let region_id =
+        diesel::sql_query("SELECT id FROM gm_regions WHERE platform_id = 3 ORDER BY id LIMIT 1")
+            .get_result::<IdRow>(conn)
+            .or_else(|_| {
+                diesel::sql_query("SELECT id FROM gm_regions ORDER BY id LIMIT 1").get_result(conn)
+            })
+            .map(|row| row.id)
+            .expect("failed to resolve a region for the Facebook test campaign");
     let ai_model_id = query_single_id(conn, "SELECT id FROM gm_ai_models ORDER BY id LIMIT 1");
-    let campaign_id =
-        query_single_id(conn, "SELECT COALESCE(MAX(id), 0) + 1000 AS id FROM gm_campaigns");
+    let campaign_id = query_single_id(
+        conn,
+        "SELECT COALESCE(MAX(id), 0) + 1000 AS id FROM gm_campaigns",
+    );
     let task_id = query_single_id(
         conn,
         "SELECT COALESCE(MAX(id), 0) + 1000 AS id FROM gm_crawler_tasks",
@@ -779,8 +800,10 @@ fn cleanup_supporting_rows(conn: &mut PgConnection, campaign_id: i32, task_id: i
         "DELETE FROM gm_agent_facebook_posts WHERE task_id = {task_id}"
     ))
     .execute(conn);
-    let _ = diesel::sql_query(format!("DELETE FROM gm_crawler_tasks WHERE id = {task_id}")).execute(conn);
-    let _ = diesel::sql_query(format!("DELETE FROM gm_campaigns WHERE id = {campaign_id}")).execute(conn);
+    let _ = diesel::sql_query(format!("DELETE FROM gm_crawler_tasks WHERE id = {task_id}"))
+        .execute(conn);
+    let _ = diesel::sql_query(format!("DELETE FROM gm_campaigns WHERE id = {campaign_id}"))
+        .execute(conn);
 }
 
 async fn pick_post_with_comments(adapter: &FacebookAdapter) -> (Content, Vec<Comment>) {
@@ -922,7 +945,9 @@ async fn prepare_places_case(
         }
     }
 
-    panic!("facebook places live workflow could not find a first-result query with enough comments");
+    panic!(
+        "facebook places live workflow could not find a first-result query with enough comments"
+    );
 }
 
 async fn prepare_facebook_page_case(
@@ -975,7 +1000,12 @@ async fn run_real_workflow_case(adapter: FacebookAdapter, case: WorkflowCaseInpu
         extra_pairs,
     } = case;
     let workflow_label = format!("raw_keyword={raw_keyword:?}, extra_pairs={extra_pairs:?}");
-    let database_url = database_url();
+    let Some(database_url) = database_url() else {
+        eprintln!(
+            "Skipping Facebook real DB workflow case - DATABASE_URL is unset or real DB tests are disabled on GitHub Actions"
+        );
+        return;
+    };
     let mut conn = connect(&database_url);
     let (campaign_id, task_id) = create_supporting_campaign_and_task(&mut conn);
 
@@ -1017,13 +1047,11 @@ async fn run_real_workflow_case(adapter: FacebookAdapter, case: WorkflowCaseInpu
     assert!(result.success, "workflow should succeed");
     assert_eq!(result.contents_processed, 1);
     assert_eq!(
-        result.comments_processed,
-        COMMENT_TARGET_COUNT as i32,
+        result.comments_processed, COMMENT_TARGET_COUNT as i32,
         "{workflow_label}"
     );
     assert_eq!(
-        result.analyses_generated,
-        COMMENT_TARGET_COUNT as i32,
+        result.analyses_generated, COMMENT_TARGET_COUNT as i32,
         "{workflow_label}"
     );
 
@@ -1051,11 +1079,11 @@ async fn run_real_workflow_case(adapter: FacebookAdapter, case: WorkflowCaseInpu
     )
     .await
     .expect("facebook workflow input should still resolve to a post for DB assertions");
-    let expected_comments = retry_gateway_rate_limit(
-        "facebook direct comment fetch for DB assertions",
-        || adapter.fetch_all_comments(&persisted_post.facebook_post_id, COMMENT_TARGET_COUNT),
-    )
-    .await;
+    let expected_comments =
+        retry_gateway_rate_limit("facebook direct comment fetch for DB assertions", || {
+            adapter.fetch_all_comments(&persisted_post.facebook_post_id, COMMENT_TARGET_COUNT)
+        })
+        .await;
     let comment_lookup = expected_comments
         .iter()
         .map(|comment| (comment.comment_id.clone(), comment.clone()))
@@ -1068,7 +1096,10 @@ async fn run_real_workflow_case(adapter: FacebookAdapter, case: WorkflowCaseInpu
 
     assert_eq!(persisted_post.task_id, task_id);
     assert_eq!(persisted_post.campaign_id, Some(campaign_id));
-    assert_eq!(persisted_post.facebook_post_id, expected_persisted_content.content_id);
+    assert_eq!(
+        persisted_post.facebook_post_id,
+        expected_persisted_content.content_id
+    );
     assert_eq!(
         persisted_post.post_type.as_deref(),
         post_raw.get("type").and_then(|value| value.as_str())
@@ -1080,7 +1111,11 @@ async fn run_real_workflow_case(adapter: FacebookAdapter, case: WorkflowCaseInpu
     );
     assert_eq!(
         normalize_optional_str(persisted_post.message_rich.as_deref()),
-        normalize_optional_str(post_raw.get("message_rich").and_then(|value| value.as_str()))
+        normalize_optional_str(
+            post_raw
+                .get("message_rich")
+                .and_then(|value| value.as_str())
+        )
     );
     assert_timestamp_close(
         persisted_post.timestamp,
@@ -1191,11 +1226,16 @@ async fn run_real_workflow_case(adapter: FacebookAdapter, case: WorkflowCaseInpu
     );
     assert_eq!(
         persisted_post.author_title.as_deref(),
-        post_raw.get("author_title").and_then(|value| value.as_str())
+        post_raw
+            .get("author_title")
+            .and_then(|value| value.as_str())
     );
     assert_eq!(
         persisted_post.has_image,
-        Some(post_raw.get("image").is_some() && !post_raw.get("image").is_some_and(|value| value.is_null()))
+        Some(
+            post_raw.get("image").is_some()
+                && !post_raw.get("image").is_some_and(|value| value.is_null())
+        )
     );
     assert_asset_url_eq(
         persisted_post.image_url.as_deref(),
@@ -1230,20 +1270,29 @@ async fn run_real_workflow_case(adapter: FacebookAdapter, case: WorkflowCaseInpu
     );
     assert_eq!(
         persisted_post.has_video,
-        Some(post_raw.get("video").is_some() && !post_raw.get("video").is_some_and(|value| value.is_null()))
+        Some(
+            post_raw.get("video").is_some()
+                && !post_raw.get("video").is_some_and(|value| value.is_null())
+        )
     );
     assert_asset_url_eq(
         persisted_post.video_thumbnail.as_deref(),
-        post_raw.get("video_thumbnail").and_then(|value| value.as_str()),
+        post_raw
+            .get("video_thumbnail")
+            .and_then(|value| value.as_str()),
         "persisted_post.video_thumbnail",
     );
     assert_eq!(
         persisted_post.external_url.as_deref(),
-        post_raw.get("external_url").and_then(|value| value.as_str())
+        post_raw
+            .get("external_url")
+            .and_then(|value| value.as_str())
     );
     assert_eq!(
         persisted_post.attached_post_url.as_deref(),
-        post_raw.get("attached_post_url").and_then(|value| value.as_str())
+        post_raw
+            .get("attached_post_url")
+            .and_then(|value| value.as_str())
     );
     assert_eq!(
         persisted_post.comments_id.as_deref(),
@@ -1276,10 +1325,14 @@ async fn run_real_workflow_case(adapter: FacebookAdapter, case: WorkflowCaseInpu
 
         assert_eq!(persisted_comment.post_db_id, persisted_post.id);
         assert_eq!(persisted_comment.campaign_id, Some(campaign_id));
-        assert_eq!(persisted_comment.facebook_comment_id, source_comment.comment_id);
+        assert_eq!(
+            persisted_comment.facebook_comment_id,
+            source_comment.comment_id
+        );
         assert_eq!(
             persisted_comment.parent_comment_id.as_deref(),
-            raw.get("parent_comment_id").and_then(|value| value.as_str())
+            raw.get("parent_comment_id")
+                .and_then(|value| value.as_str())
         );
         assert_eq!(
             persisted_comment.comment_url.as_deref(),
@@ -1287,7 +1340,10 @@ async fn run_real_workflow_case(adapter: FacebookAdapter, case: WorkflowCaseInpu
         );
         assert_eq!(persisted_comment.comment_text, source_comment.text);
         assert_eq!(persisted_comment.reason.as_deref(), Some(TEST_REASON));
-        assert_eq!(persisted_comment.suggested_reply.as_deref(), Some(TEST_REPLY));
+        assert_eq!(
+            persisted_comment.suggested_reply.as_deref(),
+            Some(TEST_REPLY)
+        );
         assert_eq!(persisted_comment.suggested_dm.as_deref(), Some(TEST_DM));
         assert_eq!(
             persisted_comment.suggested_reply_post.as_deref(),
@@ -1295,7 +1351,10 @@ async fn run_real_workflow_case(adapter: FacebookAdapter, case: WorkflowCaseInpu
         );
         assert_eq!(
             persisted_comment.comment_user_id.as_deref(),
-            source_comment.author_uid.as_deref().or(Some(source_comment.author.as_str()))
+            source_comment
+                .author_uid
+                .as_deref()
+                .or(Some(source_comment.author.as_str()))
         );
         assert_eq!(
             persisted_comment.comment_username.as_deref(),
@@ -1317,8 +1376,14 @@ async fn run_real_workflow_case(adapter: FacebookAdapter, case: WorkflowCaseInpu
                 .and_then(|value| value.as_str()),
             "persisted_comment.comment_user_profile_picture",
         );
-        assert_eq!(persisted_comment.like_count, Some(source_comment.likes as i32));
-        assert_eq!(persisted_comment.reply_count, Some(source_comment.reply_count));
+        assert_eq!(
+            persisted_comment.like_count,
+            Some(source_comment.likes as i32)
+        );
+        assert_eq!(
+            persisted_comment.reply_count,
+            Some(source_comment.reply_count)
+        );
         assert_eq!(
             persisted_comment.threading_depth,
             raw.get("depth")
@@ -1331,7 +1396,9 @@ async fn run_real_workflow_case(adapter: FacebookAdapter, case: WorkflowCaseInpu
             "persisted_comment.created_at_ts",
         );
         assert_timestamp_close(
-            persisted_comment.comment_created_at.map(|value| value.timestamp()),
+            persisted_comment
+                .comment_created_at
+                .map(|value| value.timestamp()),
             source_comment.created_at,
             "persisted_comment.comment_created_at",
         );
@@ -1356,6 +1423,9 @@ async fn run_real_workflow_case(adapter: FacebookAdapter, case: WorkflowCaseInpu
 
 #[tokio::test]
 async fn test_facebook_real_workflow_posts_persists_all_fields() {
+    if !real_db_tests_enabled() {
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let adapter = create_adapter();
     let strategy = FacebookStrategy::new();
@@ -1365,6 +1435,9 @@ async fn test_facebook_real_workflow_posts_persists_all_fields() {
 
 #[tokio::test]
 async fn test_facebook_real_workflow_pages_persists_all_fields() {
+    if !real_db_tests_enabled() {
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let adapter = create_adapter();
     let strategy = FacebookStrategy::new();
@@ -1374,6 +1447,9 @@ async fn test_facebook_real_workflow_pages_persists_all_fields() {
 
 #[tokio::test]
 async fn test_facebook_real_workflow_places_persists_all_fields() {
+    if !real_db_tests_enabled() {
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let adapter = create_adapter();
     let strategy = FacebookStrategy::new();
@@ -1383,6 +1459,9 @@ async fn test_facebook_real_workflow_places_persists_all_fields() {
 
 #[tokio::test]
 async fn test_facebook_real_workflow_page_keyword_persists_all_fields() {
+    if !real_db_tests_enabled() {
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let adapter = create_adapter();
     let strategy = FacebookStrategy::new();
@@ -1392,6 +1471,9 @@ async fn test_facebook_real_workflow_page_keyword_persists_all_fields() {
 
 #[tokio::test]
 async fn test_facebook_real_workflow_post_url_persists_all_fields() {
+    if !real_db_tests_enabled() {
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let adapter = create_adapter();
     let case = prepare_post_url_case(&adapter).await;
