@@ -21,6 +21,7 @@ use glance_mind_agent_rs::tikhub::{
     // Twitter
     TwitterSearchParams,
 };
+use glance_mind_agent_rs::{ContentGateway, InstagramAdapter, KeywordType, SearchOptions};
 
 /// Helper to create client from env
 fn create_client() -> Option<TikHubClient> {
@@ -169,6 +170,91 @@ async fn test_instagram_web_api_deprecated() {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn test_instagram_v3_general_search_real() {
+    let Some(client) = create_client() else {
+        return;
+    };
+
+    println!("\n🔍 Testing Instagram V3 API (General Search)...");
+
+    match client
+        .search_instagram_general_with_retry("#muhameds")
+        .await
+    {
+        Ok(response) => {
+            let posts = TikHubClient::extract_instagram_general_posts(&response);
+            let post_count = posts.len();
+
+            println!("✅ Instagram V3 General Search: Found {} posts", post_count);
+
+            assert_eq!(response.code, 200, "TikHub should return success code");
+            assert!(
+                post_count > 0,
+                "V3 general_search should return media posts"
+            );
+
+            let first = posts[0];
+            assert!(
+                !first.code.as_deref().unwrap_or("").is_empty(),
+                "V3 media should include shortcode for downstream comment fetches"
+            );
+            assert!(
+                first.created_at_timestamp().is_some(),
+                "V3 numeric taken_at should parse into a timestamp"
+            );
+            assert!(
+                first.thumbnail().is_some(),
+                "V3 image_versions2 should expose a thumbnail URL"
+            );
+        }
+        Err(e) => {
+            println!("❌ Instagram V3 General Search Error: {:?}", e);
+            panic!("Instagram V3 general_search failed: {:?}", e);
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_instagram_adapter_uses_v3_general_search_real() {
+    let _ = dotenvy::dotenv();
+    let Ok(adapter) = InstagramAdapter::from_env() else {
+        eprintln!("⚠️  Skipping test - InstagramAdapter::from_env failed");
+        return;
+    };
+
+    println!("\n🔍 Testing Instagram adapter via V3 general_search...");
+
+    let contents = adapter
+        .fetch_by_keyword(
+            &KeywordType::Hashtag("muhameds".to_string()),
+            &SearchOptions::new("muhameds")
+                .with_platform("instagram")
+                .with_count(3),
+        )
+        .await
+        .expect("Instagram adapter should fetch content via V3 general_search");
+
+    println!(
+        "✅ Instagram Adapter V3 Search: Found {} posts",
+        contents.len()
+    );
+
+    assert!(
+        !contents.is_empty(),
+        "adapter should return V3 media content"
+    );
+    assert_eq!(contents[0].platform, "instagram");
+    assert!(
+        contents[0]
+            .url
+            .as_deref()
+            .unwrap_or("")
+            .contains("instagram.com/p/"),
+        "adapter should preserve shortcode URL for downstream comment fetch"
+    );
 }
 
 #[tokio::test]

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::{collections::HashSet, future::Future, sync::OnceLock};
 
 use serde_json::Value;
@@ -50,7 +52,8 @@ pub fn create_client() -> TikHubClient {
 
 pub fn create_adapter() -> TwitterAdapter {
     let _ = dotenvy::dotenv();
-    TwitterAdapter::from_env().expect("TwitterAdapter::from_env should succeed for real Twitter tests")
+    TwitterAdapter::from_env()
+        .expect("TwitterAdapter::from_env should succeed for real Twitter tests")
 }
 
 pub fn create_strategy() -> TwitterStrategy {
@@ -153,10 +156,17 @@ pub async fn fetch_first_content_for_keyword(
     max_videos: i32,
     extra_pairs: &[(String, Value)],
 ) -> Option<Content> {
-    fetch_contents_for_keyword(adapter, strategy, label, raw_keyword, max_videos, extra_pairs)
-        .await
-        .into_iter()
-        .next()
+    fetch_contents_for_keyword(
+        adapter,
+        strategy,
+        label,
+        raw_keyword,
+        max_videos,
+        extra_pairs,
+    )
+    .await
+    .into_iter()
+    .next()
 }
 
 pub async fn fetch_comments_for_content(
@@ -216,7 +226,9 @@ pub async fn pick_search_seed() -> LiveSearchSeed {
                 }
             }
 
-            panic!("expected at least one live Twitter search result with tweet id, text, and author")
+            panic!(
+                "expected at least one live Twitter search result with tweet id, text, and author"
+            )
         })
         .await
         .clone()
@@ -317,7 +329,11 @@ pub async fn fetch_raw_comments_paginated(
             break;
         }
 
-        let Some(next_cursor) = response.data.as_ref().and_then(|data| data.next_cursor.clone()) else {
+        let Some(next_cursor) = response
+            .data
+            .as_ref()
+            .and_then(|data| data.next_cursor.clone())
+        else {
             break;
         };
         if !seen_cursors.insert(next_cursor.clone()) {
@@ -403,7 +419,10 @@ pub fn assert_comment_matches_raw(comment: &Comment, raw: &TwitterTweet, tweet_i
     assert_eq!(comment.platform, "twitter");
     assert_eq!(comment.comment_id, expected_comment_id);
     assert_eq!(comment.content_id, tweet_id);
-    assert_eq!(comment.parent_id.as_deref(), raw.in_reply_to_status_id_str.as_deref());
+    assert_eq!(
+        comment.parent_id.as_deref(),
+        raw.in_reply_to_status_id_str.as_deref()
+    );
     assert_eq!(comment.author, raw.author_handle().unwrap_or_default());
     assert_eq!(comment.author_name.as_deref(), raw.author_name());
     assert_eq!(comment.author_uid.as_deref(), raw.user_id());
@@ -423,7 +442,10 @@ pub fn assert_comment_matches_raw(comment: &Comment, raw: &TwitterTweet, tweet_i
     assert_eq!(roundtrip.get_tweet_id(), raw.get_tweet_id());
     assert_eq!(roundtrip.content(), raw.content());
     assert_eq!(roundtrip.author_handle(), raw.author_handle());
-    assert_eq!(roundtrip.in_reply_to_status_id_str, raw.in_reply_to_status_id_str);
+    assert_eq!(
+        roundtrip.in_reply_to_status_id_str,
+        raw.in_reply_to_status_id_str
+    );
     assert_eq!(roundtrip.like_count(), raw.like_count());
     assert_eq!(roundtrip.reply_count(), raw.reply_count());
 }

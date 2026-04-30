@@ -12,11 +12,14 @@ use std::sync::OnceLock;
 use chrono::{Duration as ChronoDuration, TimeZone, Utc};
 use reqwest::{Client, StatusCode};
 use serde_json::{json, Value};
-use tokio::{sync::Mutex, time::{sleep, Duration}};
+use tokio::{
+    sync::Mutex,
+    time::{sleep, Duration},
+};
 
 use glance_mind_agent_rs::{
-    ports::comment_gateway::FetchCommentsOptions, CommentGateway, ContentGateway,
-    FacebookAdapter, FacebookStrategy, KeywordType, PlatformStrategy, SearchOptions, TaskConfig,
+    ports::comment_gateway::FetchCommentsOptions, CommentGateway, ContentGateway, FacebookAdapter,
+    FacebookStrategy, KeywordType, PlatformStrategy, SearchOptions, TaskConfig,
 };
 
 const DEFAULT_HOST: &str = "facebook-scraper3.p.rapidapi.com";
@@ -32,8 +35,7 @@ const POST_URL: &str = "https://www.facebook.com/NatGeoMuseum/posts/pfbid02Mmmxm
 const POST_LOOKUP_ID: &str =
     "pfbid02MmmxmHinoAbb2Aidf7TZHH1fSR4w8UmPYUXKT86HgHFAHryrD54bW5113ZPQ2gzYl";
 const POST_ID: &str = "1431426125696772";
-const COMMENT_RICH_POST_CANDIDATES: &[&str] =
-    &[POST_ID, "859693417025820", "1134687898785891"];
+const COMMENT_RICH_POST_CANDIDATES: &[&str] = &[POST_ID, "859693417025820", "1134687898785891"];
 
 struct RapidApiConfig {
     api_key: String,
@@ -53,8 +55,8 @@ fn require_rapidapi_config() -> RapidApiConfig {
         .expect("FACEBOOK_RAPIDAPI_KEY must be set for real Facebook RapidAPI tests");
     let api_host =
         std::env::var("FACEBOOK_RAPIDAPI_HOST").unwrap_or_else(|_| DEFAULT_HOST.to_string());
-    let base_url =
-        std::env::var("FACEBOOK_RAPIDAPI_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
+    let base_url = std::env::var("FACEBOOK_RAPIDAPI_BASE_URL")
+        .unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
 
     RapidApiConfig {
         api_key,
@@ -131,7 +133,9 @@ where
 
 fn json_i64(value: Option<&Value>) -> Option<i64> {
     match value {
-        Some(Value::Number(number)) => number.as_i64().or_else(|| number.as_u64().map(|v| v as i64)),
+        Some(Value::Number(number)) => number
+            .as_i64()
+            .or_else(|| number.as_u64().map(|v| v as i64)),
         Some(Value::String(number)) => number.parse().ok(),
         _ => None,
     }
@@ -179,7 +183,11 @@ fn assert_content_matches_raw(content: &glance_mind_agent_rs::Content, raw: &Val
     let expected_author = raw_author
         .and_then(|author| author.get("id"))
         .and_then(Value::as_str)
-        .or_else(|| raw_author.and_then(|author| author.get("name")).and_then(Value::as_str))
+        .or_else(|| {
+            raw_author
+                .and_then(|author| author.get("name"))
+                .and_then(Value::as_str)
+        })
         .unwrap_or_default();
 
     assert_eq!(content.platform, "facebook");
@@ -192,7 +200,9 @@ fn assert_content_matches_raw(content: &glance_mind_agent_rs::Content, raw: &Val
     assert_eq!(content.author, expected_author);
     assert_eq!(
         content.author_name.as_deref(),
-        raw_author.and_then(|author| author.get("name")).and_then(Value::as_str)
+        raw_author
+            .and_then(|author| author.get("name"))
+            .and_then(Value::as_str)
     );
     assert_eq!(
         content.description,
@@ -200,7 +210,10 @@ fn assert_content_matches_raw(content: &glance_mind_agent_rs::Content, raw: &Val
             .or_else(|| non_empty_string(raw, "message_rich"))
             .unwrap_or_default()
     );
-    assert_eq!(content.url.as_deref(), raw.get("url").and_then(Value::as_str));
+    assert_eq!(
+        content.url.as_deref(),
+        raw.get("url").and_then(Value::as_str)
+    );
     assert_eq!(
         content.engagement.likes,
         json_i64(raw.get("reactions_count")).unwrap_or_default()
@@ -248,11 +261,7 @@ fn assert_content_matches_raw(content: &glance_mind_agent_rs::Content, raw: &Val
     );
 }
 
-fn assert_comment_matches_raw(
-    comment: &glance_mind_agent_rs::Comment,
-    raw: &Value,
-    post_id: &str,
-) {
+fn assert_comment_matches_raw(comment: &glance_mind_agent_rs::Comment, raw: &Value, post_id: &str) {
     let raw_author = raw.get("author");
     let expected_comment_id = raw
         .get("legacy_comment_id")
@@ -262,7 +271,11 @@ fn assert_comment_matches_raw(
     let expected_author = raw_author
         .and_then(|author| author.get("id"))
         .and_then(Value::as_str)
-        .or_else(|| raw_author.and_then(|author| author.get("name")).and_then(Value::as_str))
+        .or_else(|| {
+            raw_author
+                .and_then(|author| author.get("name"))
+                .and_then(Value::as_str)
+        })
         .unwrap_or_default();
 
     assert_eq!(comment.platform, "facebook");
@@ -286,30 +299,46 @@ fn assert_comment_matches_raw(
     assert_eq!(comment.author, expected_author);
     assert_eq!(
         comment.author_uid.as_deref(),
-        raw_author.and_then(|author| author.get("id")).and_then(Value::as_str)
+        raw_author
+            .and_then(|author| author.get("id"))
+            .and_then(Value::as_str)
     );
     assert_eq!(
         comment.author_name.as_deref(),
-        raw_author.and_then(|author| author.get("name")).and_then(Value::as_str)
+        raw_author
+            .and_then(|author| author.get("name"))
+            .and_then(Value::as_str)
     );
-    assert_eq!(comment.likes, json_i64(raw.get("reactions_count")).unwrap_or_default());
+    assert_eq!(
+        comment.likes,
+        json_i64(raw.get("reactions_count")).unwrap_or_default()
+    );
     assert_eq!(
         comment.reply_count,
         json_i64(raw.get("replies_count")).unwrap_or_default() as i32
     );
     assert_eq!(comment.created_at, json_i64(raw.get("created_time")));
-    assert_eq!(comment.is_reply, json_i64(raw.get("depth")).unwrap_or_default() > 0);
+    assert_eq!(
+        comment.is_reply,
+        json_i64(raw.get("depth")).unwrap_or_default() > 0
+    );
 
     let raw_data = comment
         .raw_data
         .as_ref()
         .expect("comment.raw_data should retain the upstream Facebook payload");
     assert_eq!(raw_data.get("comment_id"), raw.get("comment_id"));
-    assert_eq!(raw_data.get("legacy_comment_id"), raw.get("legacy_comment_id"));
+    assert_eq!(
+        raw_data.get("legacy_comment_id"),
+        raw.get("legacy_comment_id")
+    );
     assert_eq!(raw_data.get("message"), raw.get("message"));
     assert_eq!(raw_data.get("created_time"), raw.get("created_time"));
     assert_eq!(raw_data.get("depth"), raw.get("depth"));
-    assert_eq!(raw_data.get("parent_comment_id"), raw.get("parent_comment_id"));
+    assert_eq!(
+        raw_data.get("parent_comment_id"),
+        raw.get("parent_comment_id")
+    );
     assert_eq!(raw_data.get("reactions_count"), raw.get("reactions_count"));
     assert_eq!(raw_data.get("replies_count"), raw.get("replies_count"));
     assert_eq!(
@@ -431,7 +460,10 @@ async fn fetch_raw_json(path: &str, params: &[(&str, &str)]) -> Value {
             .unwrap_or_else(|err| panic!("response should be valid JSON: {err}; body={body_text}"));
 
         if status == StatusCode::TOO_MANY_REQUESTS {
-            sleep(Duration::from_secs(retry_after_secs.unwrap_or(fallback_delay_secs))).await;
+            sleep(Duration::from_secs(
+                retry_after_secs.unwrap_or(fallback_delay_secs),
+            ))
+            .await;
             continue;
         }
 
@@ -572,8 +604,11 @@ async fn test_facebook_keyword_posts_real() {
 
     let adapter = create_adapter();
     let strategy = FacebookStrategy::new();
-    let (keyword, options) =
-        build_options(&strategy, POSTS_QUERY, vec![("search_type", json!("posts"))]);
+    let (keyword, options) = build_options(
+        &strategy,
+        POSTS_QUERY,
+        vec![("search_type", json!("posts"))],
+    );
 
     let contents = adapter
         .fetch_by_keyword(&keyword, &options)
@@ -585,7 +620,7 @@ async fn test_facebook_keyword_posts_real() {
         .raw_data
         .as_ref()
         .expect("facebook keyword/posts result should retain raw payload");
-    assert_content_matches_raw(&contents[0], &raw_post);
+    assert_content_matches_raw(&contents[0], raw_post);
 }
 
 #[tokio::test]
@@ -606,22 +641,27 @@ async fn test_facebook_keyword_posts_real_paginates_search_results() {
         .await
         .expect("facebook keyword/posts pagination should succeed");
 
-    assert_eq!(contents.len(), 6, "search/posts should paginate until six posts are collected");
+    assert_eq!(
+        contents.len(),
+        6,
+        "search/posts should paginate until six posts are collected"
+    );
     let unique_ids = contents
         .iter()
         .map(|content| content.content_id.as_str())
         .collect::<std::collections::HashSet<_>>();
-    assert_eq!(unique_ids.len(), 6, "paginated search/posts should deduplicate posts");
+    assert_eq!(
+        unique_ids.len(),
+        6,
+        "paginated search/posts should deduplicate posts"
+    );
 }
 
 #[tokio::test]
 async fn test_facebook_keyword_posts_real_covers_all_search_params() {
     let _guard = live_test_mutex().lock().await;
-    let raw_body = fetch_raw_json(
-        "/search/posts",
-        &[("query", "china travel beijing,china")],
-    )
-    .await;
+    let raw_body =
+        fetch_raw_json("/search/posts", &[("query", "china travel beijing,china")]).await;
     let raw_posts = assert_list_results(&raw_body, "/search/posts");
     let target_timestamp = raw_posts
         .iter()
@@ -661,7 +701,7 @@ async fn test_facebook_keyword_posts_real_covers_all_search_params() {
         .raw_data
         .as_ref()
         .expect("facebook keyword/posts search should retain raw payload");
-    assert_content_matches_raw(&contents[0], &raw_post);
+    assert_content_matches_raw(&contents[0], raw_post);
 }
 
 #[tokio::test]
@@ -704,7 +744,7 @@ async fn test_facebook_keyword_pages_real() {
         .raw_data
         .as_ref()
         .expect("facebook keyword/pages search should retain raw payload");
-    assert_content_matches_raw(&contents[0], &raw_post);
+    assert_content_matches_raw(&contents[0], raw_post);
 }
 
 #[tokio::test]
@@ -729,12 +769,20 @@ async fn test_facebook_keyword_pages_real_paginates_page_posts() {
         .await
         .expect("facebook keyword/pages pagination should succeed");
 
-    assert_eq!(contents.len(), 4, "pages input should paginate page/posts until four posts are collected");
+    assert_eq!(
+        contents.len(),
+        4,
+        "pages input should paginate page/posts until four posts are collected"
+    );
     let unique_ids = contents
         .iter()
         .map(|content| content.content_id.as_str())
         .collect::<std::collections::HashSet<_>>();
-    assert_eq!(unique_ids.len(), 4, "pages input pagination should return four unique posts");
+    assert_eq!(
+        unique_ids.len(),
+        4,
+        "pages input pagination should return four unique posts"
+    );
 }
 
 #[tokio::test]
@@ -770,7 +818,7 @@ async fn test_facebook_keyword_places_real() {
         .raw_data
         .as_ref()
         .expect("facebook keyword/places search should retain raw payload");
-    assert_content_matches_raw(&contents[0], &raw_post);
+    assert_content_matches_raw(&contents[0], raw_post);
 }
 
 #[tokio::test]
@@ -797,8 +845,11 @@ async fn test_facebook_page_real_text_and_numeric() {
     let adapter = create_adapter();
     let strategy = FacebookStrategy::new();
 
-    let (text_keyword, text_options) =
-        build_options(&strategy, "facebook_page:National Geographic Museum", Vec::<(&str, Value)>::new());
+    let (text_keyword, text_options) = build_options(
+        &strategy,
+        "facebook_page:National Geographic Museum",
+        Vec::<(&str, Value)>::new(),
+    );
     let text_contents = adapter
         .fetch_by_keyword(&text_keyword, &text_options)
         .await
@@ -806,8 +857,11 @@ async fn test_facebook_page_real_text_and_numeric() {
     assert_eq!(text_contents.len(), 1);
     assert_content_matches_raw(&text_contents[0], expected_post);
 
-    let (numeric_keyword, numeric_options) =
-        build_options(&strategy, &format!("facebook_page:{PAGE_ID}"), Vec::<(&str, Value)>::new());
+    let (numeric_keyword, numeric_options) = build_options(
+        &strategy,
+        &format!("facebook_page:{PAGE_ID}"),
+        Vec::<(&str, Value)>::new(),
+    );
     let numeric_contents = adapter
         .fetch_by_keyword(&numeric_keyword, &numeric_options)
         .await
@@ -840,7 +894,10 @@ async fn test_facebook_post_url_real() {
         ],
         "/post result",
     );
-    assert_eq!(raw_post.get("post_id").and_then(Value::as_str), Some(POST_ID));
+    assert_eq!(
+        raw_post.get("post_id").and_then(Value::as_str),
+        Some(POST_ID)
+    );
     assert_eq!(raw_post.get("url").and_then(Value::as_str), Some(POST_URL));
 
     let adapter = create_adapter();
@@ -905,7 +962,9 @@ async fn test_facebook_post_comments_real() {
         "/post/comments first result",
     );
     assert_required_keys(
-        first_raw_comment.get("author").expect("comment author should exist"),
+        first_raw_comment
+            .get("author")
+            .expect("comment author should exist"),
         &["id", "name", "url", "profile_image"],
         "/post/comments first result author",
     );
@@ -943,12 +1002,20 @@ async fn test_facebook_post_comments_real_fetch_all_comments() {
         .await
         .expect("facebook fetch_all_comments should succeed");
 
-    assert_eq!(comments.len(), 5, "fetch_all_comments should return five live Facebook comments");
+    assert_eq!(
+        comments.len(),
+        5,
+        "fetch_all_comments should return five live Facebook comments"
+    );
     let unique_ids = comments
         .iter()
         .map(|comment| comment.comment_id.as_str())
         .collect::<std::collections::HashSet<_>>();
-    assert_eq!(unique_ids.len(), 5, "fetch_all_comments should deduplicate live comments");
+    assert_eq!(
+        unique_ids.len(),
+        5,
+        "fetch_all_comments should deduplicate live comments"
+    );
 
     for comment in &comments {
         let raw = raw_comments

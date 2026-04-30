@@ -159,7 +159,11 @@ impl TikHubClient {
                 Err(TikHubError::ParseError(format!(
                     "{} (body preview: {})",
                     e,
-                    if body.len() > 200 { &body[..200] } else { &body }
+                    if body.len() > 200 {
+                        &body[..200]
+                    } else {
+                        &body
+                    }
                 )))
             }
         }
@@ -694,6 +698,47 @@ impl TikHubClient {
         self.with_retry("search_hashtag_posts", || {
             let p = params.clone();
             async move { self.search_hashtag_posts(&p).await }
+        })
+        .await
+    }
+
+    /// Search Instagram posts and related media by query using V3 general search.
+    ///
+    /// Endpoint: `/api/v1/instagram/v3/general_search`
+    pub async fn search_instagram_general(
+        &self,
+        query: &str,
+    ) -> Result<GeneralSearchResponse, TikHubError> {
+        let url = format!("{}/api/v1/instagram/v3/general_search", self.base_url);
+
+        info!(query = %query, "Instagram: Searching via V3 general_search");
+
+        let query_params: Vec<(&str, &str)> = vec![("query", query), ("enable_metadata", "true")];
+
+        let data: GeneralSearchResponse =
+            self.get_with_status_handling(&url, &query_params).await?;
+
+        if data.code != 200 {
+            warn!(code = data.code, message = %data.message, "Instagram V3 API error");
+            return Err(TikHubError::from_api_code(data.code, &data.message));
+        }
+
+        let post_count = Self::extract_instagram_general_posts(&data).len();
+
+        info!(query = %query, post_count = post_count, "Instagram: V3 general_search completed");
+
+        Ok(data)
+    }
+
+    /// Search Instagram posts and related media by query using V3 general search with retry.
+    pub async fn search_instagram_general_with_retry(
+        &self,
+        query: &str,
+    ) -> Result<GeneralSearchResponse, TikHubError> {
+        let query = query.to_string();
+        self.with_retry("search_instagram_general", || {
+            let q = query.clone();
+            async move { self.search_instagram_general(&q).await }
         })
         .await
     }
@@ -1635,6 +1680,27 @@ impl TikHubClient {
             .as_ref()
             .and_then(|d| d.aweme_list.as_ref())
             .map(|list| list.iter().collect())
+            .unwrap_or_default()
+    }
+
+    /// Extract Instagram posts from the V3 general search media grid.
+    pub fn extract_instagram_general_posts(
+        response: &GeneralSearchResponse,
+    ) -> Vec<&InstagramPost> {
+        response
+            .data
+            .as_ref()
+            .and_then(|data| data.media_grid.as_ref())
+            .and_then(|grid| grid.sections.as_ref())
+            .map(|sections| {
+                sections
+                    .iter()
+                    .filter_map(|section| section.layout_content.as_ref())
+                    .filter_map(|content| content.medias.as_ref())
+                    .flat_map(|medias| medias.iter())
+                    .filter_map(|wrapper| wrapper.media.as_ref())
+                    .collect()
+            })
             .unwrap_or_default()
     }
 }

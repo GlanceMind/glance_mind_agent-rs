@@ -12,8 +12,8 @@ use crate::ports::{
     CommentGateway, ContentGateway,
 };
 use crate::tikhub::{
-    HashtagSearchParams, InstagramComment, InstagramCommentParams, InstagramPost, InstagramV1Edge,
-    InstagramV1Node, TikHubClient, TikHubError, UserPostsParams,
+    InstagramComment, InstagramCommentParams, InstagramPost, InstagramV1Edge, InstagramV1Node,
+    TikHubClient, TikHubError, UserPostsParams,
 };
 
 /// Instagram adapter implementing ContentGateway and CommentGateway
@@ -82,7 +82,7 @@ impl InstagramAdapter {
         let shortcode = post.code.clone().unwrap_or_default();
 
         // IMPORTANT: Use shortcode as content_id, NOT media_id!
-        // TikHub Instagram V2 fetch_post_comments API requires shortcode (e.g., "CxYZaBcDeF")
+        // TikHub Instagram comment APIs require shortcode (e.g., "CxYZaBcDeF")
         // not the numeric media_id (e.g., "3824454208267080788").
         // The shortcode is what appears in Instagram URLs: instagram.com/p/{shortcode}/
         let content_id = if !shortcode.is_empty() {
@@ -147,6 +147,15 @@ impl InstagramAdapter {
             .and_then(|d| d.items.as_ref())
             .map(|list| list.iter().collect())
             .unwrap_or_default()
+    }
+
+    fn normalize_v3_query(query: &str) -> String {
+        let query = query.trim();
+        if query.starts_with('#') {
+            query.to_string()
+        } else {
+            format!("#{}", query)
+        }
     }
 
     /// Convert Instagram V1 node to domain Content
@@ -236,26 +245,17 @@ impl InstagramAdapter {
 #[async_trait]
 impl ContentGateway for InstagramAdapter {
     async fn search(&self, options: &SearchOptions) -> GatewayResult<Vec<Content>> {
-        // Use V2 API with hashtag parameter - supports feed_type (top/recent)
-        // Remove # prefix if present
-        let query = options.query.trim_start_matches('#');
+        let query = Self::normalize_v3_query(&options.query);
 
-        // Default to "top" feed type to get posts with more engagement (comments)
-        let params = HashtagSearchParams::new(query).with_feed_type("top");
-
-        tracing::info!(
-            hashtag = %query,
-            feed_type = %params.feed_type,
-            "Instagram: Searching via V2 API"
-        );
+        tracing::info!(query = %query, "Instagram: Searching via V3 general_search");
 
         let response = self
             .client
-            .search_hashtag_posts_with_retry(&params)
+            .search_instagram_general_with_retry(&query)
             .await
             .map_err(Self::convert_error)?;
 
-        let posts: Vec<&InstagramPost> = Self::extract_posts_from_response(&response.data);
+        let posts = TikHubClient::extract_instagram_general_posts(&response);
         Ok(posts
             .iter()
             .take(options.count as usize)
@@ -270,26 +270,17 @@ impl ContentGateway for InstagramAdapter {
     ) -> GatewayResult<Vec<Content>> {
         match keyword {
             KeywordType::Search(query) | KeywordType::Hashtag(query) => {
-                // Use V2 API with hashtag parameter - supports feed_type (top/recent)
-                // Remove # prefix if present
-                let query = query.trim_start_matches('#');
+                let query = Self::normalize_v3_query(query);
 
-                // Default to "top" feed type to get posts with more engagement (comments)
-                let params = HashtagSearchParams::new(query).with_feed_type("top");
-
-                tracing::info!(
-                    hashtag = %query,
-                    feed_type = %params.feed_type,
-                    "Instagram: Searching via V2 API"
-                );
+                tracing::info!(query = %query, "Instagram: Searching via V3 general_search");
 
                 let response = self
                     .client
-                    .search_hashtag_posts_with_retry(&params)
+                    .search_instagram_general_with_retry(&query)
                     .await
                     .map_err(Self::convert_error)?;
 
-                let posts: Vec<&InstagramPost> = Self::extract_posts_from_response(&response.data);
+                let posts = TikHubClient::extract_instagram_general_posts(&response);
                 Ok(posts
                     .iter()
                     .take(options.count as usize)
@@ -513,12 +504,14 @@ mod tests {
         let post = InstagramPost {
             code: Some("ABC123".to_string()),
             id: Some("12345".to_string()),
+            pk: None,
             product_type: Some("clips".to_string()),
             media_type: Some(2),
             caption_text: Some("Test caption".to_string()),
             caption: None,
             user: Some(crate::tikhub::InstagramUser {
                 id: Some("u123".to_string()),
+                pk: None,
                 username: Some("testuser".to_string()),
                 full_name: Some("Test User".to_string()),
                 profile_pic_url: None,
@@ -529,6 +522,7 @@ mod tests {
             play_count: Some(1000),
             thumbnail_url: None,
             image_versions: None,
+            image_versions2: None,
             video_versions: None,
             is_video: Some(true),
             taken_at_ts: Some(1234567890),
@@ -549,9 +543,11 @@ mod tests {
     fn test_convert_comment() {
         let comment = InstagramComment {
             id: Some("c123".to_string()),
+            pk: None,
             text: Some("Great post!".to_string()),
             user: Some(crate::tikhub::InstagramUser {
                 id: Some("u456".to_string()),
+                pk: None,
                 username: Some("commenter".to_string()),
                 full_name: Some("Commenter Name".to_string()),
                 profile_pic_url: None,

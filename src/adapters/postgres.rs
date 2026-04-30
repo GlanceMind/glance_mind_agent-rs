@@ -15,7 +15,6 @@ use tracing::{debug, info, warn};
 use crate::db::{models, schema, DbPool};
 use crate::domain::errors::{DbError, DbResult};
 use crate::domain::{Comment, Content, ReplySuggestion};
-use crate::tikhub::TwitterTweet as TikhubTwitterTweet;
 use crate::ports::{
     ai_analyzer::AnalysisContext,
     content_repository::{
@@ -25,6 +24,7 @@ use crate::ports::{
     prompt_repository::{CampaignConfig, CampaignStatus, PlatformConfig},
     ContentRepository, ProgressTracker, PromptRepository,
 };
+use crate::tikhub::TwitterTweet as TikhubTwitterTweet;
 
 /// Result from fn_update_task_progress stored procedure
 #[derive(QueryableByName, Debug)]
@@ -327,7 +327,10 @@ impl PostgresAdapter {
         .bind::<diesel::sql_types::Nullable<Bool>, _>(Some(has_video))
         .bind::<diesel::sql_types::Nullable<Text>, _>(Self::json_string(raw, &["video_thumbnail"]))
         .bind::<diesel::sql_types::Nullable<Text>, _>(Self::json_string(raw, &["external_url"]))
-        .bind::<diesel::sql_types::Nullable<Text>, _>(Self::json_string(raw, &["attached_post_url"]))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(Self::json_string(
+            raw,
+            &["attached_post_url"],
+        ))
         .bind::<diesel::sql_types::Nullable<Text>, _>(Self::json_string(raw, &["comments_id"]))
         .bind::<diesel::sql_types::Nullable<Text>, _>(Self::json_string(raw, &["shares_id"]))
         .get_result(&mut conn)
@@ -365,13 +368,19 @@ impl PostgresAdapter {
             .and_then(|r| r.get("product_type"))
             .and_then(|v| v.as_str())
             .unwrap_or("feed");
-        let instagram_id = raw
-            .and_then(|r| r.get("id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let thumbnail_url = raw
-            .and_then(|r| r.get("thumbnail_url"))
-            .and_then(|v| v.as_str());
+        let instagram_id =
+            Self::json_string(raw, &["pk"]).or_else(|| Self::json_string(raw, &["id"]));
+        let owner_id = Self::json_string(raw, &["user", "pk"])
+            .or_else(|| Self::json_string(raw, &["user", "id"]));
+        let thumbnail_url = Self::json_string(raw, &["thumbnail_url"]).or_else(|| {
+            raw.and_then(|r| r.get("image_versions2"))
+                .and_then(|v| v.get("candidates"))
+                .and_then(|v| v.as_array())
+                .and_then(|candidates| candidates.first())
+                .and_then(|candidate| candidate.get("url"))
+                .and_then(|url| url.as_str())
+                .map(ToOwned::to_owned)
+        });
 
         let result: ContentUpsertResult = diesel::sql_query(
             r#"
@@ -401,15 +410,15 @@ impl PostgresAdapter {
         .bind::<Integer, _>(task_id_value)
         .bind::<diesel::sql_types::Nullable<Integer>, _>(campaign_id)
         .bind::<Text, _>(&content.content_id) // code (shortcode)
-        .bind::<diesel::sql_types::Nullable<Text>, _>(if instagram_id.is_empty() { None } else { Some(instagram_id) })
+        .bind::<diesel::sql_types::Nullable<Text>, _>(instagram_id.as_ref())
         .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(media_type))
         .bind::<diesel::sql_types::Nullable<Text>, _>(Some(product_type))
         .bind::<diesel::sql_types::Nullable<Text>, _>(Some(&content.description)) // caption_text
         .bind::<diesel::sql_types::Nullable<Text>, _>(Some(&content.author)) // owner_username
-        .bind::<diesel::sql_types::Nullable<Text>, _>(content.raw_data.as_ref().and_then(|r| r.get("owner_id")).and_then(|v| v.as_str())) // owner_id
+        .bind::<diesel::sql_types::Nullable<Text>, _>(owner_id.as_ref()) // owner_id
         .bind::<diesel::sql_types::Nullable<Text>, _>(content.author_name.as_ref()) // owner_full_name
         .bind::<diesel::sql_types::Nullable<Text>, _>(content.url.as_ref()) // media_url
-        .bind::<diesel::sql_types::Nullable<Text>, _>(thumbnail_url)
+        .bind::<diesel::sql_types::Nullable<Text>, _>(thumbnail_url.as_ref())
         .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(content.engagement.likes as i32))
         .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(content.engagement.comments as i32))
         .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(content.engagement.views as i32))
@@ -485,9 +494,16 @@ impl PostgresAdapter {
         .bind::<diesel::sql_types::Nullable<Text>, _>(Some(&content.author))
         .bind::<diesel::sql_types::Nullable<Text>, _>(content.author_name.as_ref()) // author_fullname
         .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(score))
-        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Float>, _>(raw.and_then(|r| r.get("upvote_ratio")).and_then(|v| v.as_f64()).map(|f| f as f32))
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Float>, _>(
+            raw.and_then(|r| r.get("upvote_ratio"))
+                .and_then(|v| v.as_f64())
+                .map(|f| f as f32),
+        )
         .bind::<diesel::sql_types::Nullable<Integer>, _>(Some(num_comments))
-        .bind::<diesel::sql_types::Nullable<Text>, _>(raw.and_then(|r| r.get("permalink")).and_then(|v| v.as_str()))
+        .bind::<diesel::sql_types::Nullable<Text>, _>(
+            raw.and_then(|r| r.get("permalink"))
+                .and_then(|v| v.as_str()),
+        )
         .bind::<diesel::sql_types::Nullable<Text>, _>(content.url.as_ref())
         .bind::<diesel::sql_types::Nullable<diesel::sql_types::BigInt>, _>(content.created_at)
         .get_result(&mut conn)
@@ -535,8 +551,9 @@ impl PostgresAdapter {
             .and_then(|tweet| tweet.conversation_id.clone());
         let lang = parsed_tweet.as_ref().and_then(|tweet| tweet.lang.clone());
         let user_description = twitter_user.and_then(|user| user.description.clone());
-        let user_followers_count =
-            twitter_user.and_then(|user| user.followers_count).map(Self::i64_to_i32);
+        let user_followers_count = twitter_user
+            .and_then(|user| user.followers_count)
+            .map(Self::i64_to_i32);
         let user_avatar = twitter_user.and_then(|user| user.avatar.clone());
         let user_verified = twitter_user.and_then(|user| user.verified.or(user.blue_verified));
         let media_urls = parsed_tweet
@@ -575,9 +592,11 @@ impl PostgresAdapter {
         let created_at_str = parsed_tweet
             .as_ref()
             .and_then(|tweet| tweet.created_at.clone());
-        let created_at_ts = content
-            .created_at
-            .or_else(|| parsed_tweet.as_ref().and_then(|tweet| tweet.created_at_timestamp()));
+        let created_at_ts = content.created_at.or_else(|| {
+            parsed_tweet
+                .as_ref()
+                .and_then(|tweet| tweet.created_at_timestamp())
+        });
         let tweet_created_at = Self::timestamp_to_datetime(created_at_ts);
 
         // Constraint: UNIQUE (twitter_tweet_id, task_id)
@@ -960,8 +979,9 @@ impl PostgresAdapter {
             .as_ref()
             .and_then(|tweet| tweet.user_id().map(ToString::to_string))
             .or_else(|| comment.author_uid.clone());
-        let comment_user_followers =
-            twitter_user.and_then(|user| user.followers_count).map(Self::i64_to_i32);
+        let comment_user_followers = twitter_user
+            .and_then(|user| user.followers_count)
+            .map(Self::i64_to_i32);
         let favorite_count = parsed_comment
             .as_ref()
             .map(|tweet| Self::i64_to_i32(tweet.like_count()))
@@ -988,9 +1008,11 @@ impl PostgresAdapter {
         let created_at_str = parsed_comment
             .as_ref()
             .and_then(|tweet| tweet.created_at.clone());
-        let created_at_ts = comment
-            .created_at
-            .or_else(|| parsed_comment.as_ref().and_then(|tweet| tweet.created_at_timestamp()));
+        let created_at_ts = comment.created_at.or_else(|| {
+            parsed_comment
+                .as_ref()
+                .and_then(|tweet| tweet.created_at_timestamp())
+        });
         let comment_created_at = Self::timestamp_to_datetime(created_at_ts);
 
         // Constraint: UNIQUE (twitter_comment_id, tweet_db_id)
@@ -1212,7 +1234,10 @@ impl ContentRepository for PostgresAdapter {
         let platform = content.platform.to_lowercase();
         match platform.as_str() {
             "facebook" => self.save_facebook_post(content, campaign_id, task_id).await,
-            "instagram" => self.save_instagram_post(content, campaign_id, task_id).await,
+            "instagram" => {
+                self.save_instagram_post(content, campaign_id, task_id)
+                    .await
+            }
             "reddit" => self.save_reddit_post(content, campaign_id, task_id).await,
             "twitter" => self.save_twitter_tweet(content, campaign_id, task_id).await,
             _ => self.save_tiktok_video(content, campaign_id, task_id).await, // TikTok is default
@@ -1241,8 +1266,8 @@ impl ContentRepository for PostgresAdapter {
         shares: i64,
         views: i64,
     ) -> DbResult<()> {
-        use schema::gm_agent_videos::dsl;
         use schema::gm_agent_twitter_tweets::dsl as twitter_dsl;
+        use schema::gm_agent_videos::dsl;
 
         let mut conn = self.conn_async().await?;
 
@@ -1533,12 +1558,13 @@ impl ContentRepository for PostgresAdapter {
 
         let remaining = limit.saturating_sub(pending_comments.len() as i32);
         if remaining > 0 {
-            let twitter_results: Vec<models::TwitterComment> = twitter_dsl::gm_agent_twitter_comments
-                .filter(twitter_dsl::campaign_id.eq(campaign_id))
-                .filter(twitter_dsl::status.eq(Some(CommentStatus::Pending as i16)))
-                .limit(remaining as i64)
-                .load(&mut conn)
-                .map_err(DbError::from)?;
+            let twitter_results: Vec<models::TwitterComment> =
+                twitter_dsl::gm_agent_twitter_comments
+                    .filter(twitter_dsl::campaign_id.eq(campaign_id))
+                    .filter(twitter_dsl::status.eq(Some(CommentStatus::Pending as i16)))
+                    .limit(remaining as i64)
+                    .load(&mut conn)
+                    .map_err(DbError::from)?;
 
             pending_comments.extend(
                 twitter_results
@@ -2282,8 +2308,18 @@ impl PostgresAdapter {
 
     fn convert_twitter_tweet_to_content(&self, tweet: &models::TwitterTweet) -> StoredContent {
         let content_url = tweet.screen_name.as_ref().map_or_else(
-            || Some(format!("https://twitter.com/i/web/status/{}", tweet.twitter_tweet_id)),
-            |screen_name| Some(format!("https://twitter.com/{screen_name}/status/{}", tweet.twitter_tweet_id)),
+            || {
+                Some(format!(
+                    "https://twitter.com/i/web/status/{}",
+                    tweet.twitter_tweet_id
+                ))
+            },
+            |screen_name| {
+                Some(format!(
+                    "https://twitter.com/{screen_name}/status/{}",
+                    tweet.twitter_tweet_id
+                ))
+            },
         );
 
         StoredContent {
@@ -2508,7 +2544,12 @@ impl PostgresAdapter {
         Ok(tweet
             .map(|tweet| {
                 let url = tweet.screen_name.as_ref().map_or_else(
-                    || Some(format!("https://twitter.com/i/web/status/{}", tweet.twitter_tweet_id)),
+                    || {
+                        Some(format!(
+                            "https://twitter.com/i/web/status/{}",
+                            tweet.twitter_tweet_id
+                        ))
+                    },
                     |screen_name| {
                         Some(format!(
                             "https://twitter.com/{screen_name}/status/{}",

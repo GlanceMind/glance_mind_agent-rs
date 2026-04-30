@@ -208,7 +208,7 @@ fn default_platform() -> String {
 }
 
 /// Optimized response structure: campaign config extracted, comments as array
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
 pub struct DeviceCommentsResponse {
     /// Campaign configuration (returned once)
     pub campaign: CampaignConfig,
@@ -219,7 +219,7 @@ pub struct DeviceCommentsResponse {
 }
 
 /// Campaign auto-interaction configuration
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
 pub struct CampaignConfig {
     pub campaign_id: i32,
     pub auto_like: bool,
@@ -710,7 +710,6 @@ pub struct AiTaskInput {
     pub version: i32,
 
     // === Content Generation Input ===
-
     /// Video generation base prompt (from AiPubInput.video_prompt)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub video_prompt: Option<String>,
@@ -720,7 +719,6 @@ pub struct AiTaskInput {
     pub content_prompt: Option<String>,
 
     // === Video Generation Input ===
-
     /// AI model name (e.g., "veo-3.1", "sora-1.0")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -792,7 +790,6 @@ pub struct AiTaskResult {
     pub version: i32,
 
     // === Content Generation Result ===
-
     /// Number of content variations generated
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_count: Option<i32>,
@@ -806,7 +803,6 @@ pub struct AiTaskResult {
     pub content_variations: Vec<ContentVariation>,
 
     // === Video Generation Result ===
-
     /// Generated video URL
     #[serde(skip_serializing_if = "Option::is_none")]
     pub video_url: Option<String>,
@@ -816,7 +812,6 @@ pub struct AiTaskResult {
     pub video_duration: Option<f32>,
 
     // === Common Fields ===
-
     /// Timestamp when task completed (ISO 8601 format)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generated_at: Option<String>,
@@ -984,7 +979,7 @@ pub struct SeedanceVideoConfig {
 /// - Video content: Set both `video_prompt` (for video AI) and `content_prompt` (for text/captions)
 /// - Text-only content: Only set `content_prompt`
 /// - Legacy API calls: Only set `prompt` (both tasks will use this)
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
 pub struct AiPubInput {
     /// Video generation prompt - describes the visual content, scenes, transitions, and style
     /// Used by video AI models (e.g., Sora, Veo) to generate video content
@@ -1018,21 +1013,6 @@ pub struct AiPubInput {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seedance_config: Option<SeedanceVideoConfig>,
-}
-
-impl Default for AiPubInput {
-    fn default() -> Self {
-        Self {
-            video_prompt: String::new(),
-            content_prompt: String::new(),
-            prompt: String::new(),
-            default_images: None,
-            account_images: None,
-            reference_video: None,
-            video_config: None,
-            seedance_config: None,
-        }
-    }
 }
 
 impl AiPubInput {
@@ -1202,20 +1182,6 @@ impl AiPubTaskContent {
 // Default implementations
 // ============================================================
 
-impl Default for CampaignConfig {
-    fn default() -> Self {
-        Self {
-            campaign_id: 0,
-            auto_like: false,
-            auto_follow: false,
-            auto_dm: false,
-            auto_reply_comments: false,
-            auto_reply_post: false,
-            profile_name: None,
-        }
-    }
-}
-
 impl Default for Pagination {
     fn default() -> Self {
         Self {
@@ -1223,16 +1189,6 @@ impl Default for Pagination {
             page: 1,
             per_page: 20,
             total_pages: 0,
-        }
-    }
-}
-
-impl Default for DeviceCommentsResponse {
-    fn default() -> Self {
-        Self {
-            campaign: CampaignConfig::default(),
-            comments: Vec::new(),
-            pagination: Pagination::default(),
         }
     }
 }
@@ -1399,8 +1355,12 @@ impl Default for PatrolConfig {
     }
 }
 
-fn default_profile_interval() -> i32 { 600 }
-fn default_notif_interval() -> i32 { 180 }
+fn default_profile_interval() -> i32 {
+    600
+}
+fn default_notif_interval() -> i32 {
+    180
+}
 
 // =====================================================================
 // String-enum wire compatibility helpers.
@@ -1549,9 +1509,7 @@ pub mod serde_helpers {
                 Some(StrOrInt::I(n)) => Ok(Some(n)),
                 Some(StrOrInt::S(s)) => time_range_from_str(&s)
                     .map(Some)
-                    .ok_or_else(|| {
-                        de::Error::custom(format!("unknown time_range variant: {}", s))
-                    }),
+                    .ok_or_else(|| de::Error::custom(format!("unknown time_range variant: {}", s))),
             }
         }
     }
@@ -1693,13 +1651,19 @@ mod tests {
                 "filters": {"time_range":"last_180d","region":"US"}
             }
         }"#;
-        let task: CrawlerTask =
-            serde_json::from_str(json).expect("string wire format must parse");
+        let task: CrawlerTask = serde_json::from_str(json).expect("string wire format must parse");
         let spec = task.spec.expect("spec");
         assert_eq!(spec.platform, 2, "platform 'tiktok' should map to i32 = 2");
-        assert_eq!(spec.data_type, 3, "data_type 'video_comments' should map to i32 = 3");
+        assert_eq!(
+            spec.data_type, 3,
+            "data_type 'video_comments' should map to i32 = 3"
+        );
         let filters = task.config.unwrap().filters.unwrap();
-        assert_eq!(filters.time_range, Some(5), "time_range 'last_180d' should map to i32 = 5");
+        assert_eq!(
+            filters.time_range,
+            Some(5),
+            "time_range 'last_180d' should map to i32 = 5"
+        );
     }
 
     /// Pre-existing fixtures still emit integer enums; we must accept both.
@@ -1710,8 +1674,8 @@ mod tests {
             "spec": {"platform":2,"data_type":3},
             "config": {"keywords":["k"], "max_count":1, "search_offset":0, "search_limit":1, "filters": null}
         }"#;
-        let task: CrawlerTask = serde_json::from_str(json)
-            .expect("int wire format must still parse");
+        let task: CrawlerTask =
+            serde_json::from_str(json).expect("int wire format must still parse");
         assert_eq!(task.spec.unwrap().platform, 2);
     }
 
@@ -1744,8 +1708,16 @@ mod tests {
         };
         let json = serde_json::to_string(&task).unwrap();
         assert!(json.contains("\"platform\":\"tiktok\""), "got: {}", json);
-        assert!(json.contains("\"data_type\":\"video_comments\""), "got: {}", json);
-        assert!(json.contains("\"time_range\":\"last_180d\""), "got: {}", json);
+        assert!(
+            json.contains("\"data_type\":\"video_comments\""),
+            "got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"time_range\":\"last_180d\""),
+            "got: {}",
+            json
+        );
     }
 
     #[test]

@@ -1,7 +1,8 @@
 //! Instagram TikHub API Response Types
 //!
-//! These types are derived from TikHub Instagram V2 API responses.
+//! These types are derived from TikHub Instagram API responses.
 //! Based on endpoints:
+//! - `/api/v1/instagram/v3/general_search` - Search posts by hashtag/query
 //! - `/api/v1/instagram/v2/fetch_hashtag_posts` - Search posts by hashtag
 //! - `/api/v1/instagram/v2/search_reels` - Search Reels
 //! - `/api/v1/instagram/v2/fetch_user_posts` - Fetch user's posts
@@ -46,6 +47,79 @@ pub struct InstagramItemsData<T> {
 
 /// Hashtag search response type alias
 pub type HashtagSearchResponse = InstagramResponse<InstagramPaginatedData<InstagramPost>>;
+
+// ============================================================
+// General Search API Types
+// Endpoint: /api/v1/instagram/v3/general_search
+// ============================================================
+
+/// V3 general search response type alias.
+pub type GeneralSearchResponse = InstagramResponse<InstagramGeneralSearchData>;
+
+/// V3 general search response body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstagramGeneralSearchData {
+    #[serde(default)]
+    pub rank_token: Option<String>,
+    #[serde(default)]
+    pub clear_client_cache: Option<bool>,
+    #[serde(default)]
+    pub media_grid: Option<InstagramMediaGrid>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(flatten)]
+    pub extra: Option<serde_json::Value>,
+}
+
+/// Media grid returned by Instagram V3 general search.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstagramMediaGrid {
+    #[serde(default)]
+    pub sections: Option<Vec<InstagramMediaGridSection>>,
+    #[serde(default)]
+    pub rank_token: Option<String>,
+    #[serde(default)]
+    pub next_max_id: Option<String>,
+    #[serde(default)]
+    pub has_more: Option<bool>,
+    #[serde(default)]
+    pub reels_max_id: Option<String>,
+    #[serde(default)]
+    pub has_more_reels: Option<bool>,
+    #[serde(flatten)]
+    pub extra: Option<serde_json::Value>,
+}
+
+/// V3 grid section.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstagramMediaGridSection {
+    #[serde(default)]
+    pub layout_type: Option<String>,
+    #[serde(default)]
+    pub feed_type: Option<String>,
+    #[serde(default)]
+    pub layout_content: Option<InstagramLayoutContent>,
+    #[serde(flatten)]
+    pub extra: Option<serde_json::Value>,
+}
+
+/// V3 grid section content.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstagramLayoutContent {
+    #[serde(default)]
+    pub medias: Option<Vec<InstagramMediaWrapper>>,
+    #[serde(flatten)]
+    pub extra: Option<serde_json::Value>,
+}
+
+/// V3 media wrapper.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstagramMediaWrapper {
+    #[serde(default)]
+    pub media: Option<InstagramPost>,
+    #[serde(flatten)]
+    pub extra: Option<serde_json::Value>,
+}
 
 // ============================================================
 // Reels Search API Types
@@ -214,6 +288,10 @@ pub struct InstagramPost {
     #[serde(default)]
     pub id: Option<String>,
 
+    /// Numeric media PK returned by Instagram V3.
+    #[serde(default)]
+    pub pk: Option<String>,
+
     /// Product type (clips=reel, feed=post, igtv=igtv)
     #[serde(default)]
     pub product_type: Option<String>,
@@ -254,6 +332,10 @@ pub struct InstagramPost {
     #[serde(default)]
     pub image_versions: Option<Vec<InstagramImage>>,
 
+    /// V3 image versions wrapper.
+    #[serde(default)]
+    pub image_versions2: Option<InstagramImageVersions2>,
+
     /// Video versions (multiple resolutions)
     #[serde(default)]
     pub video_versions: Option<Vec<InstagramVideo>>,
@@ -266,9 +348,9 @@ pub struct InstagramPost {
     #[serde(default)]
     pub taken_at_ts: Option<i64>,
 
-    /// Taken at (ISO format string)
+    /// Taken at. Older responses may use an ISO string; V3 uses a Unix timestamp.
     #[serde(default)]
-    pub taken_at: Option<String>,
+    pub taken_at: Option<serde_json::Value>,
 }
 
 /// Instagram caption object
@@ -281,9 +363,12 @@ pub struct InstagramCaption {
 /// Instagram user information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstagramUser {
-    /// User ID (pk)
-    #[serde(alias = "pk")]
+    /// User ID.
     pub id: Option<String>,
+
+    /// Numeric user PK returned alongside id by Instagram V3.
+    #[serde(default)]
+    pub pk: Option<String>,
 
     /// Username
     #[serde(default)]
@@ -310,6 +395,13 @@ pub struct InstagramImage {
     pub height: Option<i32>,
 }
 
+/// Instagram V3 image versions wrapper.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstagramImageVersions2 {
+    #[serde(default)]
+    pub candidates: Option<Vec<InstagramImage>>,
+}
+
 /// Instagram video version
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstagramVideo {
@@ -326,8 +418,12 @@ pub struct InstagramVideo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstagramComment {
     /// Comment ID
-    #[serde(alias = "pk")]
+    #[serde(default)]
     pub id: Option<String>,
+
+    /// Numeric comment PK returned by some Instagram payloads.
+    #[serde(default)]
+    pub pk: Option<String>,
 
     /// Comment text
     #[serde(default)]
@@ -525,7 +621,10 @@ impl InstagramPost {
 
     /// Get post ID
     pub fn post_id(&self) -> Option<&str> {
-        self.id.as_deref().or(self.code.as_deref())
+        self.pk
+            .as_deref()
+            .or(self.id.as_deref())
+            .or(self.code.as_deref())
     }
 
     /// Check if this is a reel
@@ -565,6 +664,11 @@ impl InstagramPost {
                 return first.url.as_deref();
             }
         }
+        if let Some(ref images) = self.image_versions2 {
+            if let Some(first) = images.candidates.as_ref().and_then(|list| list.first()) {
+                return first.url.as_deref();
+            }
+        }
         None
     }
 
@@ -573,10 +677,17 @@ impl InstagramPost {
         if self.taken_at_ts.is_some() {
             return self.taken_at_ts;
         }
-        // Try to parse from taken_at string if available
         if let Some(ref taken_at) = self.taken_at {
-            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(taken_at) {
-                return Some(dt.timestamp());
+            if let Some(ts) = taken_at.as_i64() {
+                return Some(ts);
+            }
+            if let Some(text) = taken_at.as_str() {
+                if let Ok(ts) = text.parse::<i64>() {
+                    return Some(ts);
+                }
+                if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(text) {
+                    return Some(dt.timestamp());
+                }
             }
         }
         None
@@ -601,7 +712,9 @@ impl InstagramComment {
 
     /// Get commenter user ID
     pub fn user_id(&self) -> Option<&str> {
-        self.user.as_ref()?.id.as_deref()
+        self.user
+            .as_ref()
+            .and_then(|user| user.pk.as_deref().or(user.id.as_deref()))
     }
 
     /// Get like count
@@ -640,12 +753,14 @@ mod tests {
         let post = InstagramPost {
             code: Some("ABC123".to_string()),
             id: Some("12345".to_string()),
+            pk: None,
             product_type: Some("clips".to_string()),
             media_type: Some(2),
             caption_text: Some("Test caption".to_string()),
             caption: None,
             user: Some(InstagramUser {
                 id: Some("u123".to_string()),
+                pk: None,
                 username: Some("testuser".to_string()),
                 full_name: Some("Test User".to_string()),
                 profile_pic_url: None,
@@ -656,6 +771,7 @@ mod tests {
             play_count: Some(1000),
             thumbnail_url: None,
             image_versions: None,
+            image_versions2: None,
             video_versions: None,
             is_video: Some(true),
             taken_at_ts: Some(1234567890),
@@ -675,9 +791,11 @@ mod tests {
     fn test_instagram_comment_helpers() {
         let comment = InstagramComment {
             id: Some("c123".to_string()),
+            pk: None,
             text: Some("Great post!".to_string()),
             user: Some(InstagramUser {
                 id: Some("u456".to_string()),
+                pk: None,
                 username: Some("commenter".to_string()),
                 full_name: Some("Commenter Name".to_string()),
                 profile_pic_url: None,
