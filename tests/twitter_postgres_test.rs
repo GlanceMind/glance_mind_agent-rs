@@ -23,9 +23,24 @@ struct IdRow {
     id: i32,
 }
 
-fn database_url() -> String {
+fn database_url() -> Option<String> {
     let _ = dotenvy::dotenv();
-    std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for Postgres Twitter tests")
+    if std::env::var_os("GITHUB_ACTIONS").is_some()
+        && std::env::var_os("RUN_REAL_DB_TESTS").is_none()
+    {
+        return None;
+    }
+    std::env::var("DATABASE_URL").ok()
+}
+
+fn postgres_tests_enabled() -> bool {
+    let enabled = database_url().is_some();
+    if !enabled {
+        eprintln!(
+            "Skipping Twitter Postgres tests - DATABASE_URL is unset or real DB tests are disabled on GitHub Actions"
+        );
+    }
+    enabled
 }
 
 fn connect(database_url: &str) -> PgConnection {
@@ -41,16 +56,19 @@ fn query_single_id(conn: &mut PgConnection, sql: &str) -> i32 {
 
 fn create_test_campaign_and_task(conn: &mut PgConnection) -> (i32, i32) {
     let user_id = query_single_id(conn, "SELECT id FROM gm_users ORDER BY id LIMIT 1");
-    let region_id = diesel::sql_query(
-        "SELECT id FROM gm_regions WHERE platform_id = 5 ORDER BY id LIMIT 1",
-    )
-    .get_result::<IdRow>(conn)
-    .or_else(|_| diesel::sql_query("SELECT id FROM gm_regions ORDER BY id LIMIT 1").get_result(conn))
-    .map(|row| row.id)
-    .expect("failed to resolve a region");
+    let region_id =
+        diesel::sql_query("SELECT id FROM gm_regions WHERE platform_id = 5 ORDER BY id LIMIT 1")
+            .get_result::<IdRow>(conn)
+            .or_else(|_| {
+                diesel::sql_query("SELECT id FROM gm_regions ORDER BY id LIMIT 1").get_result(conn)
+            })
+            .map(|row| row.id)
+            .expect("failed to resolve a region");
     let ai_model_id = query_single_id(conn, "SELECT id FROM gm_ai_models ORDER BY id LIMIT 1");
-    let campaign_id =
-        query_single_id(conn, "SELECT COALESCE(MAX(id), 0) + 2000 AS id FROM gm_campaigns");
+    let campaign_id = query_single_id(
+        conn,
+        "SELECT COALESCE(MAX(id), 0) + 2000 AS id FROM gm_campaigns",
+    );
     let task_id = query_single_id(
         conn,
         "SELECT COALESCE(MAX(id), 0) + 2000 AS id FROM gm_crawler_tasks",
@@ -100,13 +118,10 @@ fn cleanup(conn: &mut PgConnection, campaign_id: i32, task_id: i32) {
         "DELETE FROM gm_agent_twitter_tweets WHERE task_id = {task_id}"
     ))
     .execute(conn);
-    let _ =
-        diesel::sql_query(format!("DELETE FROM gm_crawler_tasks WHERE id = {task_id}"))
-            .execute(conn);
-    let _ = diesel::sql_query(format!(
-        "DELETE FROM gm_campaigns WHERE id = {campaign_id}"
-    ))
-    .execute(conn);
+    let _ = diesel::sql_query(format!("DELETE FROM gm_crawler_tasks WHERE id = {task_id}"))
+        .execute(conn);
+    let _ = diesel::sql_query(format!("DELETE FROM gm_campaigns WHERE id = {campaign_id}"))
+        .execute(conn);
 }
 
 fn make_content(content_id: &str, raw_data: Option<serde_json::Value>) -> Content {
@@ -219,7 +234,10 @@ fn full_reply_raw(reply_id: &str, parent_id: &str) -> serde_json::Value {
 
 #[tokio::test]
 async fn test_save_tweet_with_full_raw_data() {
-    let db_url = database_url();
+    if !postgres_tests_enabled() {
+        return;
+    }
+    let db_url = database_url().expect("Postgres Twitter tests require DATABASE_URL");
     let mut conn = connect(&db_url);
     let (campaign_id, task_id) = create_test_campaign_and_task(&mut conn);
     let repo = PostgresAdapter::from_url(&db_url).unwrap();
@@ -246,7 +264,10 @@ async fn test_save_tweet_with_full_raw_data() {
     assert_eq!(persisted.screen_name, Some("testhandle".to_string()));
     assert_eq!(persisted.user_name, Some("Test User".to_string()));
     assert_eq!(persisted.user_id, Some("uid-test".to_string()));
-    assert_eq!(persisted.user_description, Some("a test account".to_string()));
+    assert_eq!(
+        persisted.user_description,
+        Some("a test account".to_string())
+    );
     assert_eq!(persisted.user_followers_count, Some(500));
     assert_eq!(
         persisted.user_avatar,
@@ -269,7 +290,10 @@ async fn test_save_tweet_with_full_raw_data() {
 
 #[tokio::test]
 async fn test_save_tweet_with_null_raw_data_uses_fallbacks() {
-    let db_url = database_url();
+    if !postgres_tests_enabled() {
+        return;
+    }
+    let db_url = database_url().expect("Postgres Twitter tests require DATABASE_URL");
     let mut conn = connect(&db_url);
     let (campaign_id, task_id) = create_test_campaign_and_task(&mut conn);
     let repo = PostgresAdapter::from_url(&db_url).unwrap();
@@ -305,7 +329,10 @@ async fn test_save_tweet_with_null_raw_data_uses_fallbacks() {
 
 #[tokio::test]
 async fn test_save_tweet_with_malformed_raw_data_uses_fallbacks() {
-    let db_url = database_url();
+    if !postgres_tests_enabled() {
+        return;
+    }
+    let db_url = database_url().expect("Postgres Twitter tests require DATABASE_URL");
     let mut conn = connect(&db_url);
     let (campaign_id, task_id) = create_test_campaign_and_task(&mut conn);
     let repo = PostgresAdapter::from_url(&db_url).unwrap();
@@ -339,7 +366,10 @@ async fn test_save_tweet_with_malformed_raw_data_uses_fallbacks() {
 
 #[tokio::test]
 async fn test_save_tweet_upsert_updates_and_sets_updated_at() {
-    let db_url = database_url();
+    if !postgres_tests_enabled() {
+        return;
+    }
+    let db_url = database_url().expect("Postgres Twitter tests require DATABASE_URL");
     let mut conn = connect(&db_url);
     let (campaign_id, task_id) = create_test_campaign_and_task(&mut conn);
     let repo = PostgresAdapter::from_url(&db_url).unwrap();
@@ -361,8 +391,14 @@ async fn test_save_tweet_upsert_updates_and_sets_updated_at() {
         .save_content(&content_v2, Some(campaign_id), Some(task_id))
         .await
         .unwrap();
-    assert!(!result_v2.is_new, "second save should be an update, not a new insert");
-    assert_eq!(result_v2.id, result_v1.id, "upsert should return the same DB id");
+    assert!(
+        !result_v2.is_new,
+        "second save should be an update, not a new insert"
+    );
+    assert_eq!(
+        result_v2.id, result_v1.id,
+        "upsert should return the same DB id"
+    );
 
     use schema::gm_agent_twitter_tweets::dsl;
     let persisted: models::TwitterTweet = dsl::gm_agent_twitter_tweets
@@ -381,7 +417,10 @@ async fn test_save_tweet_upsert_updates_and_sets_updated_at() {
 
 #[tokio::test]
 async fn test_save_comment_with_full_raw_data() {
-    let db_url = database_url();
+    if !postgres_tests_enabled() {
+        return;
+    }
+    let db_url = database_url().expect("Postgres Twitter tests require DATABASE_URL");
     let mut conn = connect(&db_url);
     let (campaign_id, task_id) = create_test_campaign_and_task(&mut conn);
     let repo = PostgresAdapter::from_url(&db_url).unwrap();
@@ -418,7 +457,10 @@ async fn test_save_comment_with_full_raw_data() {
     assert_eq!(persisted.campaign_id, Some(campaign_id));
     assert_eq!(persisted.comment_text, "nice tweet!");
     assert_eq!(persisted.comment_screen_name, Some("replier".to_string()));
-    assert_eq!(persisted.comment_user_name, Some("Replier Name".to_string()));
+    assert_eq!(
+        persisted.comment_user_name,
+        Some("Replier Name".to_string())
+    );
     assert_eq!(persisted.comment_user_id, Some("uid-replier".to_string()));
     assert_eq!(persisted.comment_user_followers, Some(200));
     assert_eq!(persisted.favorite_count, Some(5));
@@ -440,7 +482,10 @@ async fn test_save_comment_with_full_raw_data() {
 
 #[tokio::test]
 async fn test_save_comment_upsert_updates_suggestion() {
-    let db_url = database_url();
+    if !postgres_tests_enabled() {
+        return;
+    }
+    let db_url = database_url().expect("Postgres Twitter tests require DATABASE_URL");
     let mut conn = connect(&db_url);
     let (campaign_id, task_id) = create_test_campaign_and_task(&mut conn);
     let repo = PostgresAdapter::from_url(&db_url).unwrap();
@@ -486,10 +531,7 @@ async fn test_save_comment_upsert_updates_suggestion() {
         .expect("comment should exist after upsert");
 
     assert_eq!(persisted.reason, Some("updated reason".to_string()));
-    assert_eq!(
-        persisted.suggested_reply,
-        Some("updated reply".to_string())
-    );
+    assert_eq!(persisted.suggested_reply, Some("updated reply".to_string()));
     assert_eq!(persisted.suggested_dm, Some("updated dm".to_string()));
     assert_eq!(
         persisted.suggested_reply_post,
@@ -505,7 +547,10 @@ async fn test_save_comment_upsert_updates_suggestion() {
 
 #[tokio::test]
 async fn test_save_comment_with_null_raw_data_uses_fallbacks() {
-    let db_url = database_url();
+    if !postgres_tests_enabled() {
+        return;
+    }
+    let db_url = database_url().expect("Postgres Twitter tests require DATABASE_URL");
     let mut conn = connect(&db_url);
     let (campaign_id, task_id) = create_test_campaign_and_task(&mut conn);
     let repo = PostgresAdapter::from_url(&db_url).unwrap();
@@ -534,7 +579,10 @@ async fn test_save_comment_with_null_raw_data_uses_fallbacks() {
 
     assert_eq!(persisted.comment_text, "nice tweet!");
     assert_eq!(persisted.comment_screen_name, Some("replier".to_string()));
-    assert_eq!(persisted.comment_user_name, Some("Replier Name".to_string()));
+    assert_eq!(
+        persisted.comment_user_name,
+        Some("Replier Name".to_string())
+    );
     assert_eq!(persisted.comment_user_id, Some("uid-replier".to_string()));
     assert_eq!(persisted.favorite_count, Some(5));
     assert_eq!(persisted.reply_count, Some(1));
