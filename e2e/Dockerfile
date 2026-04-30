@@ -6,12 +6,6 @@ FROM rust:latest AS builder
 
 WORKDIR /app
 
-# Set proxy for apt (use host.docker.internal for macOS)
-ENV HTTP_PROXY=http://host.docker.internal:7890
-ENV HTTPS_PROXY=http://host.docker.internal:7890
-ENV http_proxy=http://host.docker.internal:7890
-ENV https_proxy=http://host.docker.internal:7890
-
 # Configure cargo to use USTC mirror
 RUN mkdir -p /usr/local/cargo && \
     echo '[source.crates-io]' > /usr/local/cargo/config.toml && \
