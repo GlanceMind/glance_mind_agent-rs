@@ -368,6 +368,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_provider_harness_content_gateway_error_boundaries() {
+        let cases = vec![
+            (MockError::Network, "network"),
+            (MockError::RateLimit, "rate_limit"),
+            (MockError::NotFound, "not_found"),
+            (MockError::Auth, "auth"),
+        ];
+
+        for (mode, boundary) in cases {
+            let gateway = MockContentGateway::new();
+            gateway.set_error_mode(Some(mode));
+
+            let result = gateway.search(&SearchOptions::new("harness")).await;
+            let error = result.expect_err(boundary);
+
+            match boundary {
+                "network" => assert!(matches!(error, GatewayError::Network(_))),
+                "rate_limit" => assert!(matches!(error, GatewayError::RateLimited { .. })),
+                "not_found" => assert!(matches!(error, GatewayError::NotFound(_))),
+                "auth" => assert!(matches!(error, GatewayError::AuthFailed(_))),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn test_mock_comment_gateway() {
         let gateway = MockCommentGateway::new();
 
@@ -380,5 +406,28 @@ mod tests {
         let comments = gateway.fetch_all_comments("v123", 10).await.unwrap();
         assert_eq!(comments.len(), 1);
         assert_eq!(comments[0].text, "Great video!");
+    }
+
+    #[tokio::test]
+    async fn test_provider_harness_comment_gateway_tracks_success_boundary() {
+        let gateway = MockCommentGateway::new();
+        gateway.add_comment(
+            "v123",
+            Comment::new("mock", "c1", "v123")
+                .with_author("user1")
+                .with_text("Harness comment"),
+        );
+
+        let comments = gateway.fetch_all_comments("v123", 5).await.unwrap();
+
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].text, "Harness comment");
+        assert!(matches!(
+            gateway.get_calls().as_slice(),
+            [GatewayCall::FetchAllComments {
+                content_id,
+                max: 5
+            }] if content_id == "v123"
+        ));
     }
 }
