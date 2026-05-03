@@ -6,7 +6,7 @@ plane.
 
 Use:
 
-- `cargo test mock_gateway`
+- `cargo test mock_gateway --quiet`
 - `cargo test orchestrator`
 
 Provider behavior should be represented as success, not found, rate limit,
