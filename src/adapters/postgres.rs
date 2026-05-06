@@ -75,6 +75,47 @@ struct CommentInsertResult {
     id: i32,
 }
 
+#[derive(QueryableByName, Debug)]
+struct ResolvedCampaignTemplateRow {
+    #[diesel(sql_type = Integer)]
+    id: i32,
+    #[diesel(sql_type = Integer)]
+    campaign_id: i32,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Integer>)]
+    library_template_id: Option<i32>,
+    #[diesel(sql_type = Integer)]
+    weight: i32,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+    reply_prompt: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+    created_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>)]
+    updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+    dm_prompt: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+    reply_post_prompt: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+    name: Option<String>,
+}
+
+impl ResolvedCampaignTemplateRow {
+    fn into_campaign_template(self) -> models::CampaignTemplate {
+        models::CampaignTemplate {
+            id: self.id,
+            campaign_id: self.campaign_id,
+            library_template_id: self.library_template_id,
+            weight: self.weight,
+            reply_prompt: self.reply_prompt,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            dm_prompt: self.dm_prompt,
+            reply_post_prompt: self.reply_post_prompt,
+            name: self.name,
+        }
+    }
+}
+
 /// PostgreSQL adapter implementing repository ports
 pub struct PostgresAdapter {
     pool: DbPool,
@@ -2463,17 +2504,34 @@ impl PostgresAdapter {
         &self,
         campaign_id: i32,
     ) -> DbResult<Vec<models::CampaignTemplate>> {
-        use schema::gm_campaign_templates::dsl;
-
         let mut conn = self.conn_async().await?;
 
-        let templates: Vec<models::CampaignTemplate> = dsl::gm_campaign_templates
-            .filter(dsl::campaign_id.eq(campaign_id))
-            .order(dsl::weight.desc())
-            .load(&mut conn)
-            .map_err(DbError::from)?;
+        let templates = diesel::sql_query(
+            r#"
+            SELECT
+                id,
+                campaign_id,
+                library_template_id,
+                weight,
+                reply_prompt,
+                created_at,
+                updated_at,
+                dm_prompt,
+                reply_post_prompt,
+                name
+            FROM gm_resolved_campaign_templates
+            WHERE campaign_id = $1
+            ORDER BY weight DESC, id ASC
+            "#,
+        )
+        .bind::<Integer, _>(campaign_id)
+        .load::<ResolvedCampaignTemplateRow>(&mut conn)
+        .map_err(DbError::from)?;
 
-        Ok(templates)
+        Ok(templates
+            .into_iter()
+            .map(ResolvedCampaignTemplateRow::into_campaign_template)
+            .collect())
     }
 
     #[allow(dead_code)]
@@ -2567,6 +2625,354 @@ impl PostgresAdapter {
 mod tests {
     #[allow(unused_imports)]
     use super::*;
+    use diesel::sql_types::Integer;
+    use diesel::pg::PgConnection;
+    use diesel::Connection;
+
+    #[derive(QueryableByName)]
+    struct IdRow {
+        #[diesel(sql_type = Integer)]
+        id: i32,
+    }
+
+    fn database_url() -> Option<String> {
+        let _ = dotenvy::dotenv();
+        if std::env::var_os("GITHUB_ACTIONS").is_some()
+            && std::env::var_os("RUN_REAL_DB_TESTS").is_none()
+        {
+            return None;
+        }
+        std::env::var("DATABASE_URL").ok()
+    }
+
+    fn postgres_tests_enabled() -> bool {
+        let enabled = database_url().is_some();
+        if !enabled {
+            eprintln!(
+                "Skipping Postgres adapter DB tests - DATABASE_URL is unset or real DB tests are disabled on GitHub Actions"
+            );
+        }
+        enabled
+    }
+
+    fn connect(database_url: &str) -> PgConnection {
+        PgConnection::establish(database_url).expect("failed to connect to DATABASE_URL")
+    }
+
+    fn escaped_literal(value: &str) -> String {
+        value.replace('\'', "''")
+    }
+
+    fn schema_database_url(base_url: &str, schema: &str) -> String {
+        let separator = if base_url.contains('?') { "&" } else { "?" };
+        format!(
+            "{base_url}{separator}options=-csearch_path%3D{schema}",
+            schema = escaped_literal(schema)
+        )
+    }
+
+    struct TestSchemaGuard {
+        base_db_url: String,
+        schema_name: String,
+        schema_db_url: String,
+    }
+
+    impl TestSchemaGuard {
+        fn new(base_url: &str) -> Self {
+            let (schema_name, schema_db_url) = create_test_schema(base_url);
+            Self {
+                base_db_url: base_url.to_string(),
+                schema_name,
+                schema_db_url,
+            }
+        }
+
+        fn database_url(&self) -> &str {
+            &self.schema_db_url
+        }
+    }
+
+    impl Drop for TestSchemaGuard {
+        fn drop(&mut self) {
+            let mut admin_conn = connect(&self.base_db_url);
+            let _ = diesel::sql_query(format!(
+                r#"DROP SCHEMA IF EXISTS "{}" CASCADE"#,
+                self.schema_name
+            ))
+            .execute(&mut admin_conn);
+        }
+    }
+
+    fn create_test_schema(base_url: &str) -> (String, String) {
+        let schema_name = format!(
+            "gm_agent_template_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock before UNIX_EPOCH")
+                .as_nanos()
+        );
+
+        let mut admin_conn = connect(base_url);
+        diesel::sql_query(format!(r#"CREATE SCHEMA "{schema_name}""#))
+            .execute(&mut admin_conn)
+            .expect("failed to create isolated test schema");
+
+        let schema_url = schema_database_url(base_url, &schema_name);
+        let mut schema_conn = connect(&schema_url);
+        for statement in [
+            r#"
+            CREATE TABLE gm_users (
+                id INTEGER PRIMARY KEY,
+                email VARCHAR(255),
+                username VARCHAR(50),
+                password_hash VARCHAR(255) NOT NULL DEFAULT 'test-hash',
+                full_name VARCHAR NOT NULL DEFAULT '',
+                role VARCHAR NOT NULL DEFAULT 'user',
+                status VARCHAR(50) NOT NULL DEFAULT 'ACTIVE',
+                is_active BOOLEAN NOT NULL DEFAULT true,
+                invitation_code VARCHAR(50),
+                referred_by VARCHAR(50),
+                invite_code VARCHAR(36),
+                invited_by VARCHAR(36),
+                company_name VARCHAR(255),
+                api_key VARCHAR(255),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ
+            )
+            "#,
+            r#"
+            CREATE TABLE gm_campaigns (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES gm_users(id),
+                name VARCHAR NOT NULL DEFAULT 'test campaign',
+                status VARCHAR NOT NULL DEFAULT 'ACTIVE',
+                platform_id INTEGER NOT NULL DEFAULT 5,
+                region_id INTEGER NOT NULL DEFAULT 1,
+                ai_model_id INTEGER NOT NULL DEFAULT 1,
+                target_audience TEXT,
+                product_prompt TEXT NOT NULL DEFAULT 'test product prompt',
+                schedule_config JSONB,
+                enable_ai_refactor BOOLEAN,
+                persona_id INTEGER,
+                max_scan_count INTEGER,
+                budget_cap NUMERIC,
+                end_date TIMESTAMPTZ,
+                schedule_type VARCHAR NOT NULL DEFAULT 'IMMEDIATE',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ,
+                keyword TEXT,
+                social_group_id INTEGER,
+                call_to_action TEXT,
+                tone_of_voice TEXT,
+                additional_info TEXT,
+                total_scanned INTEGER NOT NULL DEFAULT 0,
+                auto_like BOOLEAN NOT NULL DEFAULT false,
+                auto_follow BOOLEAN NOT NULL DEFAULT false,
+                auto_dm BOOLEAN NOT NULL DEFAULT false,
+                pending_consumption NUMERIC NOT NULL DEFAULT 0,
+                actual_consumption NUMERIC NOT NULL DEFAULT 0,
+                is_frozen BOOLEAN NOT NULL DEFAULT false,
+                search_options JSONB,
+                auto_reply_comments BOOLEAN NOT NULL DEFAULT true,
+                auto_reply_post BOOLEAN NOT NULL DEFAULT true,
+                completed_reason TEXT
+            )
+            "#,
+            r#"
+            CREATE TABLE gm_reply_template_library (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES gm_users(id) ON DELETE CASCADE,
+                name VARCHAR(255) NOT NULL,
+                description TEXT,
+                weight INTEGER NOT NULL DEFAULT 50,
+                dm_prompt TEXT,
+                reply_prompt TEXT,
+                reply_post_prompt TEXT,
+                usage_count INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ
+            )
+            "#,
+            r#"
+            CREATE TABLE gm_campaign_templates (
+                id SERIAL PRIMARY KEY,
+                campaign_id INTEGER NOT NULL REFERENCES gm_campaigns(id) ON DELETE CASCADE,
+                library_template_id INTEGER REFERENCES gm_reply_template_library(id) ON DELETE SET NULL,
+                weight INTEGER NOT NULL DEFAULT 1,
+                reply_prompt TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ,
+                dm_prompt TEXT,
+                reply_post_prompt TEXT,
+                name VARCHAR(255)
+            )
+            "#,
+            r#"
+            CREATE INDEX idx_campaign_templates_library_template_id
+                ON gm_campaign_templates(library_template_id)
+            "#,
+            r#"
+            CREATE UNIQUE INDEX idx_campaign_templates_campaign_library_unique
+                ON gm_campaign_templates(campaign_id, library_template_id)
+                WHERE library_template_id IS NOT NULL
+            "#,
+            r#"
+            CREATE OR REPLACE VIEW gm_resolved_campaign_templates AS
+            SELECT
+                campaign.id,
+                campaign.campaign_id,
+                campaign.library_template_id,
+                campaign.weight,
+                CASE
+                    WHEN library.id IS NOT NULL THEN library.reply_prompt
+                    ELSE campaign.reply_prompt
+                END AS reply_prompt,
+                campaign.created_at,
+                campaign.updated_at,
+                CASE
+                    WHEN library.id IS NOT NULL THEN library.dm_prompt
+                    ELSE campaign.dm_prompt
+                END AS dm_prompt,
+                CASE
+                    WHEN library.id IS NOT NULL THEN library.reply_post_prompt
+                    ELSE campaign.reply_post_prompt
+                END AS reply_post_prompt,
+                CASE
+                    WHEN library.id IS NOT NULL THEN library.name
+                    ELSE campaign.name
+                END AS name
+            FROM gm_campaign_templates campaign
+            LEFT JOIN gm_reply_template_library library
+                ON library.id = campaign.library_template_id
+            "#,
+        ] {
+            diesel::sql_query(statement)
+                .execute(&mut schema_conn)
+                .expect("failed to initialize isolated test schema");
+        }
+
+        diesel::sql_query(
+            r#"
+            INSERT INTO gm_users (
+                id, email, username, password_hash, full_name, role, status, is_active, created_at
+            ) VALUES (
+                1, 'test@example.com', 'test-user', 'test-hash', 'Test User', 'user', 'ACTIVE', true, NOW()
+            )
+            "#
+        )
+        .execute(&mut schema_conn)
+        .expect("failed to insert isolated test user");
+
+        (schema_name, schema_url)
+    }
+
+    fn insert_test_campaign_record(conn: &mut PgConnection, campaign_id: i32) {
+        diesel::sql_query(format!(
+            r#"
+            INSERT INTO gm_campaigns (
+                id, user_id, name, status, platform_id, region_id, ai_model_id,
+                product_prompt, schedule_type, total_scanned,
+                auto_like, auto_follow, auto_dm,
+                pending_consumption, actual_consumption, is_frozen,
+                search_options, auto_reply_comments, auto_reply_post, created_at
+            ) VALUES (
+                {campaign_id}, 1, 'resolved template campaign', 'ACTIVE', 5, 1, 1,
+                'test product prompt', 'IMMEDIATE', 0,
+                false, false, false,
+                0, 0, false,
+                '{{}}'::jsonb, true, true, NOW()
+            )
+            "#,
+        ))
+        .execute(conn)
+        .expect("failed to insert isolated test campaign");
+    }
+
+    fn insert_library_template(
+        conn: &mut PgConnection,
+        name: &str,
+        weight: i32,
+        dm_prompt: Option<&str>,
+        reply_prompt: Option<&str>,
+        reply_post_prompt: Option<&str>,
+    ) -> i32 {
+        let dm_sql = dm_prompt
+            .map(|value| format!("'{}'", value.replace('\'', "''")))
+            .unwrap_or_else(|| "NULL".to_string());
+        let reply_sql = reply_prompt
+            .map(|value| format!("'{}'", value.replace('\'', "''")))
+            .unwrap_or_else(|| "NULL".to_string());
+        let reply_post_sql = reply_post_prompt
+            .map(|value| format!("'{}'", value.replace('\'', "''")))
+            .unwrap_or_else(|| "NULL".to_string());
+
+        diesel::sql_query(format!(
+            r#"
+            INSERT INTO gm_reply_template_library (
+                user_id, name, weight, dm_prompt, reply_prompt, reply_post_prompt, usage_count, created_at
+            ) VALUES (
+                1, '{name}', {weight}, {dm_sql}, {reply_sql}, {reply_post_sql}, 0, NOW()
+            )
+            RETURNING id
+            "#,
+            name = name.replace('\'', "''"),
+        ))
+        .get_result::<IdRow>(conn)
+        .map(|row| row.id)
+        .expect("failed to insert library template")
+    }
+
+    struct TemplateInsert<'a> {
+        campaign_id: i32,
+        library_template_id: Option<i32>,
+        weight: i32,
+        reply_prompt: Option<&'a str>,
+        dm_prompt: Option<&'a str>,
+        reply_post_prompt: Option<&'a str>,
+        name: Option<&'a str>,
+    }
+
+    fn insert_campaign_template(conn: &mut PgConnection, input: TemplateInsert<'_>) -> i32 {
+        let library_id_sql = input
+            .library_template_id
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "NULL".to_string());
+        let reply_sql = input
+            .reply_prompt
+            .map(|value| format!("'{}'", value.replace('\'', "''")))
+            .unwrap_or_else(|| "NULL".to_string());
+        let dm_sql = input
+            .dm_prompt
+            .map(|value| format!("'{}'", value.replace('\'', "''")))
+            .unwrap_or_else(|| "NULL".to_string());
+        let reply_post_sql = input
+            .reply_post_prompt
+            .map(|value| format!("'{}'", value.replace('\'', "''")))
+            .unwrap_or_else(|| "NULL".to_string());
+        let name_sql = input
+            .name
+            .map(|value| format!("'{}'", value.replace('\'', "''")))
+            .unwrap_or_else(|| "NULL".to_string());
+
+        diesel::sql_query(format!(
+            r#"
+            INSERT INTO gm_campaign_templates (
+                campaign_id, library_template_id, weight,
+                reply_prompt, dm_prompt, reply_post_prompt, name, created_at
+            ) VALUES (
+                {campaign_id}, {library_id_sql}, {weight},
+                {reply_sql}, {dm_sql}, {reply_post_sql}, {name_sql}, NOW()
+            )
+            RETURNING id
+            "#,
+            campaign_id = input.campaign_id,
+            weight = input.weight,
+        ))
+        .get_result::<IdRow>(conn)
+            .map(|row| row.id)
+            .expect("failed to insert campaign template")
+    }
 
     #[test]
     fn test_platform_id() {
@@ -2591,5 +2997,218 @@ mod tests {
         assert_eq!(adapter.platform_id("tiktok"), 2);
         assert_eq!(adapter.platform_id("instagram"), 4);
         assert_eq!(adapter.platform_id("unknown"), 0);
+    }
+
+    #[test]
+    fn reusable_library_values_override_stale_campaign_snapshot() {
+        let row = ResolvedCampaignTemplateRow {
+            id: 11,
+            campaign_id: 22,
+            library_template_id: Some(33),
+            weight: 80,
+            reply_prompt: Some("library reply prompt".to_string()),
+            dm_prompt: Some("library dm prompt".to_string()),
+            reply_post_prompt: Some("library post prompt".to_string()),
+            name: Some("Library template".to_string()),
+            created_at: chrono::Utc::now(),
+            updated_at: None,
+        };
+
+        let template = row.into_campaign_template();
+
+        assert_eq!(template.library_template_id, Some(33));
+        assert_eq!(
+            template.reply_prompt.as_deref(),
+            Some("library reply prompt")
+        );
+        assert_eq!(template.dm_prompt.as_deref(), Some("library dm prompt"));
+        assert_eq!(
+            template.reply_post_prompt.as_deref(),
+            Some("library post prompt")
+        );
+        assert_eq!(template.name.as_deref(), Some("Library template"));
+    }
+
+    #[tokio::test]
+    async fn get_campaign_templates_uses_resolved_template_contract() {
+        if !postgres_tests_enabled() {
+            return;
+        }
+
+        let base_db_url = database_url().expect("Postgres adapter DB tests require DATABASE_URL");
+        let schema = TestSchemaGuard::new(&base_db_url);
+        let mut conn = connect(schema.database_url());
+        let campaign_id = 4242;
+        let adapter = PostgresAdapter::from_url(schema.database_url()).expect("adapter should connect");
+        insert_test_campaign_record(&mut conn, campaign_id);
+
+        let library_override_id = insert_library_template(
+            &mut conn,
+            "Reusable template",
+            999,
+            Some("library dm prompt"),
+            Some("library reply prompt"),
+            Some("library post prompt"),
+        );
+        let library_nulls_id = insert_library_template(
+            &mut conn,
+            "Null-only template",
+            888,
+            None,
+            None,
+            None,
+        );
+        let library_deleted_id = insert_library_template(
+            &mut conn,
+            "Deleted template",
+            777,
+            Some("deleted dm"),
+            Some("deleted reply"),
+            Some("deleted post"),
+        );
+
+        insert_campaign_template(
+            &mut conn,
+            TemplateInsert {
+                campaign_id,
+                library_template_id: Some(library_override_id),
+                weight: 7,
+                reply_prompt: Some("stale campaign reply"),
+                dm_prompt: Some("stale campaign dm"),
+                reply_post_prompt: Some("stale campaign post"),
+                name: Some("Stale campaign name"),
+            },
+        );
+        insert_campaign_template(
+            &mut conn,
+            TemplateInsert {
+                campaign_id,
+                library_template_id: Some(library_nulls_id),
+                weight: 5,
+                reply_prompt: Some("stale null fallback reply"),
+                dm_prompt: Some("stale null fallback dm"),
+                reply_post_prompt: Some("stale null fallback post"),
+                name: Some("Stale null fallback name"),
+            },
+        );
+        insert_campaign_template(
+            &mut conn,
+            TemplateInsert {
+                campaign_id,
+                library_template_id: Some(library_deleted_id),
+                weight: 3,
+                reply_prompt: Some("campaign fallback reply"),
+                dm_prompt: Some("campaign fallback dm"),
+                reply_post_prompt: Some("campaign fallback post"),
+                name: Some("Campaign fallback name"),
+            },
+        );
+
+        diesel::sql_query(format!(
+            "DELETE FROM gm_reply_template_library WHERE id = {library_deleted_id}"
+        ))
+        .execute(&mut conn)
+        .expect("failed to delete linked library template");
+
+        let templates = adapter
+            .get_campaign_templates(campaign_id)
+            .await
+            .expect("campaign templates should load");
+
+        assert_eq!(templates.len(), 3);
+
+        let override_template = templates
+            .iter()
+            .find(|template| template.weight == 7)
+            .expect("override template should be present");
+        assert_eq!(override_template.library_template_id, Some(library_override_id));
+        assert_eq!(
+            override_template.reply_prompt.as_deref(),
+            Some("library reply prompt")
+        );
+        assert_eq!(
+            override_template.dm_prompt.as_deref(),
+            Some("library dm prompt")
+        );
+        assert_eq!(
+            override_template.reply_post_prompt.as_deref(),
+            Some("library post prompt")
+        );
+        assert_eq!(override_template.name.as_deref(), Some("Reusable template"));
+
+        let null_template = templates
+            .iter()
+            .find(|template| template.weight == 5)
+            .expect("null-library template should be present");
+        assert_eq!(null_template.library_template_id, Some(library_nulls_id));
+        assert_eq!(null_template.reply_prompt, None);
+        assert_eq!(null_template.dm_prompt, None);
+        assert_eq!(null_template.reply_post_prompt, None);
+        assert_eq!(null_template.name.as_deref(), Some("Null-only template"));
+
+        let fallback_template = templates
+            .iter()
+            .find(|template| template.weight == 3)
+            .expect("fallback template should be present");
+        assert_eq!(fallback_template.library_template_id, None);
+        assert_eq!(
+            fallback_template.reply_prompt.as_deref(),
+            Some("campaign fallback reply")
+        );
+        assert_eq!(
+            fallback_template.dm_prompt.as_deref(),
+            Some("campaign fallback dm")
+        );
+        assert_eq!(
+            fallback_template.reply_post_prompt.as_deref(),
+            Some("campaign fallback post")
+        );
+        assert_eq!(fallback_template.name.as_deref(), Some("Campaign fallback name"));
+        assert_eq!(fallback_template.library_template_id, None);
+    }
+
+    #[tokio::test]
+    async fn get_campaign_uses_resolved_template_prompts_without_null_fallback() {
+        if !postgres_tests_enabled() {
+            return;
+        }
+
+        let base_db_url = database_url().expect("Postgres adapter DB tests require DATABASE_URL");
+        let schema = TestSchemaGuard::new(&base_db_url);
+        let mut conn = connect(schema.database_url());
+        let campaign_id = 9191;
+        let adapter = PostgresAdapter::from_url(schema.database_url()).expect("adapter should connect");
+        insert_test_campaign_record(&mut conn, campaign_id);
+
+        let library_id = insert_library_template(
+            &mut conn,
+            "Null-prompt template",
+            600,
+            None,
+            None,
+            None,
+        );
+        insert_campaign_template(
+            &mut conn,
+            TemplateInsert {
+                campaign_id,
+                library_template_id: Some(library_id),
+                weight: 100,
+                reply_prompt: Some("stale reply"),
+                dm_prompt: Some("stale dm"),
+                reply_post_prompt: Some("stale post"),
+                name: Some("Stale campaign name"),
+            },
+        );
+
+        let campaign = adapter
+            .get_campaign(campaign_id)
+            .await
+            .expect("campaign query should succeed")
+            .expect("campaign should be returned");
+
+        assert_eq!(campaign.reply_strategy, None);
+        assert_eq!(campaign.dm_strategy, None);
+        assert_eq!(campaign.reply_post_strategy, None);
     }
 }

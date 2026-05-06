@@ -72,6 +72,7 @@ table! {
     gm_campaign_templates (id) {
         id -> Int4,
         campaign_id -> Int4,
+        library_template_id -> Nullable<Int4>,
         weight -> Int4,
         reply_prompt -> Nullable<Text>,
         created_at -> Timestamptz,
@@ -79,6 +80,22 @@ table! {
         dm_prompt -> Nullable<Text>,
         reply_post_prompt -> Nullable<Text>,
         name -> Nullable<Varchar>,
+    }
+}
+
+table! {
+    gm_reply_template_library (id) {
+        id -> Int4,
+        user_id -> Int4,
+        name -> Varchar,
+        description -> Nullable<Text>,
+        weight -> Int4,
+        dm_prompt -> Nullable<Text>,
+        reply_prompt -> Nullable<Text>,
+        reply_post_prompt -> Nullable<Text>,
+        usage_count -> Int4,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -306,6 +323,7 @@ table! {
 // ============================================================
 diesel::joinable!(gm_campaigns -> gm_platforms (platform_id));
 diesel::joinable!(gm_campaign_templates -> gm_campaigns (campaign_id));
+diesel::joinable!(gm_campaign_templates -> gm_reply_template_library (library_template_id));
 diesel::joinable!(gm_crawler_tasks -> gm_campaigns (campaign_id));
 diesel::joinable!(gm_agent_videos -> gm_crawler_tasks (task_id));
 diesel::joinable!(gm_agent_videos -> gm_campaigns (campaign_id));
@@ -324,6 +342,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     gm_platforms,
     gm_campaigns,
     gm_campaign_templates,
+    gm_reply_template_library,
     gm_crawler_tasks,
     gm_agent_videos,
     gm_agent_comments,

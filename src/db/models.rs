@@ -86,6 +86,7 @@ pub struct Campaign {
 pub struct CampaignTemplate {
     pub id: i32,
     pub campaign_id: i32,
+    pub library_template_id: Option<i32>,
     pub weight: i32,
     pub reply_prompt: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -93,6 +94,24 @@ pub struct CampaignTemplate {
     pub dm_prompt: Option<String>,
     pub reply_post_prompt: Option<String>,
     pub name: Option<String>,
+}
+
+/// User-level reusable reply template library record.
+#[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
+#[diesel(table_name = gm_reply_template_library)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct ReusableReplyTemplate {
+    pub id: i32,
+    pub user_id: i32,
+    pub name: String,
+    pub description: Option<String>,
+    pub weight: i32,
+    pub dm_prompt: Option<String>,
+    pub reply_prompt: Option<String>,
+    pub reply_post_prompt: Option<String>,
+    pub usage_count: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 // ============================================================

@@ -1,0 +1,48 @@
+# =============================================================================
+# Local override for the agent-rs E2E stack — REAL TikHub mode (mock AI)
+# =============================================================================
+# Layered on top of:
+#   - glance_mind_agent_rs/e2e/docker-compose.yml (which includes
+#     gm-e2e/infra/{base,mocks,worker}.yml)
+#
+# Effects:
+#   1. Replaces gm-e2e's broken `Dockerfile.scheduler.e2e` build with the
+#      canonical scheduler Dockerfile (handles vendor/glance_mind_protocol).
+#   2. Mounts agent-rs/e2e/init-scripts/{04_mock_user,05_mock_campaign}.sql
+#      into postgres /docker-entrypoint-initdb.d so user 99999 + campaign
+#      99901 get seeded automatically on first boot.
+#   3. Overrides scheduler + agent-rs to talk to REAL TikHub (api.tikhub.io)
+#      while everything else (laozhang/openai) stays on the local mock so
+#      no LLM cost is incurred during the test.
+#   4. Tightens scheduler tick interval so the test doesn't have to wait
+#      a full minute between dispatches.
+# =============================================================================
+
+services:
+  postgres:
+    volumes:
+      # Seed user 99999 + wallet + social group/account
+      - ./init-scripts/04_mock_user.sql:/docker-entrypoint-initdb.d/91_mock_user.sql:ro
+      # Seed campaign 99901 (DRAFT) + reply template
+      - ./init-scripts/05_mock_campaign.sql:/docker-entrypoint-initdb.d/92_mock_campaign.sql:ro
+
+  scheduler:
+    build:
+      # Use the canonical scheduler Dockerfile so vendor/glance_mind_protocol
+      # is properly copied into the build context.
+      context: ../../glance_mind_worker/glance_mind_scheduler
+      dockerfile: Dockerfile
+    environment:
+      # Real TikHub
+      TIKHUB_API_KEY: prQYLdkv43T3tXyDHYat2kToB2rUAsZavin6tmucXfartA+LPHeTdxSnFQ==
+      TIKHUB_BASE_URL: https://api.tikhub.io
+      # Faster tick for E2E
+      MAIN_LOOP_INTERVAL: "5"
+      RUST_LOG: "info,glance_mind_scheduler=debug"
+
+  agent-rs:
+    environment:
+      # Real TikHub
+      TIKHUB_API_KEY: prQYLdkv43T3tXyDHYat2kToB2rUAsZavin6tmucXfartA+LPHeTdxSnFQ==
+      TIKHUB_BASE_URL: https://api.tikhub.io
+      RUST_LOG: "info,glance_mind_agent_rs=debug"

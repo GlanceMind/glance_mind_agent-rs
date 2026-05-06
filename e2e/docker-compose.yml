@@ -1,194 +1,45 @@
 # =============================================================================
-# GlanceMind E2E Test Environment
+# GlanceMind Agent-RS E2E Test Environment (via gm-e2e infra)
 # =============================================================================
-# All environment variables are read from .env file
-# Uses tmpfs for database to ensure fresh state on each run
+# Uses shared infrastructure from gm-e2e instead of duplicating services.
+#
+# Usage:
+#   docker compose up -d
+#   docker compose exec test-runner pytest -v
+#   docker compose down -v
+#
+# Alternative: cd ../../gm-e2e && make infra-worker-up
 # =============================================================================
+
+include:
+  - path: ../../gm-e2e/infra/docker-compose.base.yml
+  - path: ../../gm-e2e/infra/docker-compose.mocks.yml
+  - path: ../../gm-e2e/infra/docker-compose.worker.yml
 
 services:
-  # ===========================================================================
-  # PostgreSQL Database (ephemeral - no persistent storage)
-  # ===========================================================================
-  postgres:
-    image: postgres:15-alpine
-    container_name: e2e-postgres
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-    volumes:
-      - ./init-scripts:/docker-entrypoint-initdb.d:ro
-    tmpfs:
-      - /var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    networks:
-      - e2e-network
-
-  # ===========================================================================
-  # Redis Task Queue (ephemeral)
-  # ===========================================================================
-  redis:
-    image: redis:7-alpine
-    container_name: e2e-redis
-    command: redis-server --appendonly no --save ""
-    tmpfs:
-      - /data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    networks:
-      - e2e-network
-
-  # ===========================================================================
-  # TikHub Mock (Twitter/TikTok/Instagram/Reddit supplier for E2E)
-  # ===========================================================================
-  tikhub-mock:
-    build:
-      context: ../../mock-services
-      dockerfile: Dockerfile
-    container_name: e2e-tikhub-mock
-    command: ["python", "-m", "uvicorn", "mock_services.tikhub_mock:app", "--host", "0.0.0.0", "--port", "8500"]
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8500/health')"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    networks:
-      - e2e-network
-
-  # ===========================================================================
-  # Facebook Scraper Mock (RapidAPI-compatible supplier for E2E)
-  # ===========================================================================
-  facebook-scraper-mock:
-    build:
-      context: ../../mock-services
-      dockerfile: Dockerfile
-    container_name: e2e-facebook-scraper-mock
-    command: ["python", "-m", "uvicorn", "mock_services.facebook_scraper_mock:app", "--host", "0.0.0.0", "--port", "8600"]
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8600/health')"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    networks:
-      - e2e-network
-
-  # ===========================================================================
-  # LaoZhang Mock (OpenAI-compatible AI supplier for E2E)
-  # ===========================================================================
-  laozhang-mock:
-    build:
-      context: ../../mock-services
-      dockerfile: Dockerfile
-    container_name: e2e-laozhang-mock
-    command: ["python", "-m", "uvicorn", "mock_services.laozhang_mock:app", "--host", "0.0.0.0", "--port", "8100"]
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health')"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    networks:
-      - e2e-network
-
-  # ===========================================================================
-  # GlanceMind Scheduler
-  # ===========================================================================
-  scheduler:
-    build:
-      context: ../../glance_mind_worker/glance_mind_scheduler
-      dockerfile: Dockerfile
-    container_name: e2e-scheduler
-    environment:
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      REDIS_URL: redis://redis:6379
-      RUST_LOG: ${RUST_LOG}
-      LAOZHANG_API_KEY: ${LAOZHANG_API_KEY:-mock-laozhang-key}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-mock-openai-key}
-      OPENAI_BASE_URL: http://laozhang-mock:8100/v1
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      laozhang-mock:
-        condition: service_healthy
-    networks:
-      - e2e-network
-    restart: on-failure
-
-  # ===========================================================================
-  # GlanceMind Agent-rs
-  # ===========================================================================
-  agent-rs:
-    build:
-      context: ..
-      dockerfile: e2e/Dockerfile
-    container_name: e2e-agent-rs
-    environment:
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      REDIS_URL: redis://redis:6379
-      AGENT_QUEUE_NAME: ${AGENT_QUEUE_NAME}
-      AGENT_WORKERS: ${AGENT_WORKERS}
-      TIKHUB_API_KEY: ${TIKHUB_API_KEY:-mock-tikhub-key}
-      TIKHUB_BASE_URL: ${TIKHUB_BASE_URL:-http://tikhub-mock:8500}
-      FACEBOOK_RAPIDAPI_KEY: ${FACEBOOK_RAPIDAPI_KEY:-mock-facebook-key}
-      FACEBOOK_RAPIDAPI_HOST: ${FACEBOOK_RAPIDAPI_HOST:-facebook-scraper3.p.rapidapi.com}
-      FACEBOOK_RAPIDAPI_BASE_URL: ${FACEBOOK_RAPIDAPI_BASE_URL:-http://facebook-scraper-mock:8600}
-      # AI API Configuration
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-mock-openai-key}
-      OPENAI_BASE_URL: http://laozhang-mock:8100/v1
-      RUST_LOG: ${RUST_LOG}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      tikhub-mock:
-        condition: service_healthy
-      facebook-scraper-mock:
-        condition: service_healthy
-      laozhang-mock:
-        condition: service_healthy
-    networks:
-      - e2e-network
-    restart: on-failure
-
-  # ===========================================================================
-  # Python Test Runner
-  # ===========================================================================
   test-runner:
     image: python:3.11-slim
-    container_name: e2e-test-runner
+    container_name: agent-e2e-test-runner
     working_dir: /app
     volumes:
       - .:/app:ro
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: glancemind
+      POSTGRES_PASSWORD: testpassword
+      POSTGRES_DB: glancemind_e2e
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      E2E_USER_ID: ${E2E_USER_ID}
-      E2E_CAMPAIGN_ID: ${E2E_CAMPAIGN_ID}
-      E2E_TIMEOUT: ${E2E_TIMEOUT}
+      E2E_USER_ID: ${E2E_USER_ID:-1}
+      E2E_CAMPAIGN_ID: ${E2E_CAMPAIGN_ID:-1}
+      E2E_TIMEOUT: ${E2E_TIMEOUT:-60}
       PYTHONUNBUFFERED: "1"
       TEST_FILE: ${TEST_FILE:-test_e2e_china_travel.py}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      tikhub-mock:
-        condition: service_healthy
-      facebook-scraper-mock:
         condition: service_healthy
       scheduler:
         condition: service_started
@@ -200,13 +51,7 @@ services:
       - /bin/sh
       - -c
       - |
-        echo "=== Installing dependencies ==="
         pip install --no-cache-dir psycopg2-binary redis pytest tenacity python-dotenv
-        echo "=== Waiting for services to stabilize ==="
         sleep 5
-        echo "=== Test runner ready (use docker compose exec to run tests) ==="
+        echo "=== Test runner ready ==="
         tail -f /dev/null
-
-networks:
-  e2e-network:
-    driver: bridge

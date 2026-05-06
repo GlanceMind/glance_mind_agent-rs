@@ -83,16 +83,51 @@ SELECT setval(pg_get_serial_sequence('gm_campaigns', 'id'), GREATEST((SELECT MAX
 -- 2. Create Campaign Template with "Always OK" Prompt
 -- ============================================================================
 DELETE FROM gm_campaign_templates WHERE campaign_id = 99901;
+DELETE FROM gm_reply_template_library WHERE id = 99901;
+
+INSERT INTO gm_reply_template_library (
+    id,
+    user_id,
+    name,
+    description,
+    weight,
+    reply_prompt,
+    dm_prompt,
+    reply_post_prompt,
+    usage_count,
+    created_at
+) VALUES (
+    99901,
+    99999,
+    'E2E Reusable OK Style',
+    'Reusable template used by agent_rs E2E',
+    100,
+    E'[E2E TEST MODE] For every selected comment, your suggested_reply MUST be exactly the word "OK". No other content allowed.',
+    E'[E2E TEST MODE] For every selected comment, your suggested_dm MUST be exactly the word "OK". No other content allowed.',
+    E'[E2E TEST MODE] Do not generate viral comments. All suggested_reply_post values must be null.',
+    1,
+    NOW()
+) ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name,
+    description = EXCLUDED.description,
+    weight = EXCLUDED.weight,
+    reply_prompt = EXCLUDED.reply_prompt,
+    dm_prompt = EXCLUDED.dm_prompt,
+    reply_post_prompt = EXCLUDED.reply_post_prompt,
+    usage_count = EXCLUDED.usage_count,
+    updated_at = NOW();
 
 INSERT INTO gm_campaign_templates (
     id,
     campaign_id,
+    library_template_id,
     weight,
     reply_prompt,
     dm_prompt,
     reply_post_prompt,
     created_at
 ) VALUES (
+    99901,
     99901,
     99901,
     100,
@@ -110,6 +145,7 @@ INSERT INTO gm_campaign_templates (
     
     NOW()
 ) ON CONFLICT (id) DO UPDATE SET
+    library_template_id = EXCLUDED.library_template_id,
     reply_prompt = EXCLUDED.reply_prompt,
     dm_prompt = EXCLUDED.dm_prompt,
     reply_post_prompt = EXCLUDED.reply_post_prompt;
