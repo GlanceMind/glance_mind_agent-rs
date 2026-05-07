@@ -137,7 +137,8 @@ impl FacebookAdapter {
             .await
             .map_err(|err| GatewayError::Network(err.to_string()))?;
 
-        let value = serde_json::from_str::<Value>(&body).unwrap_or_else(|_| json!({ "message": body }));
+        let value =
+            serde_json::from_str::<Value>(&body).unwrap_or_else(|_| json!({ "message": body }));
         Ok(ResponsePayload {
             status,
             body: value,
@@ -180,7 +181,11 @@ impl FacebookAdapter {
         value.to_string()
     }
 
-    fn map_http_error(status: StatusCode, body: &Value, retry_after_secs: Option<u64>) -> GatewayError {
+    fn map_http_error(
+        status: StatusCode,
+        body: &Value,
+        retry_after_secs: Option<u64>,
+    ) -> GatewayError {
         let message = Self::body_message(body);
         match status {
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => GatewayError::AuthFailed(message),
@@ -188,9 +193,7 @@ impl FacebookAdapter {
             StatusCode::UNPROCESSABLE_ENTITY | StatusCode::BAD_REQUEST => {
                 GatewayError::InvalidParams(message)
             }
-            StatusCode::TOO_MANY_REQUESTS => GatewayError::RateLimited {
-                retry_after_secs,
-            },
+            StatusCode::TOO_MANY_REQUESTS => GatewayError::RateLimited { retry_after_secs },
             _ => GatewayError::Api {
                 code: status.as_u16() as i32,
                 message,
@@ -221,7 +224,9 @@ impl FacebookAdapter {
 
     fn get_i64(value: &Value, key: &str) -> Option<i64> {
         match value.get(key) {
-            Some(Value::Number(number)) => number.as_i64().or_else(|| number.as_u64().map(|v| v as i64)),
+            Some(Value::Number(number)) => number
+                .as_i64()
+                .or_else(|| number.as_u64().map(|v| v as i64)),
             Some(Value::String(number)) => number.parse().ok(),
             _ => None,
         }
@@ -305,7 +310,10 @@ impl FacebookAdapter {
         Self::get_string(body, "cursor").filter(|cursor| !cursor.trim().is_empty())
     }
 
-    fn append_cursor_query(query: &[(String, String)], cursor: Option<&str>) -> Vec<(String, String)> {
+    fn append_cursor_query(
+        query: &[(String, String)],
+        cursor: Option<&str>,
+    ) -> Vec<(String, String)> {
         let mut next_query = query.to_vec();
         if let Some(cursor) = cursor.filter(|cursor| !cursor.trim().is_empty()) {
             next_query.push(("cursor".to_string(), cursor.to_string()));
@@ -384,9 +392,8 @@ impl FacebookAdapter {
     ) -> GatewayResult<(Vec<Content>, Option<String>)> {
         let request_query =
             Self::append_cursor_query(&[("query".to_string(), query.to_string())], cursor);
-        let (status, body, retry_after_secs) = self
-            .request_json("/search/posts", &request_query)
-            .await?;
+        let (status, body, retry_after_secs) =
+            self.request_json("/search/posts", &request_query).await?;
         if !status.is_success() {
             return Err(Self::map_http_error(status, &body, retry_after_secs));
         }
@@ -408,18 +415,13 @@ impl FacebookAdapter {
     ) -> GatewayResult<(Vec<Value>, Option<String>)> {
         let request_query =
             Self::append_cursor_query(&[("query".to_string(), query.to_string())], cursor);
-        let (status, body, retry_after_secs) = self
-            .request_json(path, &request_query)
-            .await?;
+        let (status, body, retry_after_secs) = self.request_json(path, &request_query).await?;
         if !status.is_success() {
             return Err(Self::map_http_error(status, &body, retry_after_secs));
         }
 
         Ok((
-            Self::collect_results(&body)
-                .into_iter()
-                .cloned()
-                .collect(),
+            Self::collect_results(&body).into_iter().cloned().collect(),
             Self::next_cursor(&body),
         ))
     }
@@ -431,9 +433,8 @@ impl FacebookAdapter {
     ) -> GatewayResult<(Vec<Content>, Option<String>)> {
         let request_query =
             Self::append_cursor_query(&[("page_id".to_string(), page_id.to_string())], cursor);
-        let (status, body, retry_after_secs) = self
-            .request_json("/page/posts", &request_query)
-            .await?;
+        let (status, body, retry_after_secs) =
+            self.request_json("/page/posts", &request_query).await?;
         if !status.is_success() {
             if status == StatusCode::SERVICE_UNAVAILABLE
                 && body.get("results").is_some_and(Value::is_null)
@@ -481,8 +482,7 @@ impl FacebookAdapter {
             if empty_hops >= MAX_EMPTY_CURSOR_HOPS {
                 warn!(
                     identifier,
-                    empty_hops,
-                    "Facebook page resolution exhausted empty cursor hops"
+                    empty_hops, "Facebook page resolution exhausted empty cursor hops"
                 );
                 return Ok(None);
             }
@@ -497,7 +497,10 @@ impl FacebookAdapter {
 
     async fn fetch_post(&self, post_lookup_id: &str) -> GatewayResult<Option<Content>> {
         let (status, body, retry_after_secs) = self
-            .request_json("/post", &[("post_id".to_string(), post_lookup_id.to_string())])
+            .request_json(
+                "/post",
+                &[("post_id".to_string(), post_lookup_id.to_string())],
+            )
             .await?;
 
         if !status.is_success() {
@@ -524,7 +527,10 @@ impl FacebookAdapter {
         let mut empty_hops = 0;
 
         loop {
-            match self.search_posts_page(&options.query, cursor.as_deref()).await {
+            match self
+                .search_posts_page(&options.query, cursor.as_deref())
+                .await
+            {
                 Ok((page_posts, next_cursor)) => {
                     let page_count = page_posts.len();
 
@@ -606,8 +612,7 @@ impl FacebookAdapter {
                         if empty_hops >= MAX_EMPTY_CURSOR_HOPS {
                             warn!(
                                 page_id,
-                                empty_hops,
-                                "Facebook page/posts exhausted empty cursor hops"
+                                empty_hops, "Facebook page/posts exhausted empty cursor hops"
                             );
                             break;
                         }
@@ -668,7 +673,10 @@ impl FacebookAdapter {
                             .saturating_sub(Self::filter_posts(posts.clone(), options).len() as u32)
                             .max(1);
                         let page_options = options.clone().with_count(remaining);
-                        let page_posts = match self.fetch_page_posts_paginated(&page_id, &page_options).await {
+                        let page_posts = match self
+                            .fetch_page_posts_paginated(&page_id, &page_options)
+                            .await
+                        {
                             Ok(page_posts) => page_posts,
                             Err(GatewayError::RateLimited { .. }) if !posts.is_empty() => {
                                 warn!(
@@ -697,8 +705,7 @@ impl FacebookAdapter {
                         if empty_hops >= MAX_EMPTY_CURSOR_HOPS {
                             warn!(
                                 query,
-                                empty_hops,
-                                "Facebook candidate search exhausted empty cursor hops"
+                                empty_hops, "Facebook candidate search exhausted empty cursor hops"
                             );
                             break;
                         }
@@ -736,13 +743,18 @@ impl FacebookAdapter {
         let discovery_query = Self::discovery_query(&options.query, location);
 
         let posts = match search_type.as_str() {
-            "posts" => self.search_posts_paginated(&options.with_query(discovery_query)).await?,
-            "pages" => self
-                .fetch_posts_from_search_candidates(&discovery_query, "/search/pages", options)
-                .await?,
-            "places" => self
-                .fetch_posts_from_search_candidates(&discovery_query, "/search/places", options)
-                .await?,
+            "posts" => {
+                self.search_posts_paginated(&options.with_query(discovery_query))
+                    .await?
+            }
+            "pages" => {
+                self.fetch_posts_from_search_candidates(&discovery_query, "/search/pages", options)
+                    .await?
+            }
+            "places" => {
+                self.fetch_posts_from_search_candidates(&discovery_query, "/search/places", options)
+                    .await?
+            }
             other => {
                 return Err(GatewayError::InvalidParams(format!(
                     "unsupported facebook search_type: {other}"
@@ -763,11 +775,7 @@ impl FacebookAdapter {
     async fn search_post_mode(&self, options: &SearchOptions) -> GatewayResult<Vec<Content>> {
         let lookup_id = Self::extra_string(options, extra_keys::POST_LOOKUP_ID)
             .unwrap_or_else(|| options.query.clone());
-        Ok(self
-            .fetch_post(&lookup_id)
-            .await?
-            .into_iter()
-            .collect())
+        Ok(self.fetch_post(&lookup_id).await?.into_iter().collect())
     }
 }
 
@@ -910,8 +918,7 @@ impl CommentGateway for FacebookAdapter {
                 if empty_hops >= MAX_EMPTY_CURSOR_HOPS {
                     warn!(
                         content_id,
-                        empty_hops,
-                        "Facebook comments pagination exhausted empty cursor hops"
+                        empty_hops, "Facebook comments pagination exhausted empty cursor hops"
                     );
                     break;
                 }
@@ -1007,11 +1014,9 @@ mod tests {
                         requests.lock().unwrap().push(request_line.to_string());
                     }
 
-                    let response = responses
-                        .lock()
-                        .unwrap()
-                        .pop_front()
-                        .unwrap_or_else(|| MockHttpResponse::json(500, json!({"message": "missing mock response"})));
+                    let response = responses.lock().unwrap().pop_front().unwrap_or_else(|| {
+                        MockHttpResponse::json(500, json!({"message": "missing mock response"}))
+                    });
 
                     let reason = match response.status {
                         200 => "OK",
@@ -1300,9 +1305,8 @@ mod tests {
         let requests = requests.lock().unwrap().clone();
         assert_eq!(requests.len(), 3);
         assert!(requests[0].contains("GET /search/pages?query=NatGeoMuseum HTTP/1.1"));
-        assert!(requests[1].contains(
-            "GET /search/pages?query=NatGeoMuseum&cursor=page-search-cursor-2 HTTP/1.1"
-        ));
+        assert!(requests[1]
+            .contains("GET /search/pages?query=NatGeoMuseum&cursor=page-search-cursor-2 HTTP/1.1"));
         assert!(requests[2].contains("GET /page/posts?page_id=page-2 HTTP/1.1"));
     }
 
@@ -1333,9 +1337,8 @@ mod tests {
         let requests = requests.lock().unwrap().clone();
         assert_eq!(requests.len(), 2);
         assert!(requests[0].contains("GET /post/comments?post_id=post-1 HTTP/1.1"));
-        assert!(requests[1].contains(
-            "GET /post/comments?post_id=post-1&cursor=comment-cursor-2 HTTP/1.1"
-        ));
+        assert!(requests[1]
+            .contains("GET /post/comments?post_id=post-1&cursor=comment-cursor-2 HTTP/1.1"));
     }
 
     #[tokio::test]

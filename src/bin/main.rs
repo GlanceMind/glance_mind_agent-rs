@@ -403,8 +403,9 @@ async fn load_platform_registry(database_url: &str) -> anyhow::Result<PlatformRe
     }
 
     // Connect to database - fail if connection fails
-    let pool = establish_pool(database_url, Some(2))
-        .map_err(|e| anyhow::anyhow!("Failed to connect to database for platform registry: {}", e))?;
+    let pool = establish_pool(database_url, Some(2)).map_err(|e| {
+        anyhow::anyhow!("Failed to connect to database for platform registry: {}", e)
+    })?;
 
     let mut conn = pool
         .get()

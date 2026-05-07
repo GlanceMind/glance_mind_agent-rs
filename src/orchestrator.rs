@@ -829,7 +829,10 @@ mod tests {
 
     #[async_trait]
     impl crate::ContentGateway for StaticFacebookContentGateway {
-        async fn search(&self, _options: &crate::SearchOptions) -> crate::GatewayResult<Vec<Content>> {
+        async fn search(
+            &self,
+            _options: &crate::SearchOptions,
+        ) -> crate::GatewayResult<Vec<Content>> {
             Ok(vec![self.content.clone()])
         }
 
@@ -841,7 +844,11 @@ mod tests {
             Ok(vec![self.content.clone()])
         }
 
-        async fn fetch_user_content(&self, _user_id: &str, _count: u32) -> crate::GatewayResult<Vec<Content>> {
+        async fn fetch_user_content(
+            &self,
+            _user_id: &str,
+            _count: u32,
+        ) -> crate::GatewayResult<Vec<Content>> {
             Ok(vec![self.content.clone()])
         }
 

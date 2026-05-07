@@ -69,13 +69,15 @@ where
     match value {
         None => Ok(None),
         Some(serde_json::Value::Bool(value)) => Ok(Some(value)),
-        Some(serde_json::Value::String(value)) => match value.trim().to_ascii_lowercase().as_str() {
-            "true" | "1" | "yes" => Ok(Some(true)),
-            "false" | "0" | "no" => Ok(Some(false)),
-            other => Err(de::Error::custom(format!(
-                "invalid boolean string for recent_posts: {other}"
-            ))),
-        },
+        Some(serde_json::Value::String(value)) => {
+            match value.trim().to_ascii_lowercase().as_str() {
+                "true" | "1" | "yes" => Ok(Some(true)),
+                "false" | "0" | "no" => Ok(Some(false)),
+                other => Err(de::Error::custom(format!(
+                    "invalid boolean string for recent_posts: {other}"
+                ))),
+            }
+        }
         Some(other) => Err(de::Error::custom(format!(
             "invalid boolean value for recent_posts: {other}"
         ))),
@@ -513,10 +515,9 @@ impl CrawlerTaskExt for CrawlerTask {
                         );
                     }
                     if let Some(location) = facebook_opts.location {
-                        config.extra.insert(
-                            "location".to_string(),
-                            serde_json::Value::String(location),
-                        );
+                        config
+                            .extra
+                            .insert("location".to_string(), serde_json::Value::String(location));
                     }
                     if let Some(start_date) = facebook_opts.start_date {
                         config.extra.insert(
@@ -525,10 +526,9 @@ impl CrawlerTaskExt for CrawlerTask {
                         );
                     }
                     if let Some(end_date) = facebook_opts.end_date {
-                        config.extra.insert(
-                            "end_date".to_string(),
-                            serde_json::Value::String(end_date),
-                        );
+                        config
+                            .extra
+                            .insert("end_date".to_string(), serde_json::Value::String(end_date));
                     }
 
                     debug!(extra = ?config.extra, "Applied Facebook search_options");
@@ -958,7 +958,10 @@ mod tests {
         assert_eq!(config.platform, "twitter");
         assert_eq!(config.region, Some("GLOBAL".to_string()));
         assert_eq!(
-            config.extra.get("search_type").and_then(|value| value.as_str()),
+            config
+                .extra
+                .get("search_type")
+                .and_then(|value| value.as_str()),
             Some("Top")
         );
     }

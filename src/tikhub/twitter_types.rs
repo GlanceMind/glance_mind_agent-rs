@@ -227,10 +227,9 @@ where
             if trimmed.is_empty() {
                 Ok(None)
             } else {
-                trimmed
-                    .parse::<i64>()
-                    .map(Some)
-                    .map_err(|err| de::Error::custom(format!("invalid integer string `{trimmed}`: {err}")))
+                trimmed.parse::<i64>().map(Some).map_err(|err| {
+                    de::Error::custom(format!("invalid integer string `{trimmed}`: {err}"))
+                })
             }
         }
         Some(other) => Err(de::Error::custom(format!(
@@ -598,14 +597,11 @@ fn looks_like_tweet_payload(tweet: &TwitterTweet) -> bool {
 
 fn normalize_tweet_from_value(mut tweet: TwitterTweet, value: &Value) -> TwitterTweet {
     if tweet.get_tweet_id().is_none() && tweet.text.is_some() {
-        if let Some(rest_id) = value
-            .get("rest_id")
-            .and_then(|raw| match raw {
-                Value::String(text) => Some(text.clone()),
-                Value::Number(number) => Some(number.to_string()),
-                _ => None,
-            })
-        {
+        if let Some(rest_id) = value.get("rest_id").and_then(|raw| match raw {
+            Value::String(text) => Some(text.clone()),
+            Value::Number(number) => Some(number.to_string()),
+            _ => None,
+        }) {
             tweet.id = Some(rest_id);
         }
     }
@@ -758,8 +754,8 @@ mod tests {
         }))
         .unwrap();
 
-        let tweet =
-            extract_tweet_from_detail_response(&response).expect("wrapped payload should yield a tweet");
+        let tweet = extract_tweet_from_detail_response(&response)
+            .expect("wrapped payload should yield a tweet");
         assert_eq!(tweet.get_tweet_id(), Some("1808168603721650364"));
         assert_eq!(tweet.author_handle(), Some("jack"));
     }

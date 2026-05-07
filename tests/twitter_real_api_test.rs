@@ -116,7 +116,11 @@ async fn test_twitter_user_real_contract_and_adapter_mapping() {
     )
     .await;
 
-    assert_eq!(contents.len(), 1, "twitter handle lookup should return one tweet");
+    assert_eq!(
+        contents.len(),
+        1,
+        "twitter handle lookup should return one tweet"
+    );
     let content = &contents[0];
     let raw_from_adapter: TwitterTweet = serde_json::from_value(
         content
@@ -154,7 +158,10 @@ async fn test_twitter_detail_real_contract_and_adapter_mapping() {
     )
     .expect("detail content raw_data should deserialize back into TwitterTweet");
     assert_tweet_contract(&raw_from_adapter, "twitter detail adapter raw_data");
-    assert_eq!(raw_from_adapter.get_tweet_id(), Some(seed.tweet_id.as_str()));
+    assert_eq!(
+        raw_from_adapter.get_tweet_id(),
+        Some(seed.tweet_id.as_str())
+    );
     assert_content_matches_raw(&content, &raw_from_adapter);
 }
 
@@ -181,13 +188,8 @@ async fn test_twitter_comments_real_contract_and_adapter_mapping() {
     assert_tweet_contract(first_reply, "twitter comment reply");
 
     let adapter = create_adapter();
-    let page = fetch_single_comment_page(
-        &adapter,
-        "twitter single comment page",
-        &seed.tweet_id,
-        1,
-    )
-    .await;
+    let page =
+        fetch_single_comment_page(&adapter, "twitter single comment page", &seed.tweet_id, 1).await;
 
     assert_eq!(
         page.comments.len(),
@@ -196,7 +198,10 @@ async fn test_twitter_comments_real_contract_and_adapter_mapping() {
     );
     assert_eq!(
         page.next_cursor,
-        raw_response.data.as_ref().and_then(|data| data.next_cursor.clone()),
+        raw_response
+            .data
+            .as_ref()
+            .and_then(|data| data.next_cursor.clone()),
         "single-page adapter call should preserve next_cursor"
     );
     assert_comment_matches_raw(&page.comments[0], first_reply, &seed.tweet_id);
@@ -277,7 +282,11 @@ async fn test_twitter_rest_id_real_contract_and_adapter_mapping() {
     )
     .await;
 
-    assert_eq!(contents.len(), 1, "twitter rest_id lookup should return one tweet");
+    assert_eq!(
+        contents.len(),
+        1,
+        "twitter rest_id lookup should return one tweet"
+    );
     let content = &contents[0];
     let raw_from_adapter: TwitterTweet = serde_json::from_value(
         content
