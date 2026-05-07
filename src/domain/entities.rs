@@ -823,11 +823,7 @@ impl SearchOptions {
     }
 
     /// Attach a platform-specific extra option
-    pub fn with_extra_value(
-        mut self,
-        key: impl Into<String>,
-        value: serde_json::Value,
-    ) -> Self {
+    pub fn with_extra_value(mut self, key: impl Into<String>, value: serde_json::Value) -> Self {
         self.extra.insert(key.into(), value);
         self
     }

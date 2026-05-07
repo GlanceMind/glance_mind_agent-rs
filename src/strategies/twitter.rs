@@ -386,7 +386,10 @@ mod tests {
         let options = strategy.build_search_options(&config, &keyword);
         assert_eq!(options.query, "1808168603721650364");
         assert_eq!(
-            options.extra.get(extra_keys::MODE).and_then(|value| value.as_str()),
+            options
+                .extra
+                .get(extra_keys::MODE)
+                .and_then(|value| value.as_str()),
             Some(mode::TWEET_ID)
         );
         assert_eq!(

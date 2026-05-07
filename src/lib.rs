@@ -71,8 +71,8 @@ pub use ports::{
 
 // Strategy re-exports
 pub use strategies::{
-    FacebookStrategy, InstagramStrategy, PlatformStrategy, RedditStrategy, StrategyRegistry, TikTokStrategy,
-    TwitterStrategy,
+    FacebookStrategy, InstagramStrategy, PlatformStrategy, RedditStrategy, StrategyRegistry,
+    TikTokStrategy, TwitterStrategy,
 };
 
 // Orchestrator re-exports
@@ -81,7 +81,9 @@ pub use orchestrator::{OrchestratorBuilder, OrchestratorConfig, WorkflowOrchestr
 // Adapter re-exports
 pub use adapters::redis::TaskResult as RedisTaskResult;
 pub use adapters::{CrawlerTaskBuilder, CrawlerTaskExt, RedisTaskConsumer};
-pub use adapters::{FacebookAdapter, FixtureMockAdapter, OpenAiAdapter, PostgresAdapter, TikHubAdapter};
+pub use adapters::{
+    FacebookAdapter, FixtureMockAdapter, OpenAiAdapter, PostgresAdapter, TikHubAdapter,
+};
 pub use adapters::{InstagramAdapter, RedditAdapter, TwitterAdapter};
 
 // Protocol re-exports (task types from glance_mind_protocol)

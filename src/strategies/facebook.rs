@@ -222,7 +222,9 @@ impl PlatformStrategy for FacebookStrategy {
         prompt.push_str("For each Facebook comment, provide:\n");
         prompt.push_str("1. **Intent**: question, feedback, purchase_intent, complaint, compliment, or other.\n");
         prompt.push_str("2. **Sentiment**: positive, neutral, or negative.\n");
-        prompt.push_str("3. **Suggested Reply**: a natural reply that fits Facebook discussion style.\n");
+        prompt.push_str(
+            "3. **Suggested Reply**: a natural reply that fits Facebook discussion style.\n",
+        );
         prompt.push_str("4. **Reason**: a short explanation for the reply choice.\n\n");
         prompt.push_str("Return JSON with one analysis object per comment.\n");
 

@@ -250,7 +250,7 @@ pub fn get_platform_id(name: &str) -> i32 {
             return id;
         }
     }
-    
+
     // Fall back to defaults (for testing or when registry not yet initialized)
     let defaults = PlatformRegistry::with_defaults();
     defaults.get_id(name).unwrap_or_else(|| {

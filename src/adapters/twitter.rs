@@ -308,7 +308,10 @@ impl ContentGateway for TwitterAdapter {
             .await
             .map_err(Self::convert_error)?;
 
-        Ok(extract_tweet_from_detail_response(&response).map(|tweet| Self::convert_content(&tweet)))
+        Ok(
+            extract_tweet_from_detail_response(&response)
+                .map(|tweet| Self::convert_content(&tweet)),
+        )
     }
 
     fn platform(&self) -> &str {
@@ -474,11 +477,9 @@ mod tests {
                         requests.lock().unwrap().push(request_line.to_string());
                     }
 
-                    let response = responses
-                        .lock()
-                        .unwrap()
-                        .pop_front()
-                        .unwrap_or_else(|| MockHttpResponse::json(500, json!({"message": "missing mock response"})));
+                    let response = responses.lock().unwrap().pop_front().unwrap_or_else(|| {
+                        MockHttpResponse::json(500, json!({"message": "missing mock response"}))
+                    });
                     let reason = match response.status {
                         200 => "OK",
                         404 => "Not Found",
@@ -608,24 +609,25 @@ mod tests {
 
     #[test]
     fn test_search_type_from_options_prefers_extra() {
-        let options = SearchOptions::new("rust")
-            .with_extra_value(extra_keys::SEARCH_TYPE, json!("media"));
+        let options =
+            SearchOptions::new("rust").with_extra_value(extra_keys::SEARCH_TYPE, json!("media"));
         assert_eq!(TwitterAdapter::search_type_from_options(&options), "Media");
     }
 
     #[tokio::test]
     async fn test_search_forwards_configured_search_type() {
-        let (base_url, requests) = spawn_mock_http_server_with_capture(vec![MockHttpResponse::json(
-            200,
-            json!({
-                "code": 200,
-                "message": "success",
-                "data": {
-                    "timeline": [test_tweet("tw-1", "rustacean", "hello world")]
-                }
-            }),
-        )])
-        .await;
+        let (base_url, requests) =
+            spawn_mock_http_server_with_capture(vec![MockHttpResponse::json(
+                200,
+                json!({
+                    "code": 200,
+                    "message": "success",
+                    "data": {
+                        "timeline": [test_tweet("tw-1", "rustacean", "hello world")]
+                    }
+                }),
+            )])
+            .await;
         let adapter = TwitterAdapter::with_api_key("test-key", Some(base_url)).unwrap();
         let options = SearchOptions::new("rust")
             .with_platform("twitter")
@@ -637,22 +639,25 @@ mod tests {
 
         let requests = requests.lock().unwrap().clone();
         assert_eq!(requests.len(), 1);
-        assert!(requests[0].contains("GET /api/v1/twitter/web/fetch_search_timeline?keyword=rust&search_type=Top HTTP/1.1"));
+        assert!(requests[0].contains(
+            "GET /api/v1/twitter/web/fetch_search_timeline?keyword=rust&search_type=Top HTTP/1.1"
+        ));
     }
 
     #[tokio::test]
     async fn test_fetch_by_id_uses_detail_endpoint() {
-        let (base_url, requests) = spawn_mock_http_server_with_capture(vec![MockHttpResponse::json(
-            200,
-            json!({
-                "code": 200,
-                "message": "success",
-                "data": {
-                    "tweet": test_tweet("1808168603721650364", "jack", "detail text")
-                }
-            }),
-        )])
-        .await;
+        let (base_url, requests) =
+            spawn_mock_http_server_with_capture(vec![MockHttpResponse::json(
+                200,
+                json!({
+                    "code": 200,
+                    "message": "success",
+                    "data": {
+                        "tweet": test_tweet("1808168603721650364", "jack", "detail text")
+                    }
+                }),
+            )])
+            .await;
         let adapter = TwitterAdapter::with_api_key("test-key", Some(base_url)).unwrap();
 
         let content = adapter
@@ -666,7 +671,9 @@ mod tests {
 
         let requests = requests.lock().unwrap().clone();
         assert_eq!(requests.len(), 1);
-        assert!(requests[0].contains("GET /api/v1/twitter/web/fetch_tweet_detail?tweet_id=1808168603721650364 HTTP/1.1"));
+        assert!(requests[0].contains(
+            "GET /api/v1/twitter/web/fetch_tweet_detail?tweet_id=1808168603721650364 HTTP/1.1"
+        ));
     }
 
     #[tokio::test]
@@ -779,7 +786,9 @@ mod tests {
         )])
         .await;
         let adapter = TwitterAdapter::with_api_key("bad-key", Some(base_url)).unwrap();
-        let options = SearchOptions::new("test").with_platform("twitter").with_count(1);
+        let options = SearchOptions::new("test")
+            .with_platform("twitter")
+            .with_count(1);
 
         let err = adapter.search(&options).await.unwrap_err();
         assert!(
@@ -796,7 +805,9 @@ mod tests {
         )])
         .await;
         let adapter = TwitterAdapter::with_api_key("test-key", Some(base_url)).unwrap();
-        let options = SearchOptions::new("test").with_platform("twitter").with_count(1);
+        let options = SearchOptions::new("test")
+            .with_platform("twitter")
+            .with_count(1);
 
         let err = adapter.search(&options).await.unwrap_err();
         assert!(
@@ -813,7 +824,9 @@ mod tests {
         )])
         .await;
         let adapter = TwitterAdapter::with_api_key("test-key", Some(base_url)).unwrap();
-        let options = SearchOptions::new("test").with_platform("twitter").with_count(1);
+        let options = SearchOptions::new("test")
+            .with_platform("twitter")
+            .with_count(1);
 
         let err = adapter.search(&options).await.unwrap_err();
         assert!(
@@ -829,7 +842,9 @@ mod tests {
             .collect();
         let (base_url, _) = spawn_mock_http_server_with_capture(responses).await;
         let adapter = TwitterAdapter::with_api_key("test-key", Some(base_url)).unwrap();
-        let options = SearchOptions::new("test").with_platform("twitter").with_count(1);
+        let options = SearchOptions::new("test")
+            .with_platform("twitter")
+            .with_count(1);
 
         let err = adapter.search(&options).await.unwrap_err();
         assert!(
@@ -845,7 +860,9 @@ mod tests {
             .collect();
         let (base_url, _) = spawn_mock_http_server_with_capture(responses).await;
         let adapter = TwitterAdapter::with_api_key("test-key", Some(base_url)).unwrap();
-        let options = SearchOptions::new("test").with_platform("twitter").with_count(1);
+        let options = SearchOptions::new("test")
+            .with_platform("twitter")
+            .with_count(1);
 
         let err = adapter.search(&options).await.unwrap_err();
         assert!(
@@ -869,10 +886,15 @@ mod tests {
         )])
         .await;
         let adapter = TwitterAdapter::with_api_key("test-key", Some(base_url)).unwrap();
-        let options = SearchOptions::new("nothing").with_platform("twitter").with_count(5);
+        let options = SearchOptions::new("nothing")
+            .with_platform("twitter")
+            .with_count(5);
 
         let contents = adapter.search(&options).await.unwrap();
-        assert!(contents.is_empty(), "empty timeline should produce empty results");
+        assert!(
+            contents.is_empty(),
+            "empty timeline should produce empty results"
+        );
     }
 
     #[tokio::test]
@@ -887,10 +909,15 @@ mod tests {
         )])
         .await;
         let adapter = TwitterAdapter::with_api_key("test-key", Some(base_url)).unwrap();
-        let options = SearchOptions::new("nothing").with_platform("twitter").with_count(5);
+        let options = SearchOptions::new("nothing")
+            .with_platform("twitter")
+            .with_count(5);
 
         let contents = adapter.search(&options).await.unwrap();
-        assert!(contents.is_empty(), "null data should produce empty results");
+        assert!(
+            contents.is_empty(),
+            "null data should produce empty results"
+        );
     }
 
     #[tokio::test]
@@ -943,7 +970,10 @@ mod tests {
         let adapter = TwitterAdapter::with_api_key("test-key", Some(base_url)).unwrap();
 
         let result = adapter.fetch_all_comments("tweet-1", 10).await.unwrap();
-        assert!(result.is_empty(), "empty thread should produce empty comments");
+        assert!(
+            result.is_empty(),
+            "empty thread should produce empty comments"
+        );
     }
 
     #[tokio::test]
@@ -963,7 +993,10 @@ mod tests {
         let adapter = TwitterAdapter::with_api_key("test-key", Some(base_url)).unwrap();
 
         let result = adapter.fetch_all_comments("tweet-1", 10).await.unwrap();
-        assert!(result.is_empty(), "null thread should produce empty comments");
+        assert!(
+            result.is_empty(),
+            "null thread should produce empty comments"
+        );
     }
 
     #[test]
