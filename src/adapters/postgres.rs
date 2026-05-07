@@ -9,7 +9,7 @@
 
 use async_trait::async_trait;
 use diesel::prelude::*;
-use diesel::sql_types::{Bool, Integer, Numeric, Text};
+use diesel::sql_types::{Array, Bool, Integer, Numeric, Text};
 use tracing::{debug, info, warn};
 
 use crate::db::{models, schema, DbPool};
@@ -97,6 +97,18 @@ struct ResolvedCampaignTemplateRow {
     reply_post_prompt: Option<String>,
     #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
     name: Option<String>,
+}
+
+#[derive(QueryableByName, Debug)]
+struct ColumnExistsRow {
+    #[diesel(sql_type = Bool)]
+    exists: bool,
+}
+
+#[derive(QueryableByName, Debug)]
+struct ReplyTemplateIdsRow {
+    #[diesel(sql_type = Array<Integer>)]
+    ids: Vec<i32>,
 }
 
 impl ResolvedCampaignTemplateRow {
@@ -1821,8 +1833,24 @@ impl PromptRepository for PostgresAdapter {
 
         match result {
             Some(c) => {
-                // Get templates for prompts
-                let templates = self.get_campaign_templates(campaign_id).await?;
+                // Campaign-level reusable template IDs are canonical when available.
+                // Legacy campaign templates remain the compatibility fallback.
+                let reply_template_ids = self.get_campaign_reply_template_ids(campaign_id).await?;
+                let reusable_templates = if reply_template_ids.is_empty() {
+                    Vec::new()
+                } else {
+                    self.get_campaign_reusable_templates_from_ids(
+                        campaign_id,
+                        c.user_id,
+                        &reply_template_ids,
+                    )
+                    .await?
+                };
+                let templates = if reusable_templates.is_empty() {
+                    self.get_campaign_templates(campaign_id).await?
+                } else {
+                    reusable_templates
+                };
 
                 // Use weighted random selection (matching Python agent behavior)
                 // Python: random.choices(population, weights=weights, k=1)[0]
@@ -2534,6 +2562,94 @@ impl PostgresAdapter {
             .collect())
     }
 
+    async fn get_campaign_reply_template_ids(&self, campaign_id: i32) -> DbResult<Vec<i32>> {
+        let mut conn = self.conn_async().await?;
+
+        let column_exists = diesel::sql_query(
+            r#"
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'gm_campaigns'
+                  AND column_name = 'reply_template_ids'
+            ) AS exists
+            "#,
+        )
+        .get_result::<ColumnExistsRow>(&mut conn)
+        .map_err(DbError::from)?
+        .exists;
+
+        if !column_exists {
+            return Ok(Vec::new());
+        }
+
+        let row = diesel::sql_query(
+            r#"
+            SELECT reply_template_ids AS ids
+            FROM gm_campaigns
+            WHERE id = $1
+            "#,
+        )
+        .bind::<Integer, _>(campaign_id)
+        .get_result::<ReplyTemplateIdsRow>(&mut conn)
+        .optional()
+        .map_err(DbError::from)?;
+
+        Ok(row.map(|row| row.ids).unwrap_or_default())
+    }
+
+    async fn get_campaign_reusable_templates_from_ids(
+        &self,
+        campaign_id: i32,
+        user_id: i32,
+        ids: &[i32],
+    ) -> DbResult<Vec<models::CampaignTemplate>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut conn = self.conn_async().await?;
+
+        let templates = diesel::sql_query(
+            r#"
+            WITH requested(template_id, ordinality) AS (
+                SELECT template_id, ordinality
+                FROM UNNEST($3::INTEGER[]) WITH ORDINALITY AS ids(template_id, ordinality)
+            )
+            SELECT
+                COALESCE(campaign_template.id, library.id) AS id,
+                $1::INTEGER AS campaign_id,
+                library.id AS library_template_id,
+                COALESCE(campaign_template.weight, library.weight) AS weight,
+                library.reply_prompt,
+                library.created_at,
+                library.updated_at,
+                library.dm_prompt,
+                library.reply_post_prompt,
+                library.name
+            FROM requested
+            JOIN gm_reply_template_library library
+                ON library.id = requested.template_id
+               AND library.user_id = $2
+            LEFT JOIN gm_campaign_templates campaign_template
+                ON campaign_template.campaign_id = $1
+               AND campaign_template.library_template_id = library.id
+            ORDER BY requested.ordinality
+            "#,
+        )
+        .bind::<Integer, _>(campaign_id)
+        .bind::<Integer, _>(user_id)
+        .bind::<Array<Integer>, _>(ids.to_vec())
+        .load::<ResolvedCampaignTemplateRow>(&mut conn)
+        .map_err(DbError::from)?;
+
+        Ok(templates
+            .into_iter()
+            .map(ResolvedCampaignTemplateRow::into_campaign_template)
+            .collect())
+    }
+
     #[allow(dead_code)]
     async fn get_active_task_id(&self, campaign_id: i32) -> DbResult<i32> {
         use schema::gm_crawler_tasks::dsl;
@@ -2625,8 +2741,8 @@ impl PostgresAdapter {
 mod tests {
     #[allow(unused_imports)]
     use super::*;
-    use diesel::sql_types::Integer;
     use diesel::pg::PgConnection;
+    use diesel::sql_types::Integer;
     use diesel::Connection;
 
     #[derive(QueryableByName)]
@@ -2970,8 +3086,33 @@ mod tests {
             weight = input.weight,
         ))
         .get_result::<IdRow>(conn)
-            .map(|row| row.id)
-            .expect("failed to insert campaign template")
+        .map(|row| row.id)
+        .expect("failed to insert campaign template")
+    }
+
+    fn enable_campaign_reply_template_ids_column(conn: &mut PgConnection) {
+        diesel::sql_query(
+            r#"
+            ALTER TABLE gm_campaigns
+                ADD COLUMN reply_template_ids INTEGER[] NOT NULL DEFAULT '{}'::INTEGER[]
+            "#,
+        )
+        .execute(conn)
+        .expect("failed to add reply_template_ids test column");
+    }
+
+    fn set_campaign_reply_template_ids(conn: &mut PgConnection, campaign_id: i32, ids: &[i32]) {
+        let ids_sql = ids.iter().map(i32::to_string).collect::<Vec<_>>().join(",");
+
+        diesel::sql_query(format!(
+            r#"
+            UPDATE gm_campaigns
+            SET reply_template_ids = ARRAY[{ids_sql}]::INTEGER[]
+            WHERE id = {campaign_id}
+            "#
+        ))
+        .execute(conn)
+        .expect("failed to set campaign reply_template_ids");
     }
 
     #[test]
@@ -3039,7 +3180,8 @@ mod tests {
         let schema = TestSchemaGuard::new(&base_db_url);
         let mut conn = connect(schema.database_url());
         let campaign_id = 4242;
-        let adapter = PostgresAdapter::from_url(schema.database_url()).expect("adapter should connect");
+        let adapter =
+            PostgresAdapter::from_url(schema.database_url()).expect("adapter should connect");
         insert_test_campaign_record(&mut conn, campaign_id);
 
         let library_override_id = insert_library_template(
@@ -3050,14 +3192,8 @@ mod tests {
             Some("library reply prompt"),
             Some("library post prompt"),
         );
-        let library_nulls_id = insert_library_template(
-            &mut conn,
-            "Null-only template",
-            888,
-            None,
-            None,
-            None,
-        );
+        let library_nulls_id =
+            insert_library_template(&mut conn, "Null-only template", 888, None, None, None);
         let library_deleted_id = insert_library_template(
             &mut conn,
             "Deleted template",
@@ -3121,7 +3257,10 @@ mod tests {
             .iter()
             .find(|template| template.weight == 7)
             .expect("override template should be present");
-        assert_eq!(override_template.library_template_id, Some(library_override_id));
+        assert_eq!(
+            override_template.library_template_id,
+            Some(library_override_id)
+        );
         assert_eq!(
             override_template.reply_prompt.as_deref(),
             Some("library reply prompt")
@@ -3163,7 +3302,10 @@ mod tests {
             fallback_template.reply_post_prompt.as_deref(),
             Some("campaign fallback post")
         );
-        assert_eq!(fallback_template.name.as_deref(), Some("Campaign fallback name"));
+        assert_eq!(
+            fallback_template.name.as_deref(),
+            Some("Campaign fallback name")
+        );
         assert_eq!(fallback_template.library_template_id, None);
     }
 
@@ -3177,17 +3319,12 @@ mod tests {
         let schema = TestSchemaGuard::new(&base_db_url);
         let mut conn = connect(schema.database_url());
         let campaign_id = 9191;
-        let adapter = PostgresAdapter::from_url(schema.database_url()).expect("adapter should connect");
+        let adapter =
+            PostgresAdapter::from_url(schema.database_url()).expect("adapter should connect");
         insert_test_campaign_record(&mut conn, campaign_id);
 
-        let library_id = insert_library_template(
-            &mut conn,
-            "Null-prompt template",
-            600,
-            None,
-            None,
-            None,
-        );
+        let library_id =
+            insert_library_template(&mut conn, "Null-prompt template", 600, None, None, None);
         insert_campaign_template(
             &mut conn,
             TemplateInsert {
@@ -3210,5 +3347,214 @@ mod tests {
         assert_eq!(campaign.reply_strategy, None);
         assert_eq!(campaign.dm_strategy, None);
         assert_eq!(campaign.reply_post_strategy, None);
+    }
+
+    #[tokio::test]
+    async fn get_campaign_prefers_reply_template_ids_from_campaign() {
+        if !postgres_tests_enabled() {
+            return;
+        }
+
+        let base_db_url = database_url().expect("Postgres adapter DB tests require DATABASE_URL");
+        let schema = TestSchemaGuard::new(&base_db_url);
+        let mut conn = connect(schema.database_url());
+        let campaign_id = 6201;
+        let adapter =
+            PostgresAdapter::from_url(schema.database_url()).expect("adapter should connect");
+        enable_campaign_reply_template_ids_column(&mut conn);
+        insert_test_campaign_record(&mut conn, campaign_id);
+
+        let reusable_id = insert_library_template(
+            &mut conn,
+            "Reusable selected template",
+            50,
+            Some("reusable dm"),
+            Some("reusable reply"),
+            Some("reusable post"),
+        );
+        insert_campaign_template(
+            &mut conn,
+            TemplateInsert {
+                campaign_id,
+                library_template_id: None,
+                weight: 999,
+                reply_prompt: Some("legacy reply"),
+                dm_prompt: Some("legacy dm"),
+                reply_post_prompt: Some("legacy post"),
+                name: Some("Legacy template"),
+            },
+        );
+        set_campaign_reply_template_ids(&mut conn, campaign_id, &[reusable_id]);
+
+        let campaign = adapter
+            .get_campaign(campaign_id)
+            .await
+            .expect("campaign query should succeed")
+            .expect("campaign should be returned");
+
+        assert_eq!(campaign.reply_strategy.as_deref(), Some("reusable reply"));
+        assert_eq!(campaign.dm_strategy.as_deref(), Some("reusable dm"));
+        assert_eq!(
+            campaign.reply_post_strategy.as_deref(),
+            Some("reusable post")
+        );
+    }
+
+    #[tokio::test]
+    async fn get_campaign_uses_assignment_weight_override_for_campaign_reply_template_ids() {
+        if !postgres_tests_enabled() {
+            return;
+        }
+
+        let base_db_url = database_url().expect("Postgres adapter DB tests require DATABASE_URL");
+        let schema = TestSchemaGuard::new(&base_db_url);
+        let mut conn = connect(schema.database_url());
+        let campaign_id = 6202;
+        let adapter =
+            PostgresAdapter::from_url(schema.database_url()).expect("adapter should connect");
+        enable_campaign_reply_template_ids_column(&mut conn);
+        insert_test_campaign_record(&mut conn, campaign_id);
+
+        let reusable_id = insert_library_template(
+            &mut conn,
+            "Reusable overridden template",
+            5,
+            Some("live dm"),
+            Some("live reply"),
+            Some("live post"),
+        );
+        insert_campaign_template(
+            &mut conn,
+            TemplateInsert {
+                campaign_id,
+                library_template_id: Some(reusable_id),
+                weight: 77,
+                reply_prompt: Some("stale reply"),
+                dm_prompt: Some("stale dm"),
+                reply_post_prompt: Some("stale post"),
+                name: Some("Stale assignment"),
+            },
+        );
+        set_campaign_reply_template_ids(&mut conn, campaign_id, &[reusable_id]);
+
+        let templates = adapter
+            .get_campaign_reusable_templates_from_ids(campaign_id, 1, &[reusable_id])
+            .await
+            .expect("reusable templates should resolve");
+        assert_eq!(templates.len(), 1);
+        assert_eq!(templates[0].weight, 77);
+
+        let campaign = adapter
+            .get_campaign(campaign_id)
+            .await
+            .expect("campaign query should succeed")
+            .expect("campaign should be returned");
+
+        assert_eq!(campaign.reply_strategy.as_deref(), Some("live reply"));
+        assert_eq!(campaign.dm_strategy.as_deref(), Some("live dm"));
+        assert_eq!(campaign.reply_post_strategy.as_deref(), Some("live post"));
+    }
+
+    #[tokio::test]
+    async fn get_campaign_ignores_deleted_reply_template_ids_and_falls_back_to_legacy_templates() {
+        if !postgres_tests_enabled() {
+            return;
+        }
+
+        let base_db_url = database_url().expect("Postgres adapter DB tests require DATABASE_URL");
+        let schema = TestSchemaGuard::new(&base_db_url);
+        let mut conn = connect(schema.database_url());
+        let campaign_id = 6203;
+        let adapter =
+            PostgresAdapter::from_url(schema.database_url()).expect("adapter should connect");
+        enable_campaign_reply_template_ids_column(&mut conn);
+        insert_test_campaign_record(&mut conn, campaign_id);
+
+        let deleted_reusable_id = insert_library_template(
+            &mut conn,
+            "Deleted reusable template",
+            50,
+            Some("deleted dm"),
+            Some("deleted reply"),
+            Some("deleted post"),
+        );
+        set_campaign_reply_template_ids(&mut conn, campaign_id, &[deleted_reusable_id]);
+        diesel::sql_query(format!(
+            "DELETE FROM gm_reply_template_library WHERE id = {deleted_reusable_id}"
+        ))
+        .execute(&mut conn)
+        .expect("failed to delete reusable template");
+
+        insert_campaign_template(
+            &mut conn,
+            TemplateInsert {
+                campaign_id,
+                library_template_id: None,
+                weight: 10,
+                reply_prompt: Some("legacy fallback reply"),
+                dm_prompt: Some("legacy fallback dm"),
+                reply_post_prompt: Some("legacy fallback post"),
+                name: Some("Legacy fallback"),
+            },
+        );
+
+        let campaign = adapter
+            .get_campaign(campaign_id)
+            .await
+            .expect("campaign query should succeed")
+            .expect("campaign should be returned");
+
+        assert_eq!(
+            campaign.reply_strategy.as_deref(),
+            Some("legacy fallback reply")
+        );
+        assert_eq!(campaign.dm_strategy.as_deref(), Some("legacy fallback dm"));
+        assert_eq!(
+            campaign.reply_post_strategy.as_deref(),
+            Some("legacy fallback post")
+        );
+    }
+
+    #[tokio::test]
+    async fn get_campaign_falls_back_when_reply_template_ids_column_is_missing() {
+        if !postgres_tests_enabled() {
+            return;
+        }
+
+        let base_db_url = database_url().expect("Postgres adapter DB tests require DATABASE_URL");
+        let schema = TestSchemaGuard::new(&base_db_url);
+        let mut conn = connect(schema.database_url());
+        let campaign_id = 6204;
+        let adapter =
+            PostgresAdapter::from_url(schema.database_url()).expect("adapter should connect");
+        insert_test_campaign_record(&mut conn, campaign_id);
+        insert_campaign_template(
+            &mut conn,
+            TemplateInsert {
+                campaign_id,
+                library_template_id: None,
+                weight: 10,
+                reply_prompt: Some("missing column reply"),
+                dm_prompt: Some("missing column dm"),
+                reply_post_prompt: Some("missing column post"),
+                name: Some("Missing column fallback"),
+            },
+        );
+
+        let campaign = adapter
+            .get_campaign(campaign_id)
+            .await
+            .expect("campaign query should succeed")
+            .expect("campaign should be returned");
+
+        assert_eq!(
+            campaign.reply_strategy.as_deref(),
+            Some("missing column reply")
+        );
+        assert_eq!(campaign.dm_strategy.as_deref(), Some("missing column dm"));
+        assert_eq!(
+            campaign.reply_post_strategy.as_deref(),
+            Some("missing column post")
+        );
     }
 }
