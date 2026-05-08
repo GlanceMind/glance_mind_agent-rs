@@ -92,7 +92,8 @@ impl CampaignConfig {
             ctx = ctx.enable_dm();
         }
 
-        if self.reply_post_strategy.is_some() {
+        if let Some(ref post_strategy) = self.reply_post_strategy {
+            ctx = ctx.with_reply_post_strategy(post_strategy.clone());
             ctx = ctx.enable_post_reply();
         }
 
@@ -261,5 +262,31 @@ mod tests {
         assert_eq!(ctx.target_audience, Some("Young adults".to_string()));
         assert!(ctx.generate_dm);
         assert!(!ctx.generate_post_reply);
+    }
+
+    #[test]
+    fn test_to_analysis_context_includes_reply_post_strategy() {
+        let config = CampaignConfig {
+            id: 1,
+            user_id: 1,
+            name: "Test".to_string(),
+            platform_id: 2,
+            status: CampaignStatus::Active,
+            target_audience: None,
+            product_prompt: None,
+            reply_strategy: None,
+            dm_strategy: None,
+            reply_post_strategy: Some("Write a sharp viral post comment".to_string()),
+            max_comments: None,
+            processed_comments: 0,
+        };
+
+        let ctx = config.to_analysis_context();
+
+        assert!(ctx.generate_post_reply);
+        assert_eq!(
+            ctx.reply_post_strategy.as_deref(),
+            Some("Write a sharp viral post comment")
+        );
     }
 }
