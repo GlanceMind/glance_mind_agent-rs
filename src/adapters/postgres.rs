@@ -2981,8 +2981,67 @@ mod tests {
         .expect("failed to insert isolated test campaign");
     }
 
+    fn insert_test_user(conn: &mut PgConnection, user_id: i32) {
+        diesel::sql_query(format!(
+            r#"
+            INSERT INTO gm_users (
+                id, email, username, password_hash, full_name, role, status, is_active, created_at
+            ) VALUES (
+                {user_id},
+                'user{user_id}@example.com',
+                'user-{user_id}',
+                'test-hash',
+                'Test User {user_id}',
+                'user',
+                'ACTIVE',
+                true,
+                NOW()
+            )
+            ON CONFLICT (id) DO NOTHING
+            "#
+        ))
+        .execute(conn)
+        .expect("failed to insert isolated test user");
+    }
+
+    fn set_campaign_reply_template_ids(conn: &mut PgConnection, campaign_id: i32, ids: &[i32]) {
+        let ids_sql = ids
+            .iter()
+            .map(i32::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        diesel::sql_query(format!(
+            "UPDATE gm_campaigns \
+             SET reply_template_ids = ARRAY[{ids_sql}]::integer[] \
+             WHERE id = {campaign_id}"
+        ))
+        .execute(conn)
+        .expect("failed to set reply_template_ids");
+    }
+
     fn insert_library_template(
         conn: &mut PgConnection,
+        name: &str,
+        weight: i32,
+        dm_prompt: Option<&str>,
+        reply_prompt: Option<&str>,
+        reply_post_prompt: Option<&str>,
+    ) -> i32 {
+        insert_library_template_for_user(
+            conn,
+            1,
+            name,
+            weight,
+            dm_prompt,
+            reply_prompt,
+            reply_post_prompt,
+        )
+    }
+
+    fn insert_library_template_for_user(
+        conn: &mut PgConnection,
+        user_id: i32,
         name: &str,
         weight: i32,
         dm_prompt: Option<&str>,
@@ -3004,7 +3063,7 @@ mod tests {
             INSERT INTO gm_reply_template_library (
                 user_id, name, weight, dm_prompt, reply_prompt, reply_post_prompt, usage_count, created_at
             ) VALUES (
-                1, '{name}', {weight}, {dm_sql}, {reply_sql}, {reply_post_sql}, 0, NOW()
+                {user_id}, '{name}', {weight}, {dm_sql}, {reply_sql}, {reply_post_sql}, 0, NOW()
             )
             RETURNING id
             "#,
@@ -3119,6 +3178,158 @@ mod tests {
             Some("library post prompt")
         );
         assert_eq!(template.name.as_deref(), Some("Library template"));
+    }
+
+    #[tokio::test]
+    async fn get_campaign_templates_loads_reply_template_ids() {
+        if !postgres_tests_enabled() {
+            return;
+        }
+
+        let base_db_url = database_url().expect("Postgres adapter DB tests require DATABASE_URL");
+        let schema = TestSchemaGuard::new(&base_db_url);
+        let mut conn = connect(schema.database_url());
+        let campaign_id = 5151;
+        let adapter =
+            PostgresAdapter::from_url(schema.database_url()).expect("adapter should connect");
+        insert_test_campaign_record(&mut conn, campaign_id);
+
+        let first_id = insert_library_template(
+            &mut conn,
+            "Template #115",
+            70,
+            Some("owner dm one"),
+            Some("owner reply one"),
+            Some("owner post one"),
+        );
+        let second_id = insert_library_template(
+            &mut conn,
+            "Template #117",
+            50,
+            Some("owner dm two"),
+            Some("owner reply two"),
+            Some("owner post two"),
+        );
+        insert_test_user(&mut conn, 2);
+        let foreign_id = insert_library_template_for_user(
+            &mut conn,
+            2,
+            "Foreign user template",
+            999,
+            Some("foreign dm"),
+            Some("foreign reply"),
+            Some("foreign post"),
+        );
+        let missing_id = 999_999;
+        let reply_template_ids = vec![first_id, foreign_id, missing_id, second_id];
+        set_campaign_reply_template_ids(&mut conn, campaign_id, &reply_template_ids);
+
+        let templates = adapter
+            .get_templates_for_campaign_config(campaign_id, 1, &reply_template_ids)
+            .await
+            .expect("reply_template_ids templates should load");
+
+        assert_eq!(templates.len(), 2);
+        assert_eq!(templates[0].library_template_id, Some(first_id));
+        assert_eq!(templates[0].name.as_deref(), Some("Template #115"));
+        assert_eq!(templates[0].reply_prompt.as_deref(), Some("owner reply one"));
+        assert_eq!(templates[0].dm_prompt.as_deref(), Some("owner dm one"));
+        assert_eq!(
+            templates[0].reply_post_prompt.as_deref(),
+            Some("owner post one")
+        );
+        assert_eq!(templates[1].library_template_id, Some(second_id));
+        assert_eq!(templates[1].name.as_deref(), Some("Template #117"));
+        assert_eq!(templates[1].reply_prompt.as_deref(), Some("owner reply two"));
+    }
+
+    #[tokio::test]
+    async fn get_campaign_prefers_reply_template_ids_over_legacy_templates() {
+        if !postgres_tests_enabled() {
+            return;
+        }
+
+        let base_db_url = database_url().expect("Postgres adapter DB tests require DATABASE_URL");
+        let schema = TestSchemaGuard::new(&base_db_url);
+        let mut conn = connect(schema.database_url());
+        let campaign_id = 6161;
+        let adapter =
+            PostgresAdapter::from_url(schema.database_url()).expect("adapter should connect");
+        insert_test_campaign_record(&mut conn, campaign_id);
+
+        let selected_id = insert_library_template(
+            &mut conn,
+            "Selected reusable template",
+            50,
+            Some("selected dm"),
+            Some("selected reply"),
+            Some("selected post"),
+        );
+        set_campaign_reply_template_ids(&mut conn, campaign_id, &[selected_id]);
+
+        insert_campaign_template(
+            &mut conn,
+            TemplateInsert {
+                campaign_id,
+                library_template_id: None,
+                weight: 999,
+                reply_prompt: Some("legacy reply should not be used"),
+                dm_prompt: Some("legacy dm should not be used"),
+                reply_post_prompt: Some("legacy post should not be used"),
+                name: Some("Legacy template"),
+            },
+        );
+
+        let campaign = adapter
+            .get_campaign(campaign_id)
+            .await
+            .expect("campaign query should succeed")
+            .expect("campaign should be returned");
+
+        assert_eq!(campaign.reply_strategy.as_deref(), Some("selected reply"));
+        assert_eq!(campaign.dm_strategy.as_deref(), Some("selected dm"));
+        assert_eq!(
+            campaign.reply_post_strategy.as_deref(),
+            Some("selected post")
+        );
+    }
+
+    #[tokio::test]
+    async fn get_campaign_falls_back_to_legacy_templates_when_reply_template_ids_empty() {
+        if !postgres_tests_enabled() {
+            return;
+        }
+
+        let base_db_url = database_url().expect("Postgres adapter DB tests require DATABASE_URL");
+        let schema = TestSchemaGuard::new(&base_db_url);
+        let mut conn = connect(schema.database_url());
+        let campaign_id = 7171;
+        let adapter =
+            PostgresAdapter::from_url(schema.database_url()).expect("adapter should connect");
+        insert_test_campaign_record(&mut conn, campaign_id);
+
+        insert_campaign_template(
+            &mut conn,
+            TemplateInsert {
+                campaign_id,
+                library_template_id: None,
+                weight: 100,
+                reply_prompt: Some("legacy reply"),
+                dm_prompt: Some("legacy dm"),
+                reply_post_prompt: Some("legacy post"),
+                name: Some("Legacy template"),
+            },
+        );
+
+        let campaign = adapter
+            .get_campaign(campaign_id)
+            .await
+            .expect("campaign query should succeed")
+            .expect("campaign should be returned");
+
+        assert_eq!(campaign.reply_strategy.as_deref(), Some("legacy reply"));
+        assert_eq!(campaign.dm_strategy.as_deref(), Some("legacy dm"));
+        assert_eq!(campaign.reply_post_strategy.as_deref(), Some("legacy post"));
     }
 
     #[tokio::test]

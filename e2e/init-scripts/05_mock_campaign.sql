@@ -36,6 +36,7 @@ INSERT INTO gm_campaigns (
     auto_dm,
     auto_reply_comments,
     auto_reply_post,
+    reply_template_ids,
     total_scanned,
     pending_consumption,
     actual_consumption,
@@ -65,6 +66,7 @@ INSERT INTO gm_campaigns (
     true,
     true,
     true,
+    ARRAY[99901]::integer[],
     0,
     0,
     0,
@@ -75,7 +77,8 @@ INSERT INTO gm_campaigns (
     is_frozen = false,
     pending_consumption = 0,
     actual_consumption = 0,
-    total_scanned = 0;
+    total_scanned = 0,
+    reply_template_ids = ARRAY[99901]::integer[];
 
 SELECT setval(pg_get_serial_sequence('gm_campaigns', 'id'), GREATEST((SELECT MAX(id) FROM gm_campaigns), 99901));
 
