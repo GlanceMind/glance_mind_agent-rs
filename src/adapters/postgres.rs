@@ -3224,8 +3224,18 @@ mod tests {
         let reply_template_ids = vec![first_id, foreign_id, missing_id, second_id];
         set_campaign_reply_template_ids(&mut conn, campaign_id, &reply_template_ids);
 
+        let persisted_campaign: models::Campaign = schema::gm_campaigns::dsl::gm_campaigns
+            .find(campaign_id)
+            .first(&mut conn)
+            .expect("campaign should reload with reply_template_ids");
+        assert_eq!(persisted_campaign.reply_template_ids, reply_template_ids);
+
         let templates = adapter
-            .get_templates_for_campaign_config(campaign_id, 1, &reply_template_ids)
+            .get_templates_for_campaign_config(
+                campaign_id,
+                persisted_campaign.user_id,
+                &persisted_campaign.reply_template_ids,
+            )
             .await
             .expect("reply_template_ids templates should load");
 
