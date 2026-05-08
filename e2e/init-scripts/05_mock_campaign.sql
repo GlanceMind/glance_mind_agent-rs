@@ -40,6 +40,7 @@ INSERT INTO gm_campaigns (
     pending_consumption,
     actual_consumption,
     is_frozen,
+    reply_template_ids,
     created_at
 ) VALUES (
     99901,
@@ -69,13 +70,15 @@ INSERT INTO gm_campaigns (
     0,
     0,
     false,
+    ARRAY[99901]::integer[],
     NOW()
 ) ON CONFLICT (id) DO UPDATE SET
     status = 'DRAFT',
     is_frozen = false,
     pending_consumption = 0,
     actual_consumption = 0,
-    total_scanned = 0;
+    total_scanned = 0,
+    reply_template_ids = ARRAY[99901]::integer[];
 
 SELECT setval(pg_get_serial_sequence('gm_campaigns', 'id'), GREATEST((SELECT MAX(id) FROM gm_campaigns), 99901));
 

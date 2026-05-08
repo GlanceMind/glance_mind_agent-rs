@@ -99,18 +99,6 @@ struct ResolvedCampaignTemplateRow {
     name: Option<String>,
 }
 
-#[derive(QueryableByName, Debug)]
-struct ColumnExistsRow {
-    #[diesel(sql_type = Bool)]
-    exists: bool,
-}
-
-#[derive(QueryableByName, Debug)]
-struct ReplyTemplateIdsRow {
-    #[diesel(sql_type = Array<Integer>)]
-    ids: Vec<i32>,
-}
-
 impl ResolvedCampaignTemplateRow {
     fn into_campaign_template(self) -> models::CampaignTemplate {
         models::CampaignTemplate {
@@ -1835,22 +1823,13 @@ impl PromptRepository for PostgresAdapter {
             Some(c) => {
                 // Campaign-level reusable template IDs are canonical when available.
                 // Legacy campaign templates remain the compatibility fallback.
-                let reply_template_ids = self.get_campaign_reply_template_ids(campaign_id).await?;
-                let reusable_templates = if reply_template_ids.is_empty() {
-                    Vec::new()
-                } else {
-                    self.get_campaign_reusable_templates_from_ids(
+                let templates = self
+                    .get_templates_for_campaign_config(
                         campaign_id,
                         c.user_id,
-                        &reply_template_ids,
+                        &c.reply_template_ids,
                     )
-                    .await?
-                };
-                let templates = if reusable_templates.is_empty() {
-                    self.get_campaign_templates(campaign_id).await?
-                } else {
-                    reusable_templates
-                };
+                    .await?;
 
                 // Use weighted random selection (matching Python agent behavior)
                 // Python: random.choices(population, weights=weights, k=1)[0]
@@ -2562,41 +2541,31 @@ impl PostgresAdapter {
             .collect())
     }
 
-    async fn get_campaign_reply_template_ids(&self, campaign_id: i32) -> DbResult<Vec<i32>> {
-        let mut conn = self.conn_async().await?;
+    async fn get_templates_for_campaign_config(
+        &self,
+        campaign_id: i32,
+        user_id: i32,
+        reply_template_ids: &[i32],
+    ) -> DbResult<Vec<models::CampaignTemplate>> {
+        if !reply_template_ids.is_empty() {
+            let templates = self
+                .get_campaign_reusable_templates_from_ids(campaign_id, user_id, reply_template_ids)
+                .await?;
 
-        let column_exists = diesel::sql_query(
-            r#"
-            SELECT EXISTS (
-                SELECT 1
-                FROM information_schema.columns
-                WHERE table_schema = current_schema()
-                  AND table_name = 'gm_campaigns'
-                  AND column_name = 'reply_template_ids'
-            ) AS exists
-            "#,
-        )
-        .get_result::<ColumnExistsRow>(&mut conn)
-        .map_err(DbError::from)?
-        .exists;
+            if templates.len() != reply_template_ids.len() {
+                warn!(
+                    campaign_id,
+                    user_id,
+                    requested_template_ids = ?reply_template_ids,
+                    loaded_template_count = templates.len(),
+                    "Some reply_template_ids did not resolve to reusable templates for this campaign owner"
+                );
+            }
 
-        if !column_exists {
-            return Ok(Vec::new());
+            return Ok(templates);
         }
 
-        let row = diesel::sql_query(
-            r#"
-            SELECT reply_template_ids AS ids
-            FROM gm_campaigns
-            WHERE id = $1
-            "#,
-        )
-        .bind::<Integer, _>(campaign_id)
-        .get_result::<ReplyTemplateIdsRow>(&mut conn)
-        .optional()
-        .map_err(DbError::from)?;
-
-        Ok(row.map(|row| row.ids).unwrap_or_default())
+        self.get_campaign_templates(campaign_id).await
     }
 
     async fn get_campaign_reusable_templates_from_ids(
@@ -2892,7 +2861,8 @@ mod tests {
                 search_options JSONB,
                 auto_reply_comments BOOLEAN NOT NULL DEFAULT true,
                 auto_reply_post BOOLEAN NOT NULL DEFAULT true,
-                completed_reason TEXT
+                completed_reason TEXT,
+                reply_template_ids INTEGER[] NOT NULL DEFAULT '{}'::INTEGER[]
             )
             "#,
             r#"
@@ -3013,6 +2983,26 @@ mod tests {
         reply_prompt: Option<&str>,
         reply_post_prompt: Option<&str>,
     ) -> i32 {
+        insert_library_template_for_user(
+            conn,
+            1,
+            name,
+            weight,
+            dm_prompt,
+            reply_prompt,
+            reply_post_prompt,
+        )
+    }
+
+    fn insert_library_template_for_user(
+        conn: &mut PgConnection,
+        user_id: i32,
+        name: &str,
+        weight: i32,
+        dm_prompt: Option<&str>,
+        reply_prompt: Option<&str>,
+        reply_post_prompt: Option<&str>,
+    ) -> i32 {
         let dm_sql = dm_prompt
             .map(|value| format!("'{}'", value.replace('\'', "''")))
             .unwrap_or_else(|| "NULL".to_string());
@@ -3028,15 +3018,31 @@ mod tests {
             INSERT INTO gm_reply_template_library (
                 user_id, name, weight, dm_prompt, reply_prompt, reply_post_prompt, usage_count, created_at
             ) VALUES (
-                1, '{name}', {weight}, {dm_sql}, {reply_sql}, {reply_post_sql}, 0, NOW()
+                {user_id}, '{name}', {weight}, {dm_sql}, {reply_sql}, {reply_post_sql}, 0, NOW()
             )
             RETURNING id
             "#,
             name = name.replace('\'', "''"),
+            user_id = user_id,
         ))
         .get_result::<IdRow>(conn)
         .map(|row| row.id)
         .expect("failed to insert library template")
+    }
+
+    fn insert_test_user(conn: &mut PgConnection, user_id: i32) {
+        diesel::sql_query(format!(
+            r#"
+            INSERT INTO gm_users (
+                id, email, username, password_hash, full_name, role, status, is_active, created_at
+            ) VALUES (
+                {user_id}, 'user-{user_id}@example.com', 'test-user-{user_id}',
+                'test-hash', 'Test User {user_id}', 'user', 'ACTIVE', true, NOW()
+            )
+            "#
+        ))
+        .execute(conn)
+        .expect("failed to insert isolated test user");
     }
 
     struct TemplateInsert<'a> {
@@ -3094,7 +3100,7 @@ mod tests {
         diesel::sql_query(
             r#"
             ALTER TABLE gm_campaigns
-                ADD COLUMN reply_template_ids INTEGER[] NOT NULL DEFAULT '{}'::INTEGER[]
+                ADD COLUMN IF NOT EXISTS reply_template_ids INTEGER[] NOT NULL DEFAULT '{}'::INTEGER[]
             "#,
         )
         .execute(conn)
@@ -3350,6 +3356,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_campaign_templates_loads_reply_template_ids_from_campaign_row() {
+        if !postgres_tests_enabled() {
+            return;
+        }
+
+        let base_db_url = database_url().expect("Postgres adapter DB tests require DATABASE_URL");
+        let schema = TestSchemaGuard::new(&base_db_url);
+        let mut conn = connect(schema.database_url());
+        let campaign_id = 6147;
+        let adapter =
+            PostgresAdapter::from_url(schema.database_url()).expect("adapter should connect");
+        insert_test_campaign_record(&mut conn, campaign_id);
+
+        let first_id = insert_library_template(
+            &mut conn,
+            "Template #115",
+            70,
+            Some("owner dm one"),
+            Some("owner reply one"),
+            Some("owner post one"),
+        );
+        let second_id = insert_library_template(
+            &mut conn,
+            "Template #117",
+            50,
+            Some("owner dm two"),
+            Some("owner reply two"),
+            Some("owner post two"),
+        );
+        insert_test_user(&mut conn, 2);
+        let foreign_id = insert_library_template_for_user(
+            &mut conn,
+            2,
+            "Foreign user template",
+            999,
+            Some("foreign dm"),
+            Some("foreign reply"),
+            Some("foreign post"),
+        );
+        let missing_id = 999_999;
+        let reply_template_ids = vec![first_id, foreign_id, missing_id, second_id];
+        set_campaign_reply_template_ids(&mut conn, campaign_id, &reply_template_ids);
+
+        let persisted_campaign: models::Campaign = schema::gm_campaigns::dsl::gm_campaigns
+            .find(campaign_id)
+            .first(&mut conn)
+            .expect("campaign should reload with reply_template_ids");
+        assert_eq!(persisted_campaign.reply_template_ids, reply_template_ids);
+
+        let templates = adapter
+            .get_templates_for_campaign_config(
+                campaign_id,
+                persisted_campaign.user_id,
+                &persisted_campaign.reply_template_ids,
+            )
+            .await
+            .expect("reply_template_ids templates should load");
+
+        assert_eq!(templates.len(), 2);
+        assert_eq!(templates[0].library_template_id, Some(first_id));
+        assert_eq!(templates[0].name.as_deref(), Some("Template #115"));
+        assert_eq!(
+            templates[0].reply_prompt.as_deref(),
+            Some("owner reply one")
+        );
+        assert_eq!(templates[0].dm_prompt.as_deref(), Some("owner dm one"));
+        assert_eq!(
+            templates[0].reply_post_prompt.as_deref(),
+            Some("owner post one")
+        );
+        assert_eq!(templates[1].library_template_id, Some(second_id));
+        assert_eq!(templates[1].name.as_deref(), Some("Template #117"));
+        assert_eq!(
+            templates[1].reply_prompt.as_deref(),
+            Some("owner reply two")
+        );
+    }
+
+    #[tokio::test]
     async fn get_campaign_prefers_reply_template_ids_from_campaign() {
         if !postgres_tests_enabled() {
             return;
@@ -3456,7 +3541,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_campaign_ignores_deleted_reply_template_ids_and_falls_back_to_legacy_templates() {
+    async fn get_campaign_ignores_deleted_reply_template_ids_without_legacy_fallback() {
         if !postgres_tests_enabled() {
             return;
         }
@@ -3504,19 +3589,13 @@ mod tests {
             .expect("campaign query should succeed")
             .expect("campaign should be returned");
 
-        assert_eq!(
-            campaign.reply_strategy.as_deref(),
-            Some("legacy fallback reply")
-        );
-        assert_eq!(campaign.dm_strategy.as_deref(), Some("legacy fallback dm"));
-        assert_eq!(
-            campaign.reply_post_strategy.as_deref(),
-            Some("legacy fallback post")
-        );
+        assert_eq!(campaign.reply_strategy, None);
+        assert_eq!(campaign.dm_strategy, None);
+        assert_eq!(campaign.reply_post_strategy, None);
     }
 
     #[tokio::test]
-    async fn get_campaign_falls_back_when_reply_template_ids_column_is_missing() {
+    async fn get_campaign_falls_back_when_reply_template_ids_empty() {
         if !postgres_tests_enabled() {
             return;
         }
@@ -3534,10 +3613,10 @@ mod tests {
                 campaign_id,
                 library_template_id: None,
                 weight: 10,
-                reply_prompt: Some("missing column reply"),
-                dm_prompt: Some("missing column dm"),
-                reply_post_prompt: Some("missing column post"),
-                name: Some("Missing column fallback"),
+                reply_prompt: Some("empty ids reply"),
+                dm_prompt: Some("empty ids dm"),
+                reply_post_prompt: Some("empty ids post"),
+                name: Some("Empty ids fallback"),
             },
         );
 
@@ -3547,14 +3626,11 @@ mod tests {
             .expect("campaign query should succeed")
             .expect("campaign should be returned");
 
-        assert_eq!(
-            campaign.reply_strategy.as_deref(),
-            Some("missing column reply")
-        );
-        assert_eq!(campaign.dm_strategy.as_deref(), Some("missing column dm"));
+        assert_eq!(campaign.reply_strategy.as_deref(), Some("empty ids reply"));
+        assert_eq!(campaign.dm_strategy.as_deref(), Some("empty ids dm"));
         assert_eq!(
             campaign.reply_post_strategy.as_deref(),
-            Some("missing column post")
+            Some("empty ids post")
         );
     }
 }
