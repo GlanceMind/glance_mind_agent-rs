@@ -1821,8 +1821,16 @@ impl PromptRepository for PostgresAdapter {
 
         match result {
             Some(c) => {
-                // Get templates for prompts
-                let templates = self.get_campaign_templates(campaign_id).await?;
+                // Get templates for prompts. New campaigns store reusable template IDs
+                // directly on gm_campaigns; keep the legacy campaign-template table
+                // as fallback for older data.
+                let templates = self
+                    .get_templates_for_campaign_config(
+                        campaign_id,
+                        c.user_id,
+                        &c.reply_template_ids,
+                    )
+                    .await?;
 
                 // Use weighted random selection (matching Python agent behavior)
                 // Python: random.choices(population, weights=weights, k=1)[0]
@@ -2534,6 +2542,89 @@ impl PostgresAdapter {
             .collect())
     }
 
+    async fn get_templates_for_campaign_config(
+        &self,
+        campaign_id: i32,
+        user_id: i32,
+        reply_template_ids: &[i32],
+    ) -> DbResult<Vec<models::CampaignTemplate>> {
+        if !reply_template_ids.is_empty() {
+            let templates = self
+                .get_campaign_templates_from_reply_template_ids(
+                    campaign_id,
+                    user_id,
+                    reply_template_ids,
+                )
+                .await?;
+
+            if templates.len() != reply_template_ids.len() {
+                warn!(
+                    campaign_id,
+                    user_id,
+                    requested_template_ids = ?reply_template_ids,
+                    loaded_template_count = templates.len(),
+                    "Some reply_template_ids did not resolve to reusable templates for this campaign owner"
+                );
+            }
+
+            return Ok(templates);
+        }
+
+        self.get_campaign_templates(campaign_id).await
+    }
+
+    async fn get_campaign_templates_from_reply_template_ids(
+        &self,
+        campaign_id: i32,
+        user_id: i32,
+        reply_template_ids: &[i32],
+    ) -> DbResult<Vec<models::CampaignTemplate>> {
+        let mut conn = self.conn_async().await?;
+
+        let templates = diesel::sql_query(
+            r#"
+            WITH selected_ids AS (
+                SELECT library_template_id, ordinal_position
+                FROM unnest($3::int[]) WITH ORDINALITY AS selected(library_template_id, ordinal_position)
+            )
+            SELECT
+                library.id,
+                $1 AS campaign_id,
+                library.id AS library_template_id,
+                library.weight,
+                library.reply_prompt,
+                library.created_at,
+                library.updated_at,
+                library.dm_prompt,
+                library.reply_post_prompt,
+                library.name
+            FROM selected_ids selected
+            JOIN gm_reply_template_library library
+                ON library.id = selected.library_template_id
+            WHERE library.user_id = $2
+            ORDER BY library.weight DESC, selected.ordinal_position ASC, library.id ASC
+            "#,
+        )
+        .bind::<Integer, _>(campaign_id)
+        .bind::<Integer, _>(user_id)
+        .bind::<diesel::sql_types::Array<Integer>, _>(reply_template_ids.to_vec())
+        .load::<ResolvedCampaignTemplateRow>(&mut conn)
+        .map_err(DbError::from)?;
+
+        info!(
+            campaign_id,
+            user_id,
+            requested_template_ids = ?reply_template_ids,
+            loaded_template_count = templates.len(),
+            "Loaded reusable templates from gm_campaigns.reply_template_ids"
+        );
+
+        Ok(templates
+            .into_iter()
+            .map(ResolvedCampaignTemplateRow::into_campaign_template)
+            .collect())
+    }
+
     #[allow(dead_code)]
     async fn get_active_task_id(&self, campaign_id: i32) -> DbResult<i32> {
         use schema::gm_crawler_tasks::dsl;
@@ -2776,7 +2867,8 @@ mod tests {
                 search_options JSONB,
                 auto_reply_comments BOOLEAN NOT NULL DEFAULT true,
                 auto_reply_post BOOLEAN NOT NULL DEFAULT true,
-                completed_reason TEXT
+                completed_reason TEXT,
+                reply_template_ids INTEGER[] NOT NULL DEFAULT '{}'
             )
             "#,
             r#"
