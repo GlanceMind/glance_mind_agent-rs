@@ -56,6 +56,12 @@ pub type HashtagSearchResponse = InstagramResponse<InstagramPaginatedData<Instag
 /// V3 general search response type alias.
 pub type GeneralSearchResponse = InstagramResponse<InstagramGeneralSearchData>;
 
+/// V2 general search response type alias.
+///
+/// Endpoint: /api/v1/instagram/v2/general_search
+/// Observed shape: { code, message, data: { data: { items: [...] }, pagination_token } }
+pub type GeneralSearchV2Response = InstagramResponse<InstagramPaginatedData<InstagramPost>>;
+
 /// V3 general search response body.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstagramGeneralSearchData {

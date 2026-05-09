@@ -743,6 +743,53 @@ impl TikHubClient {
         .await
     }
 
+    /// Search Instagram posts and related media by keyword using V2 general search.
+    ///
+    /// Endpoint: `/api/v1/instagram/v2/general_search`
+    pub async fn search_instagram_general_v2(
+        &self,
+        keyword: &str,
+    ) -> Result<GeneralSearchV2Response, TikHubError> {
+        let url = format!("{}/api/v1/instagram/v2/general_search", self.base_url);
+        let keyword = keyword.trim().trim_start_matches('#');
+
+        if keyword.is_empty() {
+            return Err(TikHubError::InvalidParam(
+                "Instagram V2 general_search keyword is required".to_string(),
+            ));
+        }
+
+        info!(keyword = %keyword, "Instagram: Searching via V2 general_search");
+
+        let query_params: Vec<(&str, &str)> = vec![("keyword", keyword)];
+        let data: GeneralSearchV2Response =
+            self.get_with_status_handling(&url, &query_params).await?;
+
+        if data.code != 200 {
+            warn!(code = data.code, message = %data.message, "Instagram V2 API error");
+            return Err(TikHubError::from_api_code(data.code, &data.message));
+        }
+
+        let post_count = Self::extract_instagram_general_v2_posts(&data).len();
+
+        info!(keyword = %keyword, post_count = post_count, "Instagram: V2 general_search completed");
+
+        Ok(data)
+    }
+
+    /// Search Instagram posts and related media by keyword using V2 general search with retry.
+    pub async fn search_instagram_general_v2_with_retry(
+        &self,
+        keyword: &str,
+    ) -> Result<GeneralSearchV2Response, TikHubError> {
+        let keyword = keyword.to_string();
+        self.with_retry("search_instagram_general_v2", || {
+            let q = keyword.clone();
+            async move { self.search_instagram_general_v2(&q).await }
+        })
+        .await
+    }
+
     /// Search Instagram Reels by keyword
     ///
     /// Endpoint: `/api/v1/instagram/v2/search_reels`
@@ -1701,6 +1748,19 @@ impl TikHubClient {
                     .filter_map(|wrapper| wrapper.media.as_ref())
                     .collect()
             })
+            .unwrap_or_default()
+    }
+
+    /// Extract Instagram posts from the V2 general search response.
+    pub fn extract_instagram_general_v2_posts(
+        response: &GeneralSearchV2Response,
+    ) -> Vec<&InstagramPost> {
+        response
+            .data
+            .as_ref()
+            .and_then(|data| data.data.as_ref())
+            .and_then(|data| data.items.as_ref())
+            .map(|items| items.iter().collect())
             .unwrap_or_default()
     }
 }
