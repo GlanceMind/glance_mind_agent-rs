@@ -158,6 +158,48 @@ impl InstagramAdapter {
         }
     }
 
+    async fn fetch_keyword_posts_with_fallback(
+        &self,
+        raw_query: &str,
+    ) -> GatewayResult<Vec<InstagramPost>> {
+        let v3_query = Self::normalize_v3_query(raw_query);
+
+        tracing::info!(query = %v3_query, "Instagram: Searching via V3 general_search");
+
+        match self
+            .client
+            .search_instagram_general_with_retry(&v3_query)
+            .await
+        {
+            Ok(response) => {
+                let posts = TikHubClient::extract_instagram_general_posts(&response)
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                Ok(posts)
+            }
+            Err(TikHubError::BadRequest { message }) => {
+                tracing::warn!(
+                    query = %v3_query,
+                    error = %message,
+                    "Instagram V3 general_search returned bad request; falling back to V2 general_search"
+                );
+
+                let response = self
+                    .client
+                    .search_instagram_general_v2_with_retry(raw_query)
+                    .await
+                    .map_err(Self::convert_error)?;
+                let posts = TikHubClient::extract_instagram_general_v2_posts(&response)
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                Ok(posts)
+            }
+            Err(err) => Err(Self::convert_error(err)),
+        }
+    }
+
     /// Convert Instagram V1 node to domain Content
     #[allow(dead_code)]
     fn convert_v1_node(node: &InstagramV1Node) -> Content {
@@ -245,21 +287,13 @@ impl InstagramAdapter {
 #[async_trait]
 impl ContentGateway for InstagramAdapter {
     async fn search(&self, options: &SearchOptions) -> GatewayResult<Vec<Content>> {
-        let query = Self::normalize_v3_query(&options.query);
-
-        tracing::info!(query = %query, "Instagram: Searching via V3 general_search");
-
-        let response = self
-            .client
-            .search_instagram_general_with_retry(&query)
-            .await
-            .map_err(Self::convert_error)?;
-
-        let posts = TikHubClient::extract_instagram_general_posts(&response);
+        let posts = self
+            .fetch_keyword_posts_with_fallback(&options.query)
+            .await?;
         Ok(posts
             .iter()
             .take(options.count as usize)
-            .map(|p| Self::convert_content(p))
+            .map(Self::convert_content)
             .collect())
     }
 
@@ -270,21 +304,11 @@ impl ContentGateway for InstagramAdapter {
     ) -> GatewayResult<Vec<Content>> {
         match keyword {
             KeywordType::Search(query) | KeywordType::Hashtag(query) => {
-                let query = Self::normalize_v3_query(query);
-
-                tracing::info!(query = %query, "Instagram: Searching via V3 general_search");
-
-                let response = self
-                    .client
-                    .search_instagram_general_with_retry(&query)
-                    .await
-                    .map_err(Self::convert_error)?;
-
-                let posts = TikHubClient::extract_instagram_general_posts(&response);
+                let posts = self.fetch_keyword_posts_with_fallback(query).await?;
                 Ok(posts
                     .iter()
                     .take(options.count as usize)
-                    .map(|p| Self::convert_content(p))
+                    .map(Self::convert_content)
                     .collect())
             }
             KeywordType::UserId(username) => self.fetch_user_content(username, options.count).await,
