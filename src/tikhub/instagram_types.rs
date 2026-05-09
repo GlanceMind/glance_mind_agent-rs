@@ -335,7 +335,7 @@ pub struct InstagramPost {
     pub thumbnail_url: Option<String>,
 
     /// Image versions (multiple resolutions)
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_image_versions")]
     pub image_versions: Option<Vec<InstagramImage>>,
 
     /// V3 image versions wrapper.
@@ -399,6 +399,30 @@ pub struct InstagramImage {
     pub url: Option<String>,
     pub width: Option<i32>,
     pub height: Option<i32>,
+}
+
+fn deserialize_image_versions<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<InstagramImage>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let Some(value) = Option::<serde_json::Value>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+
+    match value {
+        serde_json::Value::Array(items) => {
+            Ok(serde_json::from_value(serde_json::Value::Array(items)).ok())
+        }
+        serde_json::Value::Object(mut object) => match object.remove("items") {
+            Some(serde_json::Value::Array(items)) => {
+                Ok(serde_json::from_value(serde_json::Value::Array(items)).ok())
+            }
+            _ => Ok(None),
+        },
+        _ => Ok(None),
+    }
 }
 
 /// Instagram V3 image versions wrapper.
@@ -791,6 +815,63 @@ mod tests {
         assert!(post.is_video_content());
         assert_eq!(post.likes(), 100);
         assert_eq!(post.views(), 1000);
+    }
+
+    #[test]
+    fn test_instagram_post_image_versions_legacy_array_deserializes() {
+        let post: InstagramPost = serde_json::from_value(serde_json::json!({
+            "code": "ABC123",
+            "image_versions": [
+                {
+                    "url": "https://example.com/legacy.jpg",
+                    "width": 640,
+                    "height": 640
+                }
+            ]
+        }))
+        .expect("legacy image_versions array should deserialize");
+
+        let images = post
+            .image_versions
+            .as_ref()
+            .expect("legacy image_versions should be retained");
+        assert_eq!(images.len(), 1);
+        assert_eq!(
+            images[0].url.as_deref(),
+            Some("https://example.com/legacy.jpg")
+        );
+        assert_eq!(post.thumbnail(), Some("https://example.com/legacy.jpg"));
+    }
+
+    #[test]
+    fn test_instagram_post_image_versions_live_wrapper_deserializes() {
+        let post: InstagramPost = serde_json::from_value(serde_json::json!({
+            "code": "ABC123",
+            "image_versions": {
+                "items": [
+                    {
+                        "url": "https://example.com/live.jpg",
+                        "width": 1080,
+                        "height": 1080
+                    }
+                ],
+                "additional_items": [],
+                "animated_thumbnail_spritesheet_info_candidates": {},
+                "scrubber_spritesheet_info_candidates": {}
+            }
+        }))
+        .expect("live image_versions wrapper should deserialize");
+
+        let images = post
+            .image_versions
+            .as_ref()
+            .expect("live image_versions items should be retained");
+        assert_eq!(images.len(), 1);
+        assert_eq!(
+            images[0].url.as_deref(),
+            Some("https://example.com/live.jpg")
+        );
+        assert_eq!(post.thumbnail(), Some("https://example.com/live.jpg"));
     }
 
     #[test]
