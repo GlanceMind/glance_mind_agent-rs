@@ -781,6 +781,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_fetch_by_keyword_does_not_fallback_on_rate_limit() {
+        let (base_url, requests) =
+            spawn_mock_http_server_with_capture(vec![MockHttpResponse::json(
+                429,
+                json!({"message": "rate limited"}),
+            )])
+            .await;
+        let client = TikHubClient::new("test-key", base_url).unwrap();
+        let adapter = InstagramAdapter::new(client);
+
+        let result = adapter
+            .fetch_by_keyword(
+                &KeywordType::Hashtag("fitness".to_string()),
+                &SearchOptions::new("fitness")
+                    .with_platform("instagram")
+                    .with_count(5),
+            )
+            .await;
+
+        assert!(matches!(result, Err(GatewayError::RateLimited { .. })));
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+    }
+
+    #[tokio::test]
     async fn test_search_uses_same_v3_to_v2_fallback() {
         let (base_url, requests) = spawn_mock_http_server_with_capture(vec![
             MockHttpResponse::json(
