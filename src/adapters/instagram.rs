@@ -158,6 +158,44 @@ impl InstagramAdapter {
         }
     }
 
+    async fn fetch_keyword_posts_with_fallback(
+        &self,
+        raw_query: &str,
+    ) -> GatewayResult<Vec<InstagramPost>> {
+        let v3_query = Self::normalize_v3_query(raw_query);
+
+        tracing::info!(query = %v3_query, "Instagram: Searching via V3 general_search");
+
+        match self.client.search_instagram_general(&v3_query).await {
+            Ok(response) => {
+                let posts = TikHubClient::extract_instagram_general_posts(&response)
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                Ok(posts)
+            }
+            Err(TikHubError::BadRequest { message }) => {
+                tracing::warn!(
+                    query = %v3_query,
+                    error = %message,
+                    "Instagram V3 general_search returned bad request; falling back to V2 general_search"
+                );
+
+                let response = self
+                    .client
+                    .search_instagram_general_v2_with_retry(raw_query)
+                    .await
+                    .map_err(Self::convert_error)?;
+                let posts = TikHubClient::extract_instagram_general_v2_posts(&response)
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                Ok(posts)
+            }
+            Err(err) => Err(Self::convert_error(err)),
+        }
+    }
+
     /// Convert Instagram V1 node to domain Content
     #[allow(dead_code)]
     fn convert_v1_node(node: &InstagramV1Node) -> Content {
@@ -245,21 +283,13 @@ impl InstagramAdapter {
 #[async_trait]
 impl ContentGateway for InstagramAdapter {
     async fn search(&self, options: &SearchOptions) -> GatewayResult<Vec<Content>> {
-        let query = Self::normalize_v3_query(&options.query);
-
-        tracing::info!(query = %query, "Instagram: Searching via V3 general_search");
-
-        let response = self
-            .client
-            .search_instagram_general_with_retry(&query)
-            .await
-            .map_err(Self::convert_error)?;
-
-        let posts = TikHubClient::extract_instagram_general_posts(&response);
+        let posts = self
+            .fetch_keyword_posts_with_fallback(&options.query)
+            .await?;
         Ok(posts
             .iter()
             .take(options.count as usize)
-            .map(|p| Self::convert_content(p))
+            .map(Self::convert_content)
             .collect())
     }
 
@@ -270,21 +300,11 @@ impl ContentGateway for InstagramAdapter {
     ) -> GatewayResult<Vec<Content>> {
         match keyword {
             KeywordType::Search(query) | KeywordType::Hashtag(query) => {
-                let query = Self::normalize_v3_query(query);
-
-                tracing::info!(query = %query, "Instagram: Searching via V3 general_search");
-
-                let response = self
-                    .client
-                    .search_instagram_general_with_retry(&query)
-                    .await
-                    .map_err(Self::convert_error)?;
-
-                let posts = TikHubClient::extract_instagram_general_posts(&response);
+                let posts = self.fetch_keyword_posts_with_fallback(query).await?;
                 Ok(posts
                     .iter()
                     .take(options.count as usize)
-                    .map(|p| Self::convert_content(p))
+                    .map(Self::convert_content)
                     .collect())
             }
             KeywordType::UserId(username) => self.fetch_user_content(username, options.count).await,
@@ -498,6 +518,112 @@ impl CommentGateway for InstagramAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    struct MockHttpResponse {
+        status: u16,
+        body: serde_json::Value,
+    }
+
+    impl MockHttpResponse {
+        fn json(status: u16, body: serde_json::Value) -> Self {
+            Self { status, body }
+        }
+    }
+
+    async fn spawn_mock_http_server_with_capture(
+        responses: Vec<MockHttpResponse>,
+    ) -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let responses = Arc::new(Mutex::new(VecDeque::from(responses)));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let expected_requests = responses.lock().unwrap().len();
+        let captured_requests = requests.clone();
+
+        tokio::spawn(async move {
+            for _ in 0..expected_requests {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let responses = responses.clone();
+                let requests = captured_requests.clone();
+
+                tokio::spawn(async move {
+                    let mut buffer = vec![0_u8; 8192];
+                    let size = socket.read(&mut buffer).await.unwrap();
+                    let request_text = String::from_utf8_lossy(&buffer[..size]).to_string();
+                    if let Some(request_line) = request_text.lines().next() {
+                        requests.lock().unwrap().push(request_line.to_string());
+                    }
+
+                    let response = responses.lock().unwrap().pop_front().unwrap_or_else(|| {
+                        MockHttpResponse::json(500, json!({"message": "missing mock response"}))
+                    });
+                    let reason = match response.status {
+                        200 => "OK",
+                        400 => "Bad Request",
+                        401 => "Unauthorized",
+                        429 => "Too Many Requests",
+                        _ => "Mock Response",
+                    };
+                    let body = serde_json::to_string(&response.body).unwrap();
+                    let raw = format!(
+                        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        response.status,
+                        reason,
+                        body.len(),
+                        body
+                    );
+
+                    socket.write_all(raw.as_bytes()).await.unwrap();
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+
+        (format!("http://{}", addr), requests)
+    }
+
+    fn instagram_v2_response(code: &str, username: &str, url: &str) -> serde_json::Value {
+        json!({
+            "code": 200,
+            "message": "ok",
+            "data": {
+                "data": {
+                    "items": [
+                        {
+                            "code": code,
+                            "pk": format!("pk-{code}"),
+                            "product_type": "clips",
+                            "media_type": 2,
+                            "caption": {"text": "fallback result"},
+                            "user": {
+                                "id": format!("user-{username}"),
+                                "pk": format!("user-{username}"),
+                                "username": username,
+                                "full_name": username,
+                                "profile_pic_url": "https://example.test/avatar.jpg",
+                                "is_verified": false
+                            },
+                            "like_count": 7,
+                            "comment_count": 2,
+                            "play_count": 99,
+                            "image_versions2": {
+                                "candidates": [
+                                    {"url": url, "width": 640, "height": 640}
+                                ]
+                            },
+                            "taken_at": 1778338738
+                        }
+                    ]
+                },
+                "pagination_token": null
+            }
+        })
+    }
 
     #[test]
     fn test_convert_content() {
@@ -567,5 +693,158 @@ mod tests {
         assert_eq!(domain_comment.author, "commenter");
         assert_eq!(domain_comment.likes, 50);
         assert!(!domain_comment.is_reply);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_by_keyword_falls_back_to_v2_when_v3_returns_bad_request() {
+        let (base_url, requests) = spawn_mock_http_server_with_capture(vec![
+            MockHttpResponse::json(
+                400,
+                json!({
+                    "detail": {
+                        "code": 400,
+                        "router": "/api/v1/instagram/v3/general_search",
+                        "params": {
+                            "query": "#fitness",
+                            "enable_metadata": "true"
+                        }
+                    }
+                }),
+            ),
+            MockHttpResponse::json(
+                200,
+                instagram_v2_response("FALLBACK1", "creator", "https://example.test/thumb.jpg"),
+            ),
+        ])
+        .await;
+        let client = TikHubClient::new("test-key", base_url).unwrap();
+        let adapter = InstagramAdapter::new(client);
+
+        let content = adapter
+            .fetch_by_keyword(
+                &KeywordType::Hashtag("fitness".to_string()),
+                &SearchOptions::new("fitness")
+                    .with_platform("instagram")
+                    .with_count(5),
+            )
+            .await
+            .expect("V3 bad request should fall back to V2");
+
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0].content_id, "FALLBACK1");
+        assert_eq!(content[0].author, "creator");
+        assert_eq!(
+            content[0].url.as_deref(),
+            Some("https://www.instagram.com/p/FALLBACK1/")
+        );
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests[0].starts_with(
+                "GET /api/v1/instagram/v3/general_search?query=%23fitness&enable_metadata=true "
+            ),
+            "unexpected request line: {}",
+            requests[0]
+        );
+        assert!(
+            requests[1].starts_with("GET /api/v1/instagram/v2/general_search?keyword=fitness "),
+            "unexpected request line: {}",
+            requests[1]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fetch_by_keyword_does_not_fallback_on_unauthorized() {
+        let (base_url, requests) =
+            spawn_mock_http_server_with_capture(vec![MockHttpResponse::json(
+                401,
+                json!({"message": "unauthorized"}),
+            )])
+            .await;
+        let client = TikHubClient::new("test-key", base_url).unwrap();
+        let adapter = InstagramAdapter::new(client);
+
+        let result = adapter
+            .fetch_by_keyword(
+                &KeywordType::Hashtag("fitness".to_string()),
+                &SearchOptions::new("fitness")
+                    .with_platform("instagram")
+                    .with_count(5),
+            )
+            .await;
+
+        assert!(matches!(result, Err(GatewayError::AuthFailed(_))));
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_by_keyword_does_not_fallback_on_rate_limit() {
+        let (base_url, requests) =
+            spawn_mock_http_server_with_capture(vec![MockHttpResponse::json(
+                429,
+                json!({"message": "rate limited"}),
+            )])
+            .await;
+        let client = TikHubClient::new("test-key", base_url).unwrap();
+        let adapter = InstagramAdapter::new(client);
+
+        let result = adapter
+            .fetch_by_keyword(
+                &KeywordType::Hashtag("fitness".to_string()),
+                &SearchOptions::new("fitness")
+                    .with_platform("instagram")
+                    .with_count(5),
+            )
+            .await;
+
+        assert!(matches!(result, Err(GatewayError::RateLimited { .. })));
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_search_uses_same_v3_to_v2_fallback() {
+        let (base_url, requests) = spawn_mock_http_server_with_capture(vec![
+            MockHttpResponse::json(
+                400,
+                json!({
+                    "detail": {
+                        "code": 400,
+                        "router": "/api/v1/instagram/v3/general_search",
+                        "params": {
+                            "query": "#travel",
+                            "enable_metadata": "true"
+                        }
+                    }
+                }),
+            ),
+            MockHttpResponse::json(
+                200,
+                instagram_v2_response("SEARCH1", "traveler", "https://example.test/travel.jpg"),
+            ),
+        ])
+        .await;
+        let client = TikHubClient::new("test-key", base_url).unwrap();
+        let adapter = InstagramAdapter::new(client);
+
+        let content = adapter
+            .search(
+                &SearchOptions::new("travel")
+                    .with_platform("instagram")
+                    .with_count(1),
+            )
+            .await
+            .expect("search should use the same V3 to V2 fallback");
+
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0].content_id, "SEARCH1");
+        assert_eq!(content[0].author, "traveler");
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
     }
 }

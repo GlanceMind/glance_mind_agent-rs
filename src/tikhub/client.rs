@@ -743,6 +743,53 @@ impl TikHubClient {
         .await
     }
 
+    /// Search Instagram posts and related media by keyword using V2 general search.
+    ///
+    /// Endpoint: `/api/v1/instagram/v2/general_search`
+    pub async fn search_instagram_general_v2(
+        &self,
+        keyword: &str,
+    ) -> Result<GeneralSearchV2Response, TikHubError> {
+        let url = format!("{}/api/v1/instagram/v2/general_search", self.base_url);
+        let keyword = keyword.trim().trim_start_matches('#');
+
+        if keyword.is_empty() {
+            return Err(TikHubError::InvalidParam(
+                "Instagram V2 general_search keyword is required".to_string(),
+            ));
+        }
+
+        info!(keyword = %keyword, "Instagram: Searching via V2 general_search");
+
+        let query_params: Vec<(&str, &str)> = vec![("keyword", keyword)];
+        let data: GeneralSearchV2Response =
+            self.get_with_status_handling(&url, &query_params).await?;
+
+        if data.code != 200 {
+            warn!(code = data.code, message = %data.message, "Instagram V2 API error");
+            return Err(TikHubError::from_api_code(data.code, &data.message));
+        }
+
+        let post_count = Self::extract_instagram_general_v2_posts(&data).len();
+
+        info!(keyword = %keyword, post_count = post_count, "Instagram: V2 general_search completed");
+
+        Ok(data)
+    }
+
+    /// Search Instagram posts and related media by keyword using V2 general search with retry.
+    pub async fn search_instagram_general_v2_with_retry(
+        &self,
+        keyword: &str,
+    ) -> Result<GeneralSearchV2Response, TikHubError> {
+        let keyword = keyword.to_string();
+        self.with_retry("search_instagram_general_v2", || {
+            let q = keyword.clone();
+            async move { self.search_instagram_general_v2(&q).await }
+        })
+        .await
+    }
+
     /// Search Instagram Reels by keyword
     ///
     /// Endpoint: `/api/v1/instagram/v2/search_reels`
@@ -1703,11 +1750,92 @@ impl TikHubClient {
             })
             .unwrap_or_default()
     }
+
+    /// Extract Instagram posts from the V2 general search response.
+    pub fn extract_instagram_general_v2_posts(
+        response: &GeneralSearchV2Response,
+    ) -> Vec<&InstagramPost> {
+        response
+            .data
+            .as_ref()
+            .and_then(|data| data.data.as_ref())
+            .and_then(|data| data.items.as_ref())
+            .map(|items| items.iter().collect())
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    struct MockHttpResponse {
+        status: u16,
+        body: serde_json::Value,
+    }
+
+    impl MockHttpResponse {
+        fn json(status: u16, body: serde_json::Value) -> Self {
+            Self { status, body }
+        }
+    }
+
+    async fn spawn_mock_http_server_with_capture(
+        responses: Vec<MockHttpResponse>,
+    ) -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let responses = Arc::new(Mutex::new(VecDeque::from(responses)));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let expected_requests = responses.lock().unwrap().len();
+        let captured_requests = requests.clone();
+
+        tokio::spawn(async move {
+            for _ in 0..expected_requests {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let responses = responses.clone();
+                let requests = captured_requests.clone();
+
+                tokio::spawn(async move {
+                    let mut buffer = vec![0_u8; 8192];
+                    let size = socket.read(&mut buffer).await.unwrap();
+                    let request_text = String::from_utf8_lossy(&buffer[..size]).to_string();
+                    if let Some(request_line) = request_text.lines().next() {
+                        requests.lock().unwrap().push(request_line.to_string());
+                    }
+
+                    let response = responses.lock().unwrap().pop_front().unwrap_or_else(|| {
+                        MockHttpResponse::json(500, json!({"message": "missing mock response"}))
+                    });
+                    let reason = match response.status {
+                        200 => "OK",
+                        400 => "Bad Request",
+                        401 => "Unauthorized",
+                        429 => "Too Many Requests",
+                        _ => "Mock Response",
+                    };
+                    let body = serde_json::to_string(&response.body).unwrap();
+                    let raw = format!(
+                        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        response.status,
+                        reason,
+                        body.len(),
+                        body
+                    );
+
+                    socket.write_all(raw.as_bytes()).await.unwrap();
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+
+        (format!("http://{}", addr), requests)
+    }
 
     #[test]
     fn test_search_params_builder() {
@@ -1732,5 +1860,80 @@ mod tests {
     fn test_comment_params_max_count() {
         let params = CommentParams::new().with_count(500);
         assert_eq!(params.count, 100); // Should be capped at 100
+    }
+
+    #[tokio::test]
+    async fn test_instagram_v2_general_search_uses_keyword_param_and_extracts_posts() {
+        let body = json!({
+            "code": 200,
+            "message": "ok",
+            "data": {
+                "data": {
+                    "items": [
+                        {
+                            "code": "ABC123",
+                            "pk": "3824454208267080788",
+                            "product_type": "clips",
+                            "media_type": 2,
+                            "caption": {"text": "fallback works"},
+                            "user": {
+                                "id": "u1",
+                                "pk": "u1",
+                                "username": "creator",
+                                "full_name": "Creator",
+                                "profile_pic_url": "https://example.test/avatar.jpg",
+                                "is_verified": false
+                            },
+                            "like_count": 7,
+                            "comment_count": 2,
+                            "play_count": 99,
+                            "image_versions2": {
+                                "candidates": [
+                                    {"url": "https://example.test/thumb.jpg", "width": 640, "height": 640}
+                                ]
+                            },
+                            "taken_at": 1778338738
+                        }
+                    ]
+                },
+                "pagination_token": "next-page"
+            }
+        });
+        let (base_url, requests) =
+            spawn_mock_http_server_with_capture(vec![MockHttpResponse::json(200, body)]).await;
+        let client = TikHubClient::new("test-key", base_url).unwrap();
+
+        let response = client
+            .search_instagram_general_v2("#fitness")
+            .await
+            .expect("V2 general_search should parse");
+        let posts = TikHubClient::extract_instagram_general_v2_posts(&response);
+
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].code.as_deref(), Some("ABC123"));
+        assert_eq!(posts[0].author_username(), Some("creator"));
+        assert_eq!(posts[0].thumbnail(), Some("https://example.test/thumb.jpg"));
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(
+            requests[0].starts_with("GET /api/v1/instagram/v2/general_search?keyword=fitness "),
+            "unexpected request line: {}",
+            requests[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_instagram_v2_general_search_rejects_empty_keyword_before_http() {
+        let (base_url, requests) = spawn_mock_http_server_with_capture(vec![]).await;
+        let client = TikHubClient::new("test-key", base_url).unwrap();
+
+        let err = client
+            .search_instagram_general_v2("   #   ")
+            .await
+            .expect_err("empty keyword should be rejected locally");
+
+        assert!(matches!(err, TikHubError::InvalidParam(_)));
+        assert!(requests.lock().unwrap().is_empty());
     }
 }

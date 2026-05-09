@@ -17,11 +17,17 @@ use glance_mind_agent_rs::tikhub::{
     // TikTok
     SearchParams,
     TikHubClient,
+    TikHubError,
     TwitterCommentParams,
     // Twitter
     TwitterSearchParams,
 };
 use glance_mind_agent_rs::{ContentGateway, InstagramAdapter, KeywordType, SearchOptions};
+
+/// Verified on 2026-05-09 with the current local TikHub key:
+/// V2 general_search returns HTTP 200, business code=200, 8 items,
+/// and the first item includes a shortcode.
+const INSTAGRAM_LIVE_SMOKE_KEYWORD: &str = "cat";
 
 /// Helper to create client from env
 fn create_client() -> Option<TikHubClient> {
@@ -210,41 +216,86 @@ async fn test_instagram_v3_general_search_real() {
                 "V3 image_versions2 should expose a thumbnail URL"
             );
         }
+        Err(TikHubError::BadRequest { message }) => {
+            println!(
+                "⚠️  Instagram V3 general_search returned HTTP 400; fallback path should cover this. Body: {}",
+                message
+            );
+        }
         Err(e) => {
             println!("❌ Instagram V3 General Search Error: {:?}", e);
-            panic!("Instagram V3 general_search failed: {:?}", e);
+            panic!(
+                "Instagram V3 general_search failed with non-fallback error: {:?}",
+                e
+            );
         }
     }
 }
 
 #[tokio::test]
-async fn test_instagram_adapter_uses_v3_general_search_real() {
+async fn test_instagram_v2_general_search_real() {
+    let Some(client) = create_client() else {
+        return;
+    };
+
+    println!("\n🔍 Testing Instagram V2 API (General Search fallback)...");
+
+    match client
+        .search_instagram_general_v2_with_retry(INSTAGRAM_LIVE_SMOKE_KEYWORD)
+        .await
+    {
+        Ok(response) => {
+            let posts = TikHubClient::extract_instagram_general_v2_posts(&response);
+            println!(
+                "✅ Instagram V2 General Search: Found {} posts",
+                posts.len()
+            );
+
+            assert_eq!(response.code, 200, "TikHub V2 should return success code");
+            assert!(
+                !posts.is_empty(),
+                "V2 general_search should return media posts"
+            );
+            assert!(
+                !posts[0].code.as_deref().unwrap_or("").is_empty(),
+                "V2 media should include shortcode for downstream comment fetches"
+            );
+        }
+        Err(e) => {
+            println!("❌ Instagram V2 General Search Error: {:?}", e);
+            panic!("Instagram V2 general_search failed: {:?}", e);
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_instagram_adapter_uses_fallback_capable_search_real() {
     let _ = dotenvy::dotenv();
     let Ok(adapter) = InstagramAdapter::from_env() else {
         eprintln!("⚠️  Skipping test - InstagramAdapter::from_env failed");
         return;
     };
 
-    println!("\n🔍 Testing Instagram adapter via V3 general_search...");
+    println!("\n🔍 Testing Instagram adapter via fallback-capable search...");
 
     let contents = adapter
         .fetch_by_keyword(
-            &KeywordType::Hashtag("muhameds".to_string()),
-            &SearchOptions::new("muhameds")
+            &KeywordType::Hashtag(INSTAGRAM_LIVE_SMOKE_KEYWORD.to_string()),
+            &SearchOptions::new(INSTAGRAM_LIVE_SMOKE_KEYWORD)
                 .with_platform("instagram")
                 .with_count(3),
         )
         .await
-        .expect("Instagram adapter should fetch content via V3 general_search");
+        .expect("Instagram adapter should fetch content via V3 or V2 fallback");
 
     println!(
-        "✅ Instagram Adapter V3 Search: Found {} posts",
+        "✅ Instagram Adapter fallback-capable search: Found {} posts",
         contents.len()
     );
 
     assert!(
         !contents.is_empty(),
-        "adapter should return V3 media content"
+        "adapter should return media content via V3 or V2 fallback"
     );
     assert_eq!(contents[0].platform, "instagram");
     assert!(
