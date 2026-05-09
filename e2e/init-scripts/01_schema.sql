@@ -175,7 +175,8 @@ CREATE TABLE IF NOT EXISTS gm_campaigns (
     search_options JSONB DEFAULT '{}',
     auto_reply_comments BOOLEAN DEFAULT true NOT NULL,
     auto_reply_post BOOLEAN DEFAULT true NOT NULL,
-    completed_reason TEXT
+    completed_reason TEXT,
+    reply_template_ids INTEGER[] DEFAULT '{}' NOT NULL
 );
 
 -- User-level reusable reply template library
