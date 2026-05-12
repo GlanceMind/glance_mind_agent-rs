@@ -43,7 +43,7 @@ cp .env.example .env
 
 ```bash
 # 必需
-OPENAI_API_KEY=your_openai_api_key
+DEEPSEEK_API_KEY=your_deepseek_api_key
 
 # E2E 默认走内部 TikHub mock，可直接保留
 TIKHUB_API_KEY=mock-tikhub-key
@@ -60,10 +60,10 @@ FACEBOOK_RAPIDAPI_KEY=your_facebook_rapidapi_key
 FACEBOOK_RAPIDAPI_HOST=facebook-scraper3.p.rapidapi.com
 FACEBOOK_RAPIDAPI_BASE_URL=http://facebook-scraper-mock:8600
 
-# OpenAI supplier override
-# 默认会被 docker-compose 固定到 laozhang-mock，只有你手动改 compose 时才需要
-OPENAI_BASE_URL=http://laozhang-mock:8100/v1
-AI_MODEL=deepseek-ai/DeepSeek-V3
+# DeepSeek/OpenAI-compatible supplier override
+# 默认可指向 DeepSeek；E2E 可手动改到 OpenAI-compatible mock
+DEEPSEEK_BASE_URL=http://laozhang-mock:8100/v1
+DEEPSEEK_MODEL=deepseek-chat
 ```
 
 ### 2. 运行测试
@@ -114,12 +114,12 @@ pytest test_e2e_facebook.py -v
 |------|------|--------|------|
 | `TIKHUB_API_KEY` | 仅 TikHub 场景强依赖 | mock-tikhub-key | TikHub API 密钥 |
 | `FACEBOOK_RAPIDAPI_KEY` | Facebook 场景 | mock-facebook-key | Facebook RapidAPI 密钥 |
-| `OPENAI_API_KEY` | ✅ | - | OpenAI API 密钥 |
+| `DEEPSEEK_API_KEY` | ✅ | - | DeepSeek API 密钥 |
 | `TIKHUB_BASE_URL` | ❌ | http://tikhub-mock:8500 | TikHub API 地址，E2E 默认走内部 mock |
 | `FACEBOOK_RAPIDAPI_HOST` | ❌ | facebook-scraper3.p.rapidapi.com | Facebook RapidAPI Host |
 | `FACEBOOK_RAPIDAPI_BASE_URL` | ❌ | http://facebook-scraper-mock:8600 | Facebook RapidAPI Base URL |
-| `OPENAI_BASE_URL` | 由 E2E compose 固定 | http://laozhang-mock:8100/v1 | OpenAI API 地址 |
-| `AI_MODEL` | ❌ | deepseek-ai/DeepSeek-V3 | AI 模型名称 |
+| `DEEPSEEK_BASE_URL` | ❌ | https://api.deepseek.com/v1 | DeepSeek/OpenAI-compatible API 地址 |
+| `DEEPSEEK_MODEL` | ❌ | deepseek-chat | DeepSeek 模型名称 |
 | `POSTGRES_PORT` | ❌ | 5433 | PostgreSQL 端口 |
 | `REDIS_PORT` | ❌ | 6380 | Redis 端口 |
 | `E2E_TIMEOUT` | ❌ | 300 | 测试超时时间(秒) |
@@ -138,7 +138,7 @@ pytest test_e2e_facebook.py -v
 | 08 | wallet_updated | 验证钱包余额变化 |
 | 09 | summary | 打印测试汇总 |
 
-Twitter 端到端路径使用内部 `tikhub-mock`，Facebook 使用内部 `facebook-scraper-mock`，评论分析默认走内部 `laozhang-mock`，因此不依赖真实 Twitter/Facebook/OpenAI 供应商即可验证 Scheduler -> Agent-rs -> PostgreSQL 的全链路。
+Twitter 端到端路径使用内部 `tikhub-mock`，Facebook 使用内部 `facebook-scraper-mock`，评论分析可配置到 OpenAI-compatible mock，因此不依赖真实 Twitter/Facebook/DeepSeek 供应商即可验证 Scheduler -> Agent-rs -> PostgreSQL 的全链路。
 
 ## 目录结构
 
@@ -213,9 +213,9 @@ docker-compose logs agent-rs | tail -50
 curl -H "Authorization: Bearer $TIKHUB_API_KEY" \
   "https://api.tikhub.io/api/v1/tiktok/app/v3/fetch_video_search_result?keyword=test&count=1"
 
-# 测试 OpenAI
-curl -H "Authorization: Bearer $OPENAI_API_KEY" \
+# 测试 DeepSeek/OpenAI-compatible API
+curl -H "Authorization: Bearer $DEEPSEEK_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}' \
-  "$OPENAI_BASE_URL/chat/completions"
+  -d '{"model":"'"${DEEPSEEK_MODEL:-deepseek-chat}"'","messages":[{"role":"user","content":"hi"}]}' \
+  "${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}/chat/completions"
 ```

@@ -108,7 +108,7 @@ Remaining gaps:
 1. `twitter_rest_id:` is implemented, but it does not yet have dedicated live API, real DB workflow, or E2E coverage.
 2. Twitter-specific Postgres upsert/update branches are covered mainly through full workflow tests, but not with focused unit tests for malformed `raw_data`, insert-vs-update behavior, or update helpers.
 3. Twitter adapter error-path tests for 401/402/429/5xx are still thin. The happy path is well covered; supplier failure behavior is less directly exercised.
-4. `--health_check` validates Redis, PostgreSQL, generic TikHub credentials, and OpenAI, but it does not perform a Twitter-specific live contract check.
+4. `--health_check` validates Redis, PostgreSQL, generic TikHub credentials, and DeepSeek, but it does not perform a Twitter-specific live contract check.
 
 Practical conclusion:
 
@@ -123,7 +123,7 @@ Practical conclusion:
 | --- | --- | --- |
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
 | `TIKHUB_API_KEY` | Yes | Required for Twitter/TikTok/Instagram/Reddit |
-| `OPENAI_API_KEY` | Yes | Required for AI analysis |
+| `DEEPSEEK_API_KEY` | Yes | Required for AI analysis |
 | `REDIS_URL` | Usually yes | Defaults exist in some entrypoints, but should be set explicitly in production |
 
 ### Optional but commonly needed
@@ -131,7 +131,8 @@ Practical conclusion:
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `TIKHUB_BASE_URL` | `https://api.tikhub.io` | Use the real TikHub base URL in production |
-| `OPENAI_BASE_URL` | `https://timicc.com/v1` | Override if you use another OpenAI-compatible endpoint |
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com/v1` | Override if you use another DeepSeek-compatible endpoint |
+| `DEEPSEEK_MODEL` | `deepseek-chat` | DeepSeek model name |
 | `AGENT_QUEUE_NAME` | `crawler:task_queue` | Must match scheduler |
 | `RUST_LOG` | `info,glance_mind_agent_rs=debug` | Adjust for production logging |
 | `AGENT_MAX_CONCURRENT_TASKS` | `5` | Global task concurrency |
@@ -166,8 +167,9 @@ AGENT_QUEUE_NAME=crawler:task_queue
 TIKHUB_API_KEY=your_real_tikhub_key
 TIKHUB_BASE_URL=https://api.tikhub.io
 
-OPENAI_API_KEY=your_openai_compatible_key
-OPENAI_BASE_URL=https://timicc.com/v1
+DEEPSEEK_API_KEY=your_deepseek_key
+DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
+DEEPSEEK_MODEL=deepseek-chat
 
 RUST_LOG=info,glance_mind_agent_rs=debug
 AGENT_MAX_CONCURRENT_TASKS=5
@@ -219,7 +221,7 @@ At minimum for Twitter production:
 
 - Secret: `DATABASE_URL`
 - Secret: `TIKHUB_API_KEY`
-- Secret: `OPENAI_API_KEY`
+- Secret: `DEEPSEEK_API_KEY`
 - Variable or default: `TIKHUB_BASE_URL`
 
 ## Important Mock vs Production Difference
@@ -276,7 +278,7 @@ The repo already contains the required schema definitions in:
 1. Apply the database schema that includes the Twitter tables.
 2. Set a real `TIKHUB_API_KEY`.
 3. Set `TIKHUB_BASE_URL=https://api.tikhub.io`.
-4. Set `OPENAI_API_KEY` and `OPENAI_BASE_URL`.
+4. Set `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, and `DEEPSEEK_MODEL`.
 5. Ensure scheduler and agent use the same `AGENT_QUEUE_NAME`.
 6. Start with conservative concurrency, especially `AGENT_TIKHUB_CONCURRENCY=3`.
 7. Prefer first rollout with `twitter_tweet_id:` or `twitter_handle:` campaigns before broader search traffic.
