@@ -1,6 +1,6 @@
-//! OpenAI Adapter - Implements AiAnalyzer for OpenAI-compatible APIs (timicc)
+//! OpenAI-compatible Adapter - Implements AiAnalyzer for DeepSeek
 //!
-//! This adapter provides AI-powered comment analysis using OpenAI-compatible APIs.
+//! This adapter provides AI-powered comment analysis using DeepSeek's OpenAI-compatible API.
 //! The prompt structure is synchronized with the Python glance_mind_agent.
 //!
 //! ## Rate Limiting
@@ -70,7 +70,16 @@ const MAX_VIDEO_DESC_LENGTH: usize = 500;
 /// Max total characters per batch (~15k tokens, leaving room for system prompt)
 const MAX_TOTAL_CHARS: usize = 60000;
 
-/// OpenAI adapter implementing AiAnalyzer
+const DEFAULT_DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com/v1";
+const DEFAULT_DEEPSEEK_MODEL: &str = "deepseek-chat";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ResolvedLanguage {
+    name: &'static str,
+    source: &'static str,
+}
+
+/// OpenAI-compatible adapter implementing AiAnalyzer with DeepSeek
 pub struct OpenAiAdapter {
     client: Client,
     api_key: String,
@@ -86,9 +95,7 @@ pub struct OpenAiAdapter {
 }
 
 impl OpenAiAdapter {
-    /// Create a new OpenAI adapter
-    ///
-    /// Note: Default base_url is timicc (matching AI chat assistant)
+    /// Create a new OpenAI-compatible DeepSeek adapter
     pub fn new(
         api_key: impl Into<String>,
         base_url: Option<String>,
@@ -97,8 +104,8 @@ impl OpenAiAdapter {
         Self {
             client: Client::new(),
             api_key: api_key.into(),
-            base_url: base_url.unwrap_or_else(|| "https://timicc.com/v1".to_string()),
-            model: model.unwrap_or_else(|| "gpt-5.2".to_string()),
+            base_url: base_url.unwrap_or_else(|| DEFAULT_DEEPSEEK_BASE_URL.to_string()),
+            model: model.unwrap_or_else(|| DEFAULT_DEEPSEEK_MODEL.to_string()),
             // Note: Python agent does NOT set max_tokens (uses API default)
             // Setting to None to match Python behavior
             max_tokens: None,
@@ -108,18 +115,23 @@ impl OpenAiAdapter {
         }
     }
 
-    /// Create from environment variables
+    /// Create from DeepSeek environment variables
     ///
     /// Environment variables:
-    /// - OPENAI_API_KEY: API key for the AI service
-    /// - OPENAI_BASE_URL: Base URL (default: https://timicc.com/v1)
+    /// - DEEPSEEK_API_KEY: API key for the DeepSeek service
+    /// - DEEPSEEK_BASE_URL: Base URL (default: https://api.deepseek.com/v1)
+    /// - DEEPSEEK_MODEL: Model name (default: deepseek-chat)
     pub fn from_env() -> Result<Self, AiError> {
-        let api_key = std::env::var("OPENAI_API_KEY")
-            .map_err(|_| AiError::ServiceError("OPENAI_API_KEY not set".into()))?;
+        let api_key = std::env::var("DEEPSEEK_API_KEY")
+            .map_err(|_| AiError::ServiceError("DEEPSEEK_API_KEY not set".into()))?;
+        if api_key.trim().is_empty() {
+            return Err(AiError::ServiceError("DEEPSEEK_API_KEY not set".into()));
+        }
 
-        let base_url = std::env::var("OPENAI_BASE_URL").ok();
+        let base_url = std::env::var("DEEPSEEK_BASE_URL").ok();
+        let model = std::env::var("DEEPSEEK_MODEL").ok();
 
-        Ok(Self::new(api_key, base_url, None))
+        Ok(Self::new(api_key, base_url, model))
     }
 
     /// Set the model
@@ -158,6 +170,115 @@ impl OpenAiAdapter {
     pub fn with_retry_config(mut self, config: AiRetryConfig) -> Self {
         self.retry_config = config;
         self
+    }
+
+    fn normalize_language_tag(language: &str) -> Option<&'static str> {
+        let normalized = language
+            .trim()
+            .split(['-', '_'])
+            .next()
+            .unwrap_or_default()
+            .to_lowercase();
+
+        match normalized.as_str() {
+            "zh" | "cn" => Some("Chinese"),
+            "en" => Some("English"),
+            "ja" | "jp" => Some("Japanese"),
+            "ko" | "kr" => Some("Korean"),
+            "es" => Some("Spanish"),
+            "fr" => Some("French"),
+            "de" => Some("German"),
+            "pt" => Some("Portuguese"),
+            "it" => Some("Italian"),
+            "ru" => Some("Russian"),
+            "ar" => Some("Arabic"),
+            "th" => Some("Thai"),
+            "hi" => Some("Hindi"),
+            "id" => Some("Indonesian"),
+            "vi" => Some("Vietnamese"),
+            "tr" => Some("Turkish"),
+            _ => None,
+        }
+    }
+
+    fn post_title_text(content: &Content) -> &str {
+        content
+            .description
+            .split("\n\n")
+            .find(|part| !part.trim().is_empty())
+            .or_else(|| {
+                content
+                    .description
+                    .lines()
+                    .find(|line| !line.trim().is_empty())
+            })
+            .unwrap_or("")
+            .trim()
+    }
+
+    fn infer_language_from_text(text: &str) -> Option<&'static str> {
+        let mut has_latin = false;
+
+        for ch in text.chars() {
+            match ch {
+                '\u{4E00}'..='\u{9FFF}' | '\u{3400}'..='\u{4DBF}' => return Some("Chinese"),
+                '\u{3040}'..='\u{309F}' | '\u{30A0}'..='\u{30FF}' => return Some("Japanese"),
+                '\u{AC00}'..='\u{D7AF}' | '\u{1100}'..='\u{11FF}' => return Some("Korean"),
+                '\u{0400}'..='\u{04FF}' => return Some("Russian"),
+                '\u{0600}'..='\u{06FF}' => return Some("Arabic"),
+                '\u{0E00}'..='\u{0E7F}' => return Some("Thai"),
+                '\u{0900}'..='\u{097F}' => return Some("Hindi"),
+                _ if ch.is_ascii_alphabetic() => has_latin = true,
+                _ => {}
+            }
+        }
+
+        if has_latin {
+            Some("English")
+        } else {
+            None
+        }
+    }
+
+    fn resolve_response_language(content: &Content, comment: &Comment) -> ResolvedLanguage {
+        if let Some(language) = comment
+            .language
+            .as_deref()
+            .and_then(Self::normalize_language_tag)
+        {
+            return ResolvedLanguage {
+                name: language,
+                source: "comment_language",
+            };
+        }
+
+        if let Some(language) = Self::infer_language_from_text(&comment.text) {
+            return ResolvedLanguage {
+                name: language,
+                source: "comment_text",
+            };
+        }
+
+        let post_title = Self::post_title_text(content);
+        if let Some(language) = Self::infer_language_from_text(post_title) {
+            return ResolvedLanguage {
+                name: language,
+                source: "post_title",
+            };
+        }
+
+        let user_name = comment.author_name.as_deref().unwrap_or(&comment.author);
+        if let Some(language) = Self::infer_language_from_text(user_name) {
+            return ResolvedLanguage {
+                name: language,
+                source: "user_name",
+            };
+        }
+
+        ResolvedLanguage {
+            name: "English",
+            source: "default",
+        }
     }
 
     /// Check if an error is retryable
@@ -284,6 +405,8 @@ For selected comments, you **must** generate the following three items:
    - **Writing Logic:** Use self-deprecating humor, one-line pain point summaries, or controversial questions.
 
 # Language & Style Guidelines
+- **Per-Comment Language:** Each input comment declares a `Response Language`. For that comment, `suggested_reply`, `suggested_dm`, and `suggested_reply_post` must use the same Response Language.
+- **Do Not Translate Usernames:** Keep usernames/nicknames exactly as provided while writing the surrounding reply in the Response Language.
 - **Avoid AI Feel:** No robotic language. Use native social media language (e.g., "Slay/Mood/FR/no cap").
 - **Create Tension:** Comments should be punchy and impactful.
 - **Adaptive Logic:** For positive comments, "meme it up". For negative comments, use "elegant comeback" or "hard reversal".
@@ -385,10 +508,15 @@ If no suitable comments, return: {{"suggestions": []}}
 
             // Use author_name (nickname) if available, otherwise use author (unique_id)
             let user_nickname = comment.author_name.as_deref().unwrap_or(&comment.author);
+            let response_language = Self::resolve_response_language(content, comment);
 
             let comment_str = format!(
-                "- ID: {}, User: {}, Content: {}\n",
-                comment.comment_id, user_nickname, content_text,
+                "- ID: {}, User: {}, Response Language: {} (source: {}), Content: {}\n",
+                comment.comment_id,
+                user_nickname,
+                response_language.name,
+                response_language.source,
+                content_text,
             );
 
             // Check total character limit
@@ -826,6 +954,266 @@ mod tests {
         let prompt = adapter.build_user_prompt(&content, &comments, Some("Batch 1/3"));
 
         assert!(prompt.contains("Batch Info: Batch 1/3"));
+    }
+
+    #[test]
+    fn test_from_env_requires_deepseek_api_key() {
+        let openai_api_key = std::env::var("OPENAI_API_KEY").ok();
+        let openai_base_url = std::env::var("OPENAI_BASE_URL").ok();
+        let deepseek_api_key = std::env::var("DEEPSEEK_API_KEY").ok();
+        let deepseek_base_url = std::env::var("DEEPSEEK_BASE_URL").ok();
+        let deepseek_model = std::env::var("DEEPSEEK_MODEL").ok();
+
+        std::env::remove_var("OPENAI_API_KEY");
+        std::env::remove_var("OPENAI_BASE_URL");
+        std::env::remove_var("DEEPSEEK_API_KEY");
+        std::env::remove_var("DEEPSEEK_BASE_URL");
+        std::env::remove_var("DEEPSEEK_MODEL");
+        std::env::set_var("OPENAI_API_KEY", "legacy-key");
+
+        let result = OpenAiAdapter::from_env();
+
+        if let Some(value) = openai_api_key {
+            std::env::set_var("OPENAI_API_KEY", value);
+        } else {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+        if let Some(value) = openai_base_url {
+            std::env::set_var("OPENAI_BASE_URL", value);
+        } else {
+            std::env::remove_var("OPENAI_BASE_URL");
+        }
+        if let Some(value) = deepseek_api_key {
+            std::env::set_var("DEEPSEEK_API_KEY", value);
+        } else {
+            std::env::remove_var("DEEPSEEK_API_KEY");
+        }
+        if let Some(value) = deepseek_base_url {
+            std::env::set_var("DEEPSEEK_BASE_URL", value);
+        } else {
+            std::env::remove_var("DEEPSEEK_BASE_URL");
+        }
+        if let Some(value) = deepseek_model {
+            std::env::set_var("DEEPSEEK_MODEL", value);
+        } else {
+            std::env::remove_var("DEEPSEEK_MODEL");
+        }
+
+        let err = match result {
+            Ok(_) => panic!("adapter should reject missing DEEPSEEK_API_KEY"),
+            Err(err) => err,
+        };
+        assert!(format!("{}", err).contains("DEEPSEEK_API_KEY not set"));
+    }
+
+    #[test]
+    fn test_from_env_rejects_blank_deepseek_api_key() {
+        let openai_api_key = std::env::var("OPENAI_API_KEY").ok();
+        let openai_base_url = std::env::var("OPENAI_BASE_URL").ok();
+        let deepseek_api_key = std::env::var("DEEPSEEK_API_KEY").ok();
+        let deepseek_base_url = std::env::var("DEEPSEEK_BASE_URL").ok();
+        let deepseek_model = std::env::var("DEEPSEEK_MODEL").ok();
+
+        std::env::remove_var("OPENAI_API_KEY");
+        std::env::remove_var("OPENAI_BASE_URL");
+        std::env::set_var("DEEPSEEK_API_KEY", "   ");
+        std::env::remove_var("DEEPSEEK_BASE_URL");
+        std::env::remove_var("DEEPSEEK_MODEL");
+
+        let result = OpenAiAdapter::from_env();
+
+        if let Some(value) = openai_api_key {
+            std::env::set_var("OPENAI_API_KEY", value);
+        } else {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+        if let Some(value) = openai_base_url {
+            std::env::set_var("OPENAI_BASE_URL", value);
+        } else {
+            std::env::remove_var("OPENAI_BASE_URL");
+        }
+        if let Some(value) = deepseek_api_key {
+            std::env::set_var("DEEPSEEK_API_KEY", value);
+        } else {
+            std::env::remove_var("DEEPSEEK_API_KEY");
+        }
+        if let Some(value) = deepseek_base_url {
+            std::env::set_var("DEEPSEEK_BASE_URL", value);
+        } else {
+            std::env::remove_var("DEEPSEEK_BASE_URL");
+        }
+        if let Some(value) = deepseek_model {
+            std::env::set_var("DEEPSEEK_MODEL", value);
+        } else {
+            std::env::remove_var("DEEPSEEK_MODEL");
+        }
+
+        let err = match result {
+            Ok(_) => panic!("adapter should reject blank DEEPSEEK_API_KEY"),
+            Err(err) => err,
+        };
+        assert!(format!("{}", err).contains("DEEPSEEK_API_KEY not set"));
+    }
+
+    #[test]
+    fn test_from_env_uses_deepseek_over_openai_env() {
+        let openai_api_key = std::env::var("OPENAI_API_KEY").ok();
+        let openai_base_url = std::env::var("OPENAI_BASE_URL").ok();
+        let deepseek_api_key = std::env::var("DEEPSEEK_API_KEY").ok();
+        let deepseek_base_url = std::env::var("DEEPSEEK_BASE_URL").ok();
+        let deepseek_model = std::env::var("DEEPSEEK_MODEL").ok();
+
+        std::env::set_var("OPENAI_API_KEY", "legacy-key");
+        std::env::set_var("OPENAI_BASE_URL", "https://legacy.example/v1");
+        std::env::set_var("DEEPSEEK_API_KEY", "deepseek-key");
+        std::env::set_var("DEEPSEEK_BASE_URL", "https://deepseek.example/v1");
+        std::env::set_var("DEEPSEEK_MODEL", "deepseek-chat");
+
+        let adapter = OpenAiAdapter::from_env().expect("adapter should initialize");
+
+        if let Some(value) = openai_api_key {
+            std::env::set_var("OPENAI_API_KEY", value);
+        } else {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+        if let Some(value) = openai_base_url {
+            std::env::set_var("OPENAI_BASE_URL", value);
+        } else {
+            std::env::remove_var("OPENAI_BASE_URL");
+        }
+        if let Some(value) = deepseek_api_key {
+            std::env::set_var("DEEPSEEK_API_KEY", value);
+        } else {
+            std::env::remove_var("DEEPSEEK_API_KEY");
+        }
+        if let Some(value) = deepseek_base_url {
+            std::env::set_var("DEEPSEEK_BASE_URL", value);
+        } else {
+            std::env::remove_var("DEEPSEEK_BASE_URL");
+        }
+        if let Some(value) = deepseek_model {
+            std::env::set_var("DEEPSEEK_MODEL", value);
+        } else {
+            std::env::remove_var("DEEPSEEK_MODEL");
+        }
+
+        assert_eq!(adapter.api_key, "deepseek-key");
+        assert_eq!(adapter.base_url, "https://deepseek.example/v1");
+        assert_eq!(adapter.model_name(), "deepseek-chat");
+    }
+
+    #[test]
+    fn test_new_defaults_to_deepseek_values() {
+        let adapter = OpenAiAdapter::new("test-key", None, None);
+
+        assert_eq!(adapter.base_url, "https://api.deepseek.com/v1");
+        assert_eq!(adapter.model_name(), "deepseek-chat");
+    }
+
+    #[test]
+    fn test_build_system_prompt_requires_shared_response_language() {
+        let adapter = OpenAiAdapter::new("test-key", None, None);
+        let context = AnalysisContext::new().with_reply_strategy("Be friendly");
+
+        let prompt = adapter.build_system_prompt(&context);
+
+        assert!(prompt.contains("suggested_reply"));
+        assert!(prompt.contains("suggested_dm"));
+        assert!(prompt.contains("suggested_reply_post"));
+        assert!(prompt.contains("same Response Language"));
+    }
+
+    #[test]
+    fn test_language_priority_uses_comment_language() {
+        let adapter = OpenAiAdapter::new("test-key", None, None);
+        let content = Content::new("tiktok", "v123")
+            .with_author("author")
+            .with_description("Great post");
+        let comment = Comment::new("tiktok", "c1", "v123")
+            .with_author("alice")
+            .with_author_name("Alice")
+            .with_language("zh")
+            .with_text("nice");
+
+        let prompt = adapter.build_user_prompt(&content, &[comment], None);
+
+        assert!(prompt.contains("Response Language: Chinese"));
+    }
+
+    #[test]
+    fn test_language_priority_infers_comment_text_before_post_title() {
+        let adapter = OpenAiAdapter::new("test-key", None, None);
+        let content = Content::new("reddit", "p1")
+            .with_author("author")
+            .with_description("Great English title");
+        let comment = Comment::new("reddit", "c1", "p1")
+            .with_author("alice")
+            .with_author_name("Alice")
+            .with_text("这是评论");
+
+        let prompt = adapter.build_user_prompt(&content, &[comment], None);
+
+        assert!(prompt.contains("Response Language: Chinese"));
+    }
+
+    #[test]
+    fn test_language_priority_uses_post_title_when_comment_language_missing() {
+        let adapter = OpenAiAdapter::new("test-key", None, None);
+        let content = Content::new("reddit", "p1")
+            .with_author("author")
+            .with_description("これはタイトル\n\nBody in English");
+        let comment = Comment::new("reddit", "c1", "p1")
+            .with_author("alice")
+            .with_author_name("Alice")
+            .with_text("👍");
+
+        let prompt = adapter.build_user_prompt(&content, &[comment], None);
+
+        assert!(prompt.contains("Response Language: Japanese"));
+    }
+
+    #[test]
+    fn test_language_priority_uses_username_when_comment_and_title_unknown() {
+        let adapter = OpenAiAdapter::new("test-key", None, None);
+        let content = Content::new("instagram", "p1")
+            .with_author("author")
+            .with_description("12345");
+        let comment = Comment::new("instagram", "c1", "p1")
+            .with_author("alice")
+            .with_author_name("小明")
+            .with_text("👍");
+
+        let prompt = adapter.build_user_prompt(&content, &[comment], None);
+
+        assert!(prompt.contains("Response Language: Chinese"));
+    }
+
+    #[test]
+    fn test_language_priority_defaults_to_english() {
+        let adapter = OpenAiAdapter::new("test-key", None, None);
+        let content = Content::new("facebook", "p1")
+            .with_author("author")
+            .with_description("12345");
+        let comment = Comment::new("facebook", "c1", "p1")
+            .with_author("12345")
+            .with_text("👍");
+
+        let prompt = adapter.build_user_prompt(&content, &[comment], None);
+
+        assert!(prompt.contains("Response Language: English"));
+    }
+
+    #[test]
+    fn test_prompt_requires_reply_dm_and_reply_post_same_language() {
+        let adapter = OpenAiAdapter::new("test-key", None, None);
+        let context = AnalysisContext::new().with_reply_strategy("Be friendly");
+
+        let prompt = adapter.build_system_prompt(&context);
+
+        assert!(prompt.contains("suggested_reply"));
+        assert!(prompt.contains("suggested_dm"));
+        assert!(prompt.contains("suggested_reply_post"));
+        assert!(prompt.contains("use the same Response Language"));
     }
 
     #[test]

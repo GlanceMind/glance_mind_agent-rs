@@ -25,7 +25,7 @@ if [ ! -f .env ]; then
     echo ""
     echo "Then fill in your API keys:"
     echo "  - TIKHUB_API_KEY"
-    echo "  - OPENAI_API_KEY"
+    echo "  - DEEPSEEK_API_KEY"
     exit 1
 fi
 
@@ -36,8 +36,8 @@ if [ -z "$TIKHUB_API_KEY" ] || [ "$TIKHUB_API_KEY" = "your_tikhub_api_key_here" 
     exit 1
 fi
 
-if [ -z "$OPENAI_API_KEY" ] || [ "$OPENAI_API_KEY" = "your_openai_api_key_here" ]; then
-    echo "[ERROR] OPENAI_API_KEY is not set in .env"
+if [ -z "$DEEPSEEK_API_KEY" ] || [ "$DEEPSEEK_API_KEY" = "your_deepseek_api_key_here" ]; then
+    echo "[ERROR] DEEPSEEK_API_KEY is not set in .env"
     exit 1
 fi
 

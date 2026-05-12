@@ -15,7 +15,7 @@ AI-powered social media comment analysis agent - High-performance Rust implement
 - **Hexagonal Architecture**: Clean separation of domain, ports, and adapters
 - **Multi-Platform Support**: Extensible platform strategy pattern (TikTok, Instagram, etc.)
 - **Facebook Support**: RapidAPI `facebook-scraper3` integration for posts, pages, places, and post URL workflows
-- **AI Integration**: OpenAI-compatible API support for comment analysis
+- **AI Integration**: DeepSeek OpenAI-compatible API support for comment analysis
 - **Robust Error Handling**: Typed errors with retry mechanisms for transient failures
 - **E2E Testing**: Complete Docker-based test environment
 
@@ -62,7 +62,7 @@ AI-powered social media comment analysis agent - High-performance Rust implement
 - PostgreSQL 15+
 - Redis 7+
 - TikHub API Key
-- AI Service API Key (OpenAI/SiliconFlow compatible)
+- DeepSeek API key
 
 ### Installation
 
@@ -105,13 +105,14 @@ Twitter deployment notes and coverage status:
 |----------|----------|---------|-------------|
 | `DATABASE_URL` | Yes | - | PostgreSQL connection string |
 | `TIKHUB_API_KEY` | Yes | - | TikHub API key |
-| `OPENAI_API_KEY` | Yes | - | AI service API key |
+| `DEEPSEEK_API_KEY` | Yes | - | DeepSeek API key |
 | `FACEBOOK_RAPIDAPI_KEY` | Facebook only | - | RapidAPI key for Facebook campaigns |
 | `REDIS_URL` | No | `redis://localhost:6379/0` | Redis connection URL |
 | `TIKHUB_BASE_URL` | No | `https://api.tikhub.io` | TikHub API base URL |
 | `FACEBOOK_RAPIDAPI_HOST` | No | `facebook-scraper3.p.rapidapi.com` | RapidAPI host header |
 | `FACEBOOK_RAPIDAPI_BASE_URL` | No | `https://facebook-scraper3.p.rapidapi.com` | Facebook RapidAPI base URL |
-| `OPENAI_BASE_URL` | No | `https://timicc.com/v1` | AI service base URL |
+| `DEEPSEEK_BASE_URL` | No | `https://api.deepseek.com/v1` | DeepSeek OpenAI-compatible base URL |
+| `DEEPSEEK_MODEL` | No | `deepseek-chat` | DeepSeek model name |
 | `RUST_LOG` | No | `info` | Log level |
 
 ### Concurrency Settings
@@ -216,7 +217,7 @@ The deployment workflow reads configuration from GitHub `secrets.*` and `vars.*`
 Required GitHub Secrets:
 - `DATABASE_URL`
 - `TIKHUB_API_KEY`
-- `OPENAI_API_KEY`
+- `DEEPSEEK_API_KEY`
 
 Optional GitHub Secret:
 - `FACEBOOK_RAPIDAPI_KEY` (required only if you want Facebook campaigns enabled in production or live Facebook tests)
@@ -226,7 +227,8 @@ Optional GitHub Variables:
 - `TIKHUB_BASE_URL` (default: `https://api.tikhub.io`)
 - `FACEBOOK_RAPIDAPI_HOST` (default: `facebook-scraper3.p.rapidapi.com`)
 - `FACEBOOK_RAPIDAPI_BASE_URL` (default: `https://facebook-scraper3.p.rapidapi.com`)
-- `OPENAI_BASE_URL` (default: `https://timicc.com/v1`)
+- `DEEPSEEK_BASE_URL` (default: `https://api.deepseek.com/v1`)
+- `DEEPSEEK_MODEL` (default: `deepseek-chat`)
 - `RUST_LOG` (default: `info,glance_mind_agent_rs=debug`)
 
 ## Protocol Sync
@@ -263,7 +265,7 @@ This syncs `lib_inline.rs` to `src/protocol_gen/mod.rs`.
 
 ### AI Service
 
-Compatible with OpenAI Chat Completions API format:
+DeepSeek is used through the OpenAI Chat Completions API format:
 - `POST /chat/completions`
 
 ## Database Tables

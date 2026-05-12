@@ -212,13 +212,13 @@ async fn main() -> anyhow::Result<()> {
             _ => None,
         };
 
-    // OpenAI adapter
+    // DeepSeek adapter (OpenAI-compatible client)
     let ai_adapter = match OpenAiAdapter::from_env() {
         Ok(adapter) => Arc::new(adapter) as Arc<dyn glance_mind_agent_rs::AiAnalyzer>,
         Err(e) => {
-            error!("Failed to create OpenAI adapter: {}", e);
+            error!("Failed to create DeepSeek adapter: {}", e);
             return Err(anyhow::anyhow!(
-                "OpenAI adapter initialization failed: {}",
+                "DeepSeek adapter initialization failed: {}",
                 e
             ));
         }
@@ -359,23 +359,23 @@ async fn run_health_check(redis_url: &str, database_url: &str) -> anyhow::Result
         }
     }
 
-    // Check OpenAI
-    info!("  Checking OpenAI API...");
+    // Check DeepSeek
+    info!("  Checking DeepSeek API...");
     match OpenAiAdapter::from_env() {
         Ok(adapter) => match adapter.health_check().await {
-            Ok(true) => info!("  ✅ OpenAI: OK"),
+            Ok(true) => info!("  ✅ DeepSeek: OK"),
             Ok(false) => {
-                error!("  ❌ OpenAI: API not responding");
-                return Err(anyhow::anyhow!("OpenAI health check failed"));
+                error!("  ❌ DeepSeek: API not responding");
+                return Err(anyhow::anyhow!("DeepSeek health check failed"));
             }
             Err(e) => {
-                error!("  ❌ OpenAI: {}", e);
-                return Err(anyhow::anyhow!("OpenAI health check failed: {}", e));
+                error!("  ❌ DeepSeek: {}", e);
+                return Err(anyhow::anyhow!("DeepSeek health check failed: {}", e));
             }
         },
         Err(e) => {
-            error!("  ❌ OpenAI: {}", e);
-            return Err(anyhow::anyhow!("OpenAI health check failed: {}", e));
+            error!("  ❌ DeepSeek: {}", e);
+            return Err(anyhow::anyhow!("DeepSeek health check failed: {}", e));
         }
     }
 
@@ -403,8 +403,9 @@ async fn load_platform_registry(database_url: &str) -> anyhow::Result<PlatformRe
     }
 
     // Connect to database - fail if connection fails
-    let pool = establish_pool(database_url, Some(2))
-        .map_err(|e| anyhow::anyhow!("Failed to connect to database for platform registry: {}", e))?;
+    let pool = establish_pool(database_url, Some(2)).map_err(|e| {
+        anyhow::anyhow!("Failed to connect to database for platform registry: {}", e)
+    })?;
 
     let mut conn = pool
         .get()
