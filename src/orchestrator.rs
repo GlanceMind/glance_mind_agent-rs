@@ -24,8 +24,10 @@ use tracing::{debug, error, info, warn};
 use crate::domain::errors::{WorkflowError, WorkflowResult};
 use crate::domain::{Comment, Content, KeywordType, TaskConfig, TaskResult};
 use crate::ports::{
-    ai_analyzer::AnalysisContext, progress_tracker::TaskStatus, AiAnalyzer, CommentGateway,
-    ContentGateway, ContentRepository, ProgressTracker, PromptRepository,
+    ai_analyzer::AnalysisContext,
+    progress_tracker::{TaskStatus, TaskTerminalReason},
+    AiAnalyzer, CommentGateway, ContentGateway, ContentRepository, ProgressTracker,
+    PromptRepository,
 };
 use crate::strategies::{FacebookStrategy, PlatformStrategy};
 
@@ -34,6 +36,33 @@ use crate::strategies::{FacebookStrategy, PlatformStrategy};
 /// Used internally for parallel video processing to collect results
 /// before aggregating counts and updating progress.
 #[derive(Debug)]
+struct KeywordProcessOutcome {
+    contents: i32,
+    comments: i32,
+    analyses: i32,
+    terminal_hint: Option<TaskTerminalReason>,
+}
+
+impl KeywordProcessOutcome {
+    fn processed(contents: i32, comments: i32, analyses: i32) -> Self {
+        Self {
+            contents,
+            comments,
+            analyses,
+            terminal_hint: None,
+        }
+    }
+
+    fn no_more_possible_data() -> Self {
+        Self {
+            contents: 0,
+            comments: 0,
+            analyses: 0,
+            terminal_hint: Some(TaskTerminalReason::no_more_possible_data()),
+        }
+    }
+}
+
 enum VideoProcessResult {
     /// Video processed successfully
     Success {
@@ -221,6 +250,37 @@ impl Default for OrchestratorBuilder {
     }
 }
 
+fn terminal_reason_for_error(error: &WorkflowError) -> TaskTerminalReason {
+    let text = error.to_string();
+    let lower = text.to_ascii_lowercase();
+
+    if lower.contains("provider")
+        || lower.contains("tikhub")
+        || lower.contains("rate limit")
+        || lower.contains("rate limited")
+        || lower.contains("service unavailable")
+        || lower.contains("429")
+        || lower.contains("503")
+        || lower.contains("payment")
+        || lower.contains("unauthorized")
+        || lower.contains("authentication failed")
+        || lower.contains("auth")
+        || matches!(
+            error,
+            WorkflowError::Gateway(crate::domain::errors::GatewayError::Network(_))
+                | WorkflowError::Gateway(crate::domain::errors::GatewayError::Api { .. })
+                | WorkflowError::Gateway(crate::domain::errors::GatewayError::RateLimited { .. })
+                | WorkflowError::Gateway(crate::domain::errors::GatewayError::AuthFailed(_))
+        )
+    {
+        TaskTerminalReason::provider_failure(text)
+    } else if matches!(error, WorkflowError::Cancelled(_)) {
+        TaskTerminalReason::cancelled(text)
+    } else {
+        TaskTerminalReason::internal_error(text)
+    }
+}
+
 impl WorkflowOrchestrator {
     /// Create a new builder
     pub fn builder() -> OrchestratorBuilder {
@@ -281,6 +341,7 @@ impl WorkflowOrchestrator {
         let mut total_comments = 0;
         let mut total_analyses = 0;
         let mut last_error: Option<WorkflowError> = None;
+        let mut terminal_hint: Option<TaskTerminalReason> = None;
 
         let keywords = task_config.keywords.clone();
         let total_keywords = keywords.len();
@@ -316,10 +377,13 @@ impl WorkflowOrchestrator {
                 )
                 .await
             {
-                Ok((contents, comments, analyses)) => {
-                    total_contents += contents;
-                    total_comments += comments;
-                    total_analyses += analyses;
+                Ok(outcome) => {
+                    total_contents += outcome.contents;
+                    total_comments += outcome.comments;
+                    total_analyses += outcome.analyses;
+                    if outcome.terminal_hint.is_some() {
+                        terminal_hint = outcome.terminal_hint;
+                    }
                 }
                 Err(e) => {
                     error!(task_id, keyword = %keyword, error = %e, "Error processing keyword");
@@ -334,26 +398,36 @@ impl WorkflowOrchestrator {
         // Build result
         let duration_ms = start_time.elapsed().as_millis() as u64;
         let result = if let Some(error) = last_error {
+            let error_text = error.to_string();
             if total_contents == 0 && total_comments == 0 {
                 // Complete failure
+                let terminal_reason = terminal_reason_for_error(&error);
                 self.progress_tracker
-                    .fail_task(task_id, &error.to_string())
+                    .fail_task(task_id, &error_text, &terminal_reason)
                     .await
                     .ok();
-                TaskResult::failure(task_id, error.to_string())
+                TaskResult::failure(task_id, error_text).with_terminal_reason(terminal_reason)
             } else {
                 // Partial success
-                self.progress_tracker.complete_task(task_id).await.ok();
-                TaskResult::success(task_id).with_counts(
-                    total_contents,
-                    total_comments,
-                    total_analyses,
-                )
+                let terminal_reason = TaskTerminalReason::completed_with_partial_errors(error_text);
+                self.progress_tracker
+                    .complete_task(task_id, &terminal_reason)
+                    .await
+                    .ok();
+                TaskResult::success(task_id)
+                    .with_counts(total_contents, total_comments, total_analyses)
+                    .with_terminal_reason(terminal_reason)
             }
         } else {
             // Complete success
-            self.progress_tracker.complete_task(task_id).await.ok();
-            TaskResult::success(task_id).with_counts(total_contents, total_comments, total_analyses)
+            let terminal_reason = terminal_hint.unwrap_or_else(TaskTerminalReason::completed);
+            self.progress_tracker
+                .complete_task(task_id, &terminal_reason)
+                .await
+                .ok();
+            TaskResult::success(task_id)
+                .with_counts(total_contents, total_comments, total_analyses)
+                .with_terminal_reason(terminal_reason)
         };
 
         let result = result.with_duration(duration_ms);
@@ -384,7 +458,7 @@ impl WorkflowOrchestrator {
         analysis_context: &AnalysisContext,
         content_gateway: &Arc<dyn ContentGateway>,
         comment_gateway: &Arc<dyn CommentGateway>,
-    ) -> WorkflowResult<(i32, i32, i32)> {
+    ) -> WorkflowResult<KeywordProcessOutcome> {
         // Fetch content based on keyword type
         let contents = self
             .fetch_content(config, strategy, keyword, content_gateway)
@@ -436,7 +510,7 @@ impl WorkflowOrchestrator {
             }
 
             // Return early with zero counts
-            return Ok((0, 0, 0));
+            return Ok(KeywordProcessOutcome::no_more_possible_data());
         }
 
         // Process videos in parallel using buffer_unordered
@@ -583,7 +657,11 @@ impl WorkflowOrchestrator {
             info!(task_id, keyword = %keyword.value(), "Video processing stopped early");
         }
 
-        Ok((contents_count, comments_count, analyses_count))
+        Ok(KeywordProcessOutcome::processed(
+            contents_count,
+            comments_count,
+            analyses_count,
+        ))
     }
 
     /// Fetch content based on keyword type
@@ -898,6 +976,7 @@ mod tests {
             status: TaskStatus::Pending,
             progress: 0,
             error_message: None,
+            terminal_reason: None,
         });
 
         let content_gateway = Arc::new(StaticFacebookContentGateway {

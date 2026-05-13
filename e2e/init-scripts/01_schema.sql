@@ -259,6 +259,7 @@ CREATE TABLE IF NOT EXISTS gm_crawler_tasks (
     reserved_amount NUMERIC(18,4) DEFAULT 0,
     actual_consumption NUMERIC(18,4) DEFAULT 0,
     settled_at TIMESTAMPTZ,
+    terminal_reason TEXT,
     created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
     updated_at TIMESTAMPTZ
 );

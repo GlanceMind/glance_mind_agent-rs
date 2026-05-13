@@ -16,7 +16,9 @@ use crate::ports::{
     content_repository::{
         CommentStatus, ContentSaveResult, StoredAnalysis, StoredComment, StoredContent,
     },
-    progress_tracker::{CampaignStopResult, TaskInfo, TaskProgressUpdate, TaskStatus},
+    progress_tracker::{
+        CampaignStopResult, TaskInfo, TaskProgressUpdate, TaskStatus, TaskTerminalReason,
+    },
     prompt_repository::{CampaignConfig, CampaignStatus, PlatformConfig},
     AiAnalyzer, CommentGateway, ContentGateway, ContentRepository, ProgressTracker,
     PromptRepository,
@@ -779,27 +781,43 @@ impl ProgressTracker for InMemoryRepository {
         })
     }
 
-    async fn set_task_error(&self, task_id: i64, error: &str) -> DbResult<()> {
+    async fn set_task_error(
+        &self,
+        task_id: i64,
+        error: &str,
+        terminal_reason: &TaskTerminalReason,
+    ) -> DbResult<()> {
         let mut tasks = self.tasks.write().unwrap();
         if let Some(task) = tasks.get_mut(&task_id) {
             task.status = TaskStatus::Failed;
             task.error_message = Some(error.to_string());
+            task.terminal_reason = Some(terminal_reason.as_terminal_message());
         }
         Ok(())
     }
 
-    async fn complete_task(&self, task_id: i64) -> DbResult<()> {
+    async fn complete_task(
+        &self,
+        task_id: i64,
+        terminal_reason: &TaskTerminalReason,
+    ) -> DbResult<()> {
         self.update_task_status(task_id, TaskStatus::Completed)
             .await?;
         let mut tasks = self.tasks.write().unwrap();
         if let Some(task) = tasks.get_mut(&task_id) {
             task.progress = 100;
+            task.terminal_reason = Some(terminal_reason.as_terminal_message());
         }
         Ok(())
     }
 
-    async fn fail_task(&self, task_id: i64, error: &str) -> DbResult<()> {
-        self.set_task_error(task_id, error).await
+    async fn fail_task(
+        &self,
+        task_id: i64,
+        error: &str,
+        terminal_reason: &TaskTerminalReason,
+    ) -> DbResult<()> {
+        self.set_task_error(task_id, error, terminal_reason).await
     }
 
     async fn should_stop(&self, task_id: i64) -> DbResult<bool> {

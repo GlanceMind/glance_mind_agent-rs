@@ -162,7 +162,7 @@ def get_task_details(conn, task_id):
         cur.execute("""
             SELECT id, campaign_id, keywords, max_count, process_count,
                    status, search_offset, search_limit, reserved_amount,
-                   actual_consumption, settled_at, created_at, updated_at
+                   actual_consumption, settled_at, terminal_reason, created_at, updated_at
             FROM gm_crawler_tasks WHERE id = %s
         """, (task_id,))
         row = cur.fetchone()
@@ -179,8 +179,9 @@ def get_task_details(conn, task_id):
                 "reserved_amount": float(row[8]) if row[8] else 0,
                 "actual_consumption": float(row[9]) if row[9] else 0,
                 "settled_at": row[10],
-                "created_at": row[11],
-                "updated_at": row[12],
+                "terminal_reason": row[11],
+                "created_at": row[12],
+                "updated_at": row[13],
             }
         return None
 

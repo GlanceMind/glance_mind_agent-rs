@@ -137,6 +137,7 @@ pub struct CrawlerTask {
     pub reserved_amount: Option<BigDecimal>,
     pub actual_consumption: Option<BigDecimal>,
     pub settled_at: Option<DateTime<Utc>>,
+    pub terminal_reason: Option<String>,
 }
 
 // ============================================================

@@ -266,6 +266,7 @@ impl TestFixtures {
             status: TaskStatus::Pending,
             progress: 0,
             error_message: None,
+            terminal_reason: None,
         });
 
         // Running task
@@ -277,6 +278,7 @@ impl TestFixtures {
             status: TaskStatus::Running,
             progress: 45,
             error_message: None,
+            terminal_reason: None,
         });
 
         // Completed task
@@ -288,6 +290,7 @@ impl TestFixtures {
             status: TaskStatus::Completed,
             progress: 100,
             error_message: None,
+            terminal_reason: None,
         });
 
         // Failed task
@@ -299,6 +302,7 @@ impl TestFixtures {
             status: TaskStatus::Failed,
             progress: 20,
             error_message: Some("Rate limit exceeded".to_string()),
+            terminal_reason: Some("PROVIDER_FAILURE: Rate limit exceeded".to_string()),
         });
     }
 }
@@ -379,6 +383,7 @@ impl TestScenarioBuilder {
             status: TaskStatus::Pending,
             progress: 0,
             error_message: None,
+            terminal_reason: None,
         });
         self
     }
