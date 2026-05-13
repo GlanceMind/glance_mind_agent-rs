@@ -49,6 +49,102 @@ impl Default for CampaignStopResult {
     }
 }
 
+/// Durable terminal reason for a task status transition.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TaskTerminalReason {
+    pub code: String,
+    pub message: String,
+}
+
+impl TaskTerminalReason {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        let message = message.into();
+        Self {
+            code: code.into(),
+            message: redact_terminal_reason_message(&message),
+        }
+    }
+
+    pub fn completed() -> Self {
+        Self::new("COMPLETED", "Task completed successfully")
+    }
+
+    pub fn completed_with_partial_errors(error: impl AsRef<str>) -> Self {
+        Self::new(
+            "COMPLETED_WITH_PARTIAL_ERRORS",
+            format!("Task completed with partial errors: {}", error.as_ref()),
+        )
+    }
+
+    pub fn no_more_possible_data() -> Self {
+        Self::new(
+            "NO_MORE_POSSIBLE_DATA",
+            "No more possible data for keyword search",
+        )
+    }
+
+    pub fn provider_failure(error: impl AsRef<str>) -> Self {
+        Self::new("PROVIDER_FAILURE", error.as_ref())
+    }
+
+    pub fn cancelled(message: impl AsRef<str>) -> Self {
+        Self::new("CANCELLED", message.as_ref())
+    }
+
+    pub fn internal_error(error: impl AsRef<str>) -> Self {
+        Self::new("INTERNAL_ERROR", error.as_ref())
+    }
+
+    pub fn as_terminal_message(&self) -> String {
+        format!("{}: {}", self.code, self.message)
+    }
+}
+
+fn redact_terminal_reason_message(message: &str) -> String {
+    let markers = [
+        "api_key=",
+        "apikey=",
+        "access_token=",
+        "token=",
+        "secret=",
+        "password=",
+        "authorization: bearer ",
+        "bearer ",
+    ];
+
+    let mut redacted = message.to_string();
+    for marker in markers {
+        let marker_lower = marker.to_ascii_lowercase();
+        let mut search_from = 0;
+
+        loop {
+            let lower = redacted.to_ascii_lowercase();
+            let Some(relative_start) = lower[search_from..].find(&marker_lower) else {
+                break;
+            };
+            let start = search_from + relative_start;
+            let value_start = start + marker.len();
+            if value_start >= redacted.len() {
+                break;
+            }
+
+            let value_end = redacted[value_start..]
+                .find(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '&' | '"' | '\''))
+                .map(|offset| value_start + offset)
+                .unwrap_or_else(|| redacted.len());
+
+            if value_end > value_start {
+                redacted.replace_range(value_start..value_end, "[REDACTED]");
+                search_from = value_start + "[REDACTED]".len();
+            } else {
+                search_from = value_start;
+            }
+        }
+    }
+
+    redacted.chars().take(500).collect()
+}
+
 /// Port for tracking task progress and status
 #[async_trait]
 pub trait ProgressTracker: Send + Sync {
@@ -74,13 +170,27 @@ pub trait ProgressTracker: Send + Sync {
     ) -> DbResult<TaskProgressUpdate>;
 
     /// Update task with error
-    async fn set_task_error(&self, task_id: i64, error: &str) -> DbResult<()>;
+    async fn set_task_error(
+        &self,
+        task_id: i64,
+        error: &str,
+        terminal_reason: &TaskTerminalReason,
+    ) -> DbResult<()>;
 
     /// Mark task as completed
-    async fn complete_task(&self, task_id: i64) -> DbResult<()>;
+    async fn complete_task(
+        &self,
+        task_id: i64,
+        terminal_reason: &TaskTerminalReason,
+    ) -> DbResult<()>;
 
     /// Mark task as failed
-    async fn fail_task(&self, task_id: i64, error: &str) -> DbResult<()>;
+    async fn fail_task(
+        &self,
+        task_id: i64,
+        error: &str,
+        terminal_reason: &TaskTerminalReason,
+    ) -> DbResult<()>;
 
     /// Check if task should stop (campaign stopped or task cancelled)
     async fn should_stop(&self, task_id: i64) -> DbResult<bool>;
@@ -121,6 +231,9 @@ pub struct TaskInfo {
 
     /// Error message if failed
     pub error_message: Option<String>,
+
+    /// Terminal reason persisted for completed, failed, or cancelled tasks.
+    pub terminal_reason: Option<String>,
 }
 
 impl TaskInfo {
@@ -187,7 +300,7 @@ impl From<&str> for TaskStatus {
             "init" | "pending" => TaskStatus::Pending,
             "processing" | "running" => TaskStatus::Running, // Support both for compatibility
             "completed" => TaskStatus::Completed,
-            "failed" => TaskStatus::Failed,
+            "failed" | "cancelled" | "canceled" => TaskStatus::Failed,
             _ => TaskStatus::Pending,
         }
     }
@@ -292,11 +405,40 @@ mod tests {
             status: TaskStatus::Pending,
             progress: 0,
             error_message: None,
+            terminal_reason: None,
         };
 
         let keywords = task.parse_keywords();
         assert_eq!(keywords.len(), 3);
         assert_eq!(keywords[0], "fitness");
+    }
+
+    #[test]
+    fn task_terminal_reason_formats_completed_reason() {
+        let reason = TaskTerminalReason::completed();
+        assert_eq!(reason.code, "COMPLETED");
+        assert_eq!(
+            reason.as_terminal_message(),
+            "COMPLETED: Task completed successfully"
+        );
+    }
+
+    #[test]
+    fn task_terminal_reason_redacts_secret_like_values() {
+        let reason = TaskTerminalReason::provider_failure(
+            "request failed with api_key=sk-test-token Authorization: Bearer abc123",
+        );
+        let message = reason.as_terminal_message();
+        assert!(message.starts_with("PROVIDER_FAILURE:"));
+        assert!(!message.contains("sk-test-token"));
+        assert!(!message.contains("Bearer abc123"));
+        assert!(message.contains("api_key=[REDACTED]"));
+    }
+
+    #[test]
+    fn task_terminal_reason_bounds_long_messages() {
+        let reason = TaskTerminalReason::internal_error("x".repeat(600));
+        assert_eq!(reason.message.chars().count(), 500);
     }
 
     #[test]

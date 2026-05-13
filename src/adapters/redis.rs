@@ -755,6 +755,20 @@ mod tests {
     }
 
     #[test]
+    fn redis_ack_result_message_carries_terminal_reason() {
+        let result = TaskResult {
+            task_id: 123,
+            success: true,
+            message: Some("COMPLETED: Task completed successfully".to_string()),
+            timestamp: "2026-05-13T00:00:00Z".to_string(),
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"message\":\"COMPLETED: Task completed successfully\""));
+        assert!(!json.contains("terminal_reason"));
+    }
+
+    #[test]
     fn test_parse_search_options_tiktok() {
         // Test parsing TikTok search options from campaign configuration
         let json = r#"{"tiktok":{"region":"GLOBAL","sort_type":"1","publish_time":"7"}}"#;

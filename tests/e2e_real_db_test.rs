@@ -333,6 +333,14 @@ diesel::table! {
     }
 }
 
+#[derive(QueryableByName)]
+struct TaskTerminalReasonRow {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    status: String,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    terminal_reason: Option<String>,
+}
+
 // ============================================================
 // Test Helpers
 // ============================================================
@@ -564,6 +572,21 @@ async fn test_china_travel_campaign_e2e() {
         let reply_text = reply.as_deref().unwrap_or("(empty)");
         println!("     Comment {}: {}", i + 1, reply_text);
         assert_eq!(reply_text, "OK", "Expected AI reply to be 'OK'");
+    }
+
+    // Verify workflow completion persisted terminal_reason when this E2E DB
+    // includes the production crawler task row for this task id.
+    if let Ok(task_terminal_reason) = diesel::sql_query(format!(
+        "SELECT status, terminal_reason FROM gm_crawler_tasks WHERE id = {}",
+        TEST_CAMPAIGN_ID
+    ))
+    .get_result::<TaskTerminalReasonRow>(&mut conn)
+    {
+        assert_eq!(task_terminal_reason.status, "completed");
+        assert_eq!(
+            task_terminal_reason.terminal_reason.as_deref(),
+            Some("COMPLETED: Task completed successfully")
+        );
     }
 
     // Verify content details

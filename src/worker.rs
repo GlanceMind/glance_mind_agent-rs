@@ -21,6 +21,7 @@ use crate::concurrency::GlobalRateLimiters;
 use crate::domain::errors::QueueError;
 use crate::domain::ConcurrencyConfig;
 use crate::orchestrator::WorkflowOrchestrator;
+use crate::ports::progress_tracker::TaskTerminalReason;
 use crate::protocol_gen::CrawlerTask;
 
 /// Multi-platform worker that processes tasks from Redis
@@ -280,8 +281,9 @@ async fn process_task(
             );
 
             // Acknowledge the task
+            let terminal_message = result.terminal_message();
             if let Err(e) = consumer
-                .ack(task_id, result.success, result.error.as_deref())
+                .ack(task_id, result.success, terminal_message.as_deref())
                 .await
             {
                 error!(task_id, error = %e, "Failed to acknowledge task");
@@ -291,7 +293,11 @@ async fn process_task(
             error!(task_id, error = %e, "Task failed");
 
             // Acknowledge with error
-            if let Err(ack_err) = consumer.ack(task_id, false, Some(&e.to_string())).await {
+            let terminal_reason = TaskTerminalReason::internal_error(e.to_string());
+            if let Err(ack_err) = consumer
+                .ack(task_id, false, Some(&terminal_reason.as_terminal_message()))
+                .await
+            {
                 error!(task_id, error = %ack_err, "Failed to acknowledge task failure");
             }
         }

@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use tracing::warn;
 
+use crate::ports::progress_tracker::TaskTerminalReason;
+
 // ============================================================
 // Content Entity
 // ============================================================
@@ -708,6 +710,9 @@ pub struct TaskResult {
     /// Error message if failed
     pub error: Option<String>,
 
+    /// Durable terminal reason for completed, failed, or cancelled outcomes.
+    pub terminal_reason: Option<TaskTerminalReason>,
+
     /// Processing duration in milliseconds
     pub duration_ms: Option<u64>,
 }
@@ -722,19 +727,22 @@ impl TaskResult {
             comments_processed: 0,
             analyses_generated: 0,
             error: None,
+            terminal_reason: Some(TaskTerminalReason::completed()),
             duration_ms: None,
         }
     }
 
     /// Create a failure result
     pub fn failure(task_id: i64, error: impl Into<String>) -> Self {
+        let error = error.into();
         Self {
             task_id,
             success: false,
             contents_processed: 0,
             comments_processed: 0,
             analyses_generated: 0,
-            error: Some(error.into()),
+            error: Some(error.clone()),
+            terminal_reason: Some(TaskTerminalReason::internal_error(error)),
             duration_ms: None,
         }
     }
@@ -745,6 +753,19 @@ impl TaskResult {
         self.comments_processed = comments;
         self.analyses_generated = analyses;
         self
+    }
+
+    /// Set terminal reason
+    pub fn with_terminal_reason(mut self, reason: TaskTerminalReason) -> Self {
+        self.terminal_reason = Some(reason);
+        self
+    }
+
+    /// Terminal reason formatted for persisted state and queue acknowledgments.
+    pub fn terminal_message(&self) -> Option<String> {
+        self.terminal_reason
+            .as_ref()
+            .map(TaskTerminalReason::as_terminal_message)
     }
 
     /// Set duration
@@ -953,5 +974,21 @@ mod tests {
         assert_eq!(result.contents_processed, 10);
         assert_eq!(result.comments_processed, 100);
         assert_eq!(result.analyses_generated, 50);
+        assert_eq!(
+            result.terminal_message().as_deref(),
+            Some("COMPLETED: Task completed successfully")
+        );
+    }
+
+    #[test]
+    fn test_task_result_failure_has_internal_error_terminal_reason() {
+        let result = TaskResult::failure(1, "database unavailable");
+
+        assert!(!result.success);
+        assert_eq!(result.error.as_deref(), Some("database unavailable"));
+        assert_eq!(
+            result.terminal_message().as_deref(),
+            Some("INTERNAL_ERROR: database unavailable")
+        );
     }
 }

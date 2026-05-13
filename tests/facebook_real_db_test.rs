@@ -30,7 +30,9 @@ use glance_mind_agent_rs::{
     domain::errors::{AiResult, DbResult, GatewayError, GatewayResult},
     ports::{
         ai_analyzer::AnalysisContext,
-        progress_tracker::{CampaignStopResult, TaskInfo, TaskProgressUpdate, TaskStatus},
+        progress_tracker::{
+            CampaignStopResult, TaskInfo, TaskProgressUpdate, TaskStatus, TaskTerminalReason,
+        },
         prompt_repository::{CampaignConfig, CampaignStatus, PlatformConfig},
     },
     AiAnalyzer, Comment, CommentGateway, Content, ContentGateway, FacebookAdapter,
@@ -198,6 +200,7 @@ impl ProgressTracker for NoOpProgressTracker {
             status: TaskStatus::Pending,
             progress: 0,
             error_message: None,
+            terminal_reason: None,
         }))
     }
 
@@ -218,15 +221,29 @@ impl ProgressTracker for NoOpProgressTracker {
         })
     }
 
-    async fn set_task_error(&self, _task_id: i64, _error: &str) -> DbResult<()> {
+    async fn set_task_error(
+        &self,
+        _task_id: i64,
+        _error: &str,
+        _terminal_reason: &TaskTerminalReason,
+    ) -> DbResult<()> {
         Ok(())
     }
 
-    async fn complete_task(&self, _task_id: i64) -> DbResult<()> {
+    async fn complete_task(
+        &self,
+        _task_id: i64,
+        _terminal_reason: &TaskTerminalReason,
+    ) -> DbResult<()> {
         Ok(())
     }
 
-    async fn fail_task(&self, _task_id: i64, _error: &str) -> DbResult<()> {
+    async fn fail_task(
+        &self,
+        _task_id: i64,
+        _error: &str,
+        _terminal_reason: &TaskTerminalReason,
+    ) -> DbResult<()> {
         Ok(())
     }
 

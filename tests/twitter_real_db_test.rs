@@ -26,7 +26,9 @@ use glance_mind_agent_rs::{
     ports::{
         ai_analyzer::AnalysisContext,
         comment_gateway::{FetchCommentsOptions, FetchCommentsResult},
-        progress_tracker::{CampaignStopResult, TaskInfo, TaskProgressUpdate, TaskStatus},
+        progress_tracker::{
+            CampaignStopResult, TaskInfo, TaskProgressUpdate, TaskStatus, TaskTerminalReason,
+        },
         prompt_repository::{CampaignConfig, CampaignStatus, PlatformConfig},
     },
     tikhub::{TwitterSearchParams, TwitterTweet as RawTwitterTweet},
@@ -169,6 +171,7 @@ impl ProgressTracker for NoOpProgressTracker {
             status: TaskStatus::Pending,
             progress: 0,
             error_message: None,
+            terminal_reason: None,
         }))
     }
 
@@ -189,15 +192,29 @@ impl ProgressTracker for NoOpProgressTracker {
         })
     }
 
-    async fn set_task_error(&self, _task_id: i64, _error: &str) -> DbResult<()> {
+    async fn set_task_error(
+        &self,
+        _task_id: i64,
+        _error: &str,
+        _terminal_reason: &TaskTerminalReason,
+    ) -> DbResult<()> {
         Ok(())
     }
 
-    async fn complete_task(&self, _task_id: i64) -> DbResult<()> {
+    async fn complete_task(
+        &self,
+        _task_id: i64,
+        _terminal_reason: &TaskTerminalReason,
+    ) -> DbResult<()> {
         Ok(())
     }
 
-    async fn fail_task(&self, _task_id: i64, _error: &str) -> DbResult<()> {
+    async fn fail_task(
+        &self,
+        _task_id: i64,
+        _error: &str,
+        _terminal_reason: &TaskTerminalReason,
+    ) -> DbResult<()> {
         Ok(())
     }
 

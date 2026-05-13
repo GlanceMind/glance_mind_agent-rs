@@ -9,11 +9,12 @@
 //! `DATABASE_URL=... cargo test --test twitter_postgres_test -- --nocapture --test-threads=1`
 
 use diesel::prelude::*;
-use diesel::sql_types::Integer;
+use diesel::sql_types::{Integer, Nullable, Text};
 use serde_json::json;
 
 use glance_mind_agent_rs::{
     db::{models, schema},
+    ports::progress_tracker::{ProgressTracker, TaskTerminalReason},
     Comment, Content, ContentRepository, Engagement, PostgresAdapter, ReplySuggestion,
 };
 
@@ -21,6 +22,14 @@ use glance_mind_agent_rs::{
 struct IdRow {
     #[diesel(sql_type = Integer)]
     id: i32,
+}
+
+#[derive(QueryableByName)]
+struct TaskTerminalReasonRow {
+    #[diesel(sql_type = Text)]
+    status: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    terminal_reason: Option<String>,
 }
 
 fn database_url() -> Option<String> {
@@ -86,7 +95,7 @@ fn create_test_campaign_and_task(conn: &mut PgConnection) -> (i32, i32) {
             {campaign_id}, {user_id}, 'twitter postgres test', 'ACTIVE', 5, {region_id}, {ai_model_id},
             'test', 'IMMEDIATE', 0,
             false, false, false,
-            0.00, 0.00, false,
+            1.00, 0.00, false,
             true, true, NOW()
         )
         "#
@@ -97,9 +106,11 @@ fn create_test_campaign_and_task(conn: &mut PgConnection) -> (i32, i32) {
     diesel::sql_query(format!(
         r#"
         INSERT INTO gm_crawler_tasks (
-            id, campaign_id, max_count, process_count, status, search_offset, search_limit, created_at
+            id, campaign_id, max_count, process_count, status,
+            search_offset, search_limit, reserved_amount, actual_consumption, created_at
         ) VALUES (
-            {task_id}, {campaign_id}, 1, 0, 'pending', 0, 1, NOW()
+            {task_id}, {campaign_id}, 1, 0, 'pending',
+            0, 1, 1.00, 0.00, NOW()
         )
         "#
     ))
@@ -231,6 +242,36 @@ fn full_reply_raw(reply_id: &str, parent_id: &str) -> serde_json::Value {
 // ================================================================
 // Tests
 // ================================================================
+
+#[tokio::test]
+async fn test_complete_task_persists_terminal_reason() {
+    if !postgres_tests_enabled() {
+        return;
+    }
+    let db_url = database_url().expect("Postgres Twitter tests require DATABASE_URL");
+    let mut conn = connect(&db_url);
+    let (campaign_id, task_id) = create_test_campaign_and_task(&mut conn);
+    let repo = PostgresAdapter::from_url(&db_url).unwrap();
+    let terminal_reason = TaskTerminalReason::completed();
+
+    repo.complete_task(task_id as i64, &terminal_reason)
+        .await
+        .expect("complete_task should persist terminal_reason");
+
+    let row = diesel::sql_query(format!(
+        "SELECT status, terminal_reason FROM gm_crawler_tasks WHERE id = {task_id}"
+    ))
+    .get_result::<TaskTerminalReasonRow>(&mut conn)
+    .expect("task should exist after completion");
+
+    assert_eq!(row.status, "completed");
+    assert_eq!(
+        row.terminal_reason,
+        Some(terminal_reason.as_terminal_message())
+    );
+
+    cleanup(&mut conn, campaign_id, task_id);
+}
 
 #[tokio::test]
 async fn test_save_tweet_with_full_raw_data() {

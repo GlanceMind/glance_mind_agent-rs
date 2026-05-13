@@ -569,6 +569,7 @@ diesel::table! {
         reserved_amount -> Nullable<Numeric>,
         actual_consumption -> Nullable<Numeric>,
         settled_at -> Nullable<Timestamptz>,
+        terminal_reason -> Nullable<Text>,
     }
 }
 

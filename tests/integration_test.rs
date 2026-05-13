@@ -220,6 +220,191 @@ async fn test_workflow_with_default_fixtures() {
 }
 
 // ============================================================
+// Terminal Reason Tests
+// ============================================================
+
+#[tokio::test]
+async fn orchestrator_records_success_terminal_reason() {
+    let fixtures = TestScenarioBuilder::new()
+        .with_video(
+            "v_success",
+            "creator",
+            "Fitness success video",
+            vec!["Great", "How much?", "Love it", "Amazing", "Where to buy?"],
+        )
+        .with_campaign(1, "Success", "Product")
+        .with_task(1, 1, vec!["fitness"])
+        .build();
+
+    let (content_gw, comment_gw, ai, repo) = setup_test_environment(&fixtures);
+    content_gw.add_search_results("fitness", fixtures.contents());
+    let orchestrator = create_test_orchestrator(content_gw, comment_gw, ai, repo.clone());
+
+    let result = orchestrator
+        .process_task(
+            1,
+            TaskConfig::new(1, "tiktok").with_keywords(vec!["fitness".to_string()]),
+        )
+        .await
+        .unwrap();
+
+    assert!(result.success);
+    assert_eq!(
+        result.terminal_message().as_deref(),
+        Some("COMPLETED: Task completed successfully")
+    );
+    let task = repo.get_task(1).await.unwrap().unwrap();
+    assert_eq!(
+        task.terminal_reason.as_deref(),
+        result.terminal_message().as_deref()
+    );
+}
+
+#[tokio::test]
+async fn orchestrator_records_no_data_terminal_reason() {
+    let fixtures = TestScenarioBuilder::new()
+        .with_campaign(1, "No Data", "Product")
+        .with_task(1, 1, vec!["empty-keyword"])
+        .build();
+
+    let (content_gw, comment_gw, ai, repo) = setup_test_environment(&fixtures);
+    let orchestrator = create_test_orchestrator(content_gw, comment_gw, ai, repo.clone());
+
+    let result = orchestrator
+        .process_task(
+            1,
+            TaskConfig::new(1, "tiktok").with_keywords(vec!["empty-keyword".to_string()]),
+        )
+        .await
+        .unwrap();
+
+    assert!(result.success);
+    assert_eq!(result.contents_processed, 0);
+    assert_eq!(
+        result.terminal_message().as_deref(),
+        Some("NO_MORE_POSSIBLE_DATA: No more possible data for keyword search")
+    );
+    let task = repo.get_task(1).await.unwrap().unwrap();
+    assert_eq!(
+        task.terminal_reason.as_deref(),
+        result.terminal_message().as_deref()
+    );
+}
+
+#[tokio::test]
+async fn orchestrator_records_partial_error_terminal_reason() {
+    use async_trait::async_trait;
+    use glance_mind_agent_rs::GatewayError;
+
+    struct PartialErrorGateway {
+        success: Vec<Content>,
+    }
+
+    #[async_trait]
+    impl ContentGateway for PartialErrorGateway {
+        async fn search(
+            &self,
+            options: &glance_mind_agent_rs::SearchOptions,
+        ) -> glance_mind_agent_rs::GatewayResult<Vec<Content>> {
+            if options.query == "broken" {
+                return Err(GatewayError::Network(
+                    "provider 503 Service Unavailable".to_string(),
+                ));
+            }
+            Ok(self.success.clone())
+        }
+
+        async fn fetch_by_keyword(
+            &self,
+            keyword: &glance_mind_agent_rs::KeywordType,
+            options: &glance_mind_agent_rs::SearchOptions,
+        ) -> glance_mind_agent_rs::GatewayResult<Vec<Content>> {
+            match keyword {
+                glance_mind_agent_rs::KeywordType::Search(query)
+                | glance_mind_agent_rs::KeywordType::Hashtag(query) => {
+                    let mut options = options.clone();
+                    options.query = query.clone();
+                    self.search(&options).await
+                }
+                _ => Ok(self.success.clone()),
+            }
+        }
+
+        async fn fetch_user_content(
+            &self,
+            _user_id: &str,
+            _count: u32,
+        ) -> glance_mind_agent_rs::GatewayResult<Vec<Content>> {
+            Ok(self.success.clone())
+        }
+
+        async fn fetch_by_id(
+            &self,
+            _content_id: &str,
+        ) -> glance_mind_agent_rs::GatewayResult<Option<Content>> {
+            Ok(self.success.first().cloned())
+        }
+
+        fn platform(&self) -> &str {
+            "tiktok"
+        }
+    }
+
+    let fixtures = TestScenarioBuilder::new()
+        .with_video(
+            "v_partial",
+            "creator",
+            "Partial video",
+            vec!["Great", "How much?", "Love it", "Amazing", "Where to buy?"],
+        )
+        .with_campaign(1, "Partial", "Product")
+        .with_task(1, 1, vec!["fitness", "broken"])
+        .build();
+
+    let (_content_gw, comment_gw, ai, repo) = setup_test_environment(&fixtures);
+    let content_gw = Arc::new(PartialErrorGateway {
+        success: fixtures.contents(),
+    });
+    let orchestrator = WorkflowOrchestrator::builder()
+        .add_content_gateway("tiktok", content_gw as Arc<dyn ContentGateway>)
+        .add_comment_gateway("tiktok", comment_gw as Arc<dyn CommentGateway>)
+        .ai_analyzer(ai as Arc<dyn AiAnalyzer>)
+        .content_repository(repo.clone() as Arc<dyn ContentRepository>)
+        .prompt_repository(repo.clone() as Arc<dyn PromptRepository>)
+        .progress_tracker(repo.clone() as Arc<dyn ProgressTracker>)
+        .add_strategy(Arc::new(TikTokStrategy::new()))
+        .config(OrchestratorConfig {
+            max_videos_per_keyword: 5,
+            max_comments_per_video: 10,
+            ai_batch_size: 5,
+            continue_on_error: true,
+        })
+        .build()
+        .expect("Failed to build orchestrator");
+
+    let result = orchestrator
+        .process_task(
+            1,
+            TaskConfig::new(1, "tiktok")
+                .with_keywords(vec!["fitness".to_string(), "broken".to_string()]),
+        )
+        .await
+        .unwrap();
+
+    assert!(result.success);
+    assert!(result.contents_processed > 0);
+    assert!(result
+        .terminal_message()
+        .as_deref()
+        .is_some_and(|message| message.starts_with("COMPLETED_WITH_PARTIAL_ERRORS:")));
+    let task = repo.get_task(1).await.unwrap().unwrap();
+    assert_eq!(
+        task.terminal_reason.as_deref(),
+        result.terminal_message().as_deref()
+    );
+}
+
+// ============================================================
 // Error Handling Tests
 // ============================================================
 
@@ -322,6 +507,7 @@ async fn test_workflow_respects_campaign_limit() {
         status: TaskStatus::Pending,
         progress: 0,
         error_message: None,
+        terminal_reason: None,
     });
 
     let orchestrator = create_test_orchestrator(content_gw, comment_gw, ai, repo.clone());
@@ -374,6 +560,7 @@ async fn test_workflow_stops_on_paused_campaign() {
         status: TaskStatus::Pending,
         progress: 0,
         error_message: None,
+        terminal_reason: None,
     });
 
     let orchestrator = create_test_orchestrator(content_gw, comment_gw, ai, repo);

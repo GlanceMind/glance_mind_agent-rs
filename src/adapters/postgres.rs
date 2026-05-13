@@ -20,7 +20,9 @@ use crate::ports::{
     content_repository::{
         CommentStatus, ContentSaveResult, StoredAnalysis, StoredComment, StoredContent,
     },
-    progress_tracker::{CampaignStopResult, TaskInfo, TaskProgressUpdate, TaskStatus},
+    progress_tracker::{
+        CampaignStopResult, TaskInfo, TaskProgressUpdate, TaskStatus, TaskTerminalReason,
+    },
     prompt_repository::{CampaignConfig, CampaignStatus, PlatformConfig},
     ContentRepository, ProgressTracker, PromptRepository,
 };
@@ -46,6 +48,25 @@ struct TaskCompleteResult {
     success: bool,
     #[diesel(sql_type = Text)]
     campaign_status: String,
+}
+
+fn is_missing_terminal_reason_complete_task_function(error: &diesel::result::Error) -> bool {
+    let diesel::result::Error::DatabaseError(diesel::result::DatabaseErrorKind::Unknown, info) =
+        error
+    else {
+        return false;
+    };
+
+    let normalized = info
+        .message()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
+
+    normalized.contains("does not exist")
+        && (normalized.contains("function fn_complete_task(integer, text, text)")
+            || normalized.contains("function public.fn_complete_task(integer, text, text)"))
 }
 
 /// Result from fn_stop_campaign_gracefully stored procedure
@@ -2006,6 +2027,7 @@ impl ProgressTracker for PostgresAdapter {
                     status: TaskStatus::from(t.status.as_str()),
                     progress: (t.process_count * 100 / t.max_count.max(1)),
                     error_message: None,
+                    terminal_reason: t.terminal_reason,
                 }))
             }
             None => Ok(None),
@@ -2024,10 +2046,24 @@ impl ProgressTracker for PostgresAdapter {
             TaskStatus::Failed => "failed",
         };
 
-        diesel::update(dsl::gm_crawler_tasks.find(task_id as i32))
-            .set(dsl::status.eq(status_str))
-            .execute(&mut conn)
-            .map_err(DbError::from)?;
+        if matches!(status, TaskStatus::Pending | TaskStatus::Running) {
+            diesel::update(dsl::gm_crawler_tasks.find(task_id as i32))
+                .set((
+                    dsl::status.eq(status_str),
+                    dsl::terminal_reason.eq::<Option<String>>(None),
+                    dsl::updated_at.eq(Some(chrono::Utc::now())),
+                ))
+                .execute(&mut conn)
+                .map_err(DbError::from)?;
+        } else {
+            diesel::update(dsl::gm_crawler_tasks.find(task_id as i32))
+                .set((
+                    dsl::status.eq(status_str),
+                    dsl::updated_at.eq(Some(chrono::Utc::now())),
+                ))
+                .execute(&mut conn)
+                .map_err(DbError::from)?;
+        }
 
         debug!(task_id, ?status, "Updated task status");
         Ok(())
@@ -2076,13 +2112,22 @@ impl ProgressTracker for PostgresAdapter {
             .unwrap_or_default())
     }
 
-    async fn set_task_error(&self, task_id: i64, _error: &str) -> DbResult<()> {
+    async fn set_task_error(
+        &self,
+        task_id: i64,
+        _error: &str,
+        terminal_reason: &TaskTerminalReason,
+    ) -> DbResult<()> {
         use schema::gm_crawler_tasks::dsl;
 
         let mut conn = self.conn_async().await?;
 
         diesel::update(dsl::gm_crawler_tasks.find(task_id as i32))
-            .set(dsl::status.eq("failed"))
+            .set((
+                dsl::status.eq("failed"),
+                dsl::terminal_reason.eq(terminal_reason.as_terminal_message()),
+                dsl::updated_at.eq(Some(chrono::Utc::now())),
+            ))
             .execute(&mut conn)
             .map_err(DbError::from)?;
 
@@ -2090,7 +2135,11 @@ impl ProgressTracker for PostgresAdapter {
         Ok(())
     }
 
-    async fn complete_task(&self, task_id: i64) -> DbResult<()> {
+    async fn complete_task(
+        &self,
+        task_id: i64,
+        terminal_reason: &TaskTerminalReason,
+    ) -> DbResult<()> {
         let mut conn = self.conn_async().await?;
 
         // Call fn_complete_task stored procedure
@@ -2098,27 +2147,63 @@ impl ProgressTracker for PostgresAdapter {
         // 1. Update task status to 'completed'
         // 2. Call fn_settle_task_consumption to settle the budget
         // 3. Check if campaign should be stopped
-        let result: Option<(bool, String)> =
-            diesel::sql_query("SELECT success, campaign_status FROM fn_complete_task($1, $2)")
+        let result =
+            diesel::sql_query("SELECT success, campaign_status FROM fn_complete_task($1, $2, $3)")
+                .bind::<diesel::sql_types::Integer, _>(task_id as i32)
+                .bind::<diesel::sql_types::Text, _>("completed")
+                .bind::<diesel::sql_types::Text, _>(terminal_reason.as_terminal_message())
+                .get_result::<TaskCompleteResult>(&mut conn)
+                .optional();
+
+        let result = match result {
+            Ok(result) => result,
+            Err(error) if is_missing_terminal_reason_complete_task_function(&error) => {
+                warn!(
+                    task_id,
+                    "fn_complete_task with terminal reason unavailable, falling back to legacy signature"
+                );
+                let legacy_result = diesel::sql_query(
+                    "SELECT success, campaign_status FROM fn_complete_task($1, $2)",
+                )
                 .bind::<diesel::sql_types::Integer, _>(task_id as i32)
                 .bind::<diesel::sql_types::Text, _>("completed")
                 .get_result::<TaskCompleteResult>(&mut conn)
                 .optional()
-                .map_err(DbError::from)?
-                .map(|r| (r.success, r.campaign_status));
+                .map_err(DbError::from)?;
 
-        if let Some((success, campaign_status)) = result {
+                use schema::gm_crawler_tasks::dsl;
+                diesel::update(dsl::gm_crawler_tasks.find(task_id as i32))
+                    .set((
+                        dsl::terminal_reason.eq(terminal_reason.as_terminal_message()),
+                        dsl::updated_at.eq(Some(chrono::Utc::now())),
+                    ))
+                    .execute(&mut conn)
+                    .map_err(DbError::from)?;
+
+                legacy_result
+            }
+            Err(e) => return Err(DbError::from(e)),
+        };
+
+        if let Some(result) = result {
             debug!(
                 task_id,
-                success, campaign_status, "Task completed via stored procedure"
+                success = result.success,
+                campaign_status = %result.campaign_status,
+                "Task completed via stored procedure"
             );
         }
 
         Ok(())
     }
 
-    async fn fail_task(&self, task_id: i64, error: &str) -> DbResult<()> {
-        self.set_task_error(task_id, error).await
+    async fn fail_task(
+        &self,
+        task_id: i64,
+        error: &str,
+        terminal_reason: &TaskTerminalReason,
+    ) -> DbResult<()> {
+        self.set_task_error(task_id, error, terminal_reason).await
     }
 
     async fn should_stop(&self, task_id: i64) -> DbResult<bool> {
@@ -3119,6 +3204,43 @@ mod tests {
         ))
         .execute(conn)
         .expect("failed to set campaign reply_template_ids");
+    }
+
+    #[test]
+    fn only_missing_three_arg_fn_complete_task_uses_legacy_fallback() {
+        let missing_function_error = diesel::result::Error::DatabaseError(
+            diesel::result::DatabaseErrorKind::Unknown,
+            Box::new("function fn_complete_task(integer, text, text) does not exist".to_string()),
+        );
+        assert!(is_missing_terminal_reason_complete_task_function(
+            &missing_function_error
+        ));
+
+        let schema_qualified_missing_function_error = diesel::result::Error::DatabaseError(
+            diesel::result::DatabaseErrorKind::Unknown,
+            Box::new(
+                "function public.fn_complete_task(integer, text, text) does not exist".to_string(),
+            ),
+        );
+        assert!(is_missing_terminal_reason_complete_task_function(
+            &schema_qualified_missing_function_error
+        ));
+
+        let unrelated_fn_error = diesel::result::Error::DatabaseError(
+            diesel::result::DatabaseErrorKind::Unknown,
+            Box::new("function fn_complete_task(integer, text) does not exist".to_string()),
+        );
+        assert!(!is_missing_terminal_reason_complete_task_function(
+            &unrelated_fn_error
+        ));
+
+        let runtime_fn_error = diesel::result::Error::DatabaseError(
+            diesel::result::DatabaseErrorKind::Unknown,
+            Box::new("permission denied for function fn_complete_task".to_string()),
+        );
+        assert!(!is_missing_terminal_reason_complete_task_function(
+            &runtime_fn_error
+        ));
     }
 
     #[test]

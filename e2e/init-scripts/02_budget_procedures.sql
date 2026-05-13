@@ -204,7 +204,11 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Complete task
-CREATE OR REPLACE FUNCTION fn_complete_task(p_task_id INT, p_final_status TEXT DEFAULT 'completed')
+CREATE OR REPLACE FUNCTION fn_complete_task(
+    p_task_id INT,
+    p_final_status TEXT DEFAULT 'completed',
+    p_terminal_reason TEXT DEFAULT NULL
+)
 RETURNS TABLE(success BOOLEAN, campaign_status TEXT) AS $$
 DECLARE
     v_task RECORD;
@@ -222,7 +226,11 @@ BEGIN
         RETURN;
     END IF;
     
-    UPDATE gm_crawler_tasks SET status = p_final_status, updated_at = NOW() WHERE id = p_task_id;
+    UPDATE gm_crawler_tasks
+    SET status = p_final_status,
+        terminal_reason = NULLIF(BTRIM(p_terminal_reason), ''),
+        updated_at = NOW()
+    WHERE id = p_task_id;
     
     PERFORM fn_settle_task_consumption(p_task_id);
     
@@ -292,7 +300,10 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Cleanup zombie tasks
-CREATE OR REPLACE FUNCTION fn_cleanup_zombie_tasks(p_timeout_hours INT DEFAULT 24)
+CREATE OR REPLACE FUNCTION fn_cleanup_zombie_tasks(
+    p_timeout_hours INT DEFAULT 24,
+    p_pending_timeout_minutes INT DEFAULT 30
+)
 RETURNS TABLE(cleaned_count INT, total_refunded NUMERIC) AS $$
 DECLARE
     v_zombie_task RECORD;
@@ -304,7 +315,25 @@ BEGIN
           AND updated_at < NOW() - (p_timeout_hours || ' hours')::INTERVAL
         FOR UPDATE SKIP LOCKED
     LOOP
-        PERFORM fn_complete_task(v_zombie_task.id, 'failed');
+        PERFORM fn_complete_task(
+            v_zombie_task.id,
+            'failed',
+            'ZOMBIE_CLEANUP: Processing task timed out and was cleaned up'
+        );
+        v_cleaned := v_cleaned + 1;
+    END LOOP;
+
+    FOR v_zombie_task IN
+        SELECT id FROM gm_crawler_tasks
+        WHERE status = 'pending'
+          AND created_at < NOW() - (p_pending_timeout_minutes || ' minutes')::INTERVAL
+        FOR UPDATE SKIP LOCKED
+    LOOP
+        PERFORM fn_complete_task(
+            v_zombie_task.id,
+            'failed',
+            'ZOMBIE_CLEANUP: Pending task timed out before processing and was cleaned up'
+        );
         v_cleaned := v_cleaned + 1;
     END LOOP;
     
