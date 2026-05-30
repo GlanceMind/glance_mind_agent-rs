@@ -16,7 +16,7 @@ env:
 jobs:
   harness-agent:
     name: Agent Provider Harness
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, front]
     timeout-minutes: 30
 
     steps:

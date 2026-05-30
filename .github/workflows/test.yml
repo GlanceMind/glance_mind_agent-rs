@@ -35,7 +35,7 @@ env:
 jobs:
   rust-tests:
     name: Rust Test Gates
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, front]
     timeout-minutes: 90
 
     steps:
@@ -64,7 +64,7 @@ jobs:
 
   twitter-e2e:
     name: Twitter E2E Gate
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, front]
     timeout-minutes: 90
     needs: rust-tests
 
@@ -113,7 +113,7 @@ jobs:
 
   facebook-e2e:
     name: Facebook E2E Gate
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, front]
     timeout-minutes: 90
     needs: rust-tests
 

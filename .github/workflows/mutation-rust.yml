@@ -1,0 +1,137 @@
+name: Mutation Testing Gate
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/mutants.toml"
+      - ".github/workflows/mutation-rust.yml"
+  schedule:
+    # Full mutation scan nightly at 02:00 UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  mutation-pr:
+    name: Mutation Test PR Diff
+    runs-on: [self-hosted, front]
+    timeout-minutes: 120
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --locked --version 24.11.0
+
+      - name: Create .env for tests
+        run: |
+          cat > .env << EOF
+          DATABASE_URL=${{ secrets.DATABASE_URL }}
+          TIKHUB_API_KEY=${{ secrets.TIKHUB_API_KEY }}
+          TIKHUB_BASE_URL=${{ vars.TIKHUB_BASE_URL || 'https://api.tikhub.io' }}
+          FACEBOOK_RAPIDAPI_KEY=${{ secrets.FACEBOOK_RAPIDAPI_KEY }}
+          FACEBOOK_RAPIDAPI_HOST=${{ vars.FACEBOOK_RAPIDAPI_HOST || 'facebook-scraper3.p.rapidapi.com' }}
+          FACEBOOK_RAPIDAPI_BASE_URL=${{ vars.FACEBOOK_RAPIDAPI_BASE_URL || 'https://facebook-scraper3.p.rapidapi.com' }}
+          EOF
+
+      - name: Build baseline
+        run: cargo build --all-features --release
+
+      - name: Compute PR diff against base
+        id: diff
+        run: |
+          git fetch origin ${{ github.base_ref }}
+          git diff origin/${{ github.base_ref }}...HEAD > /tmp/pr.diff
+          echo "Diff size: $(wc -l < /tmp/pr.diff) lines"
+          cat /tmp/pr.diff
+
+      - name: Run cargo-mutants on PR diff
+        run: |
+          cargo mutants \
+            --in-diff /tmp/pr.diff \
+            --timeout 300 \
+            --annotations=github \
+            -- --all-features --test-threads=1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report-pr-${{ github.event.pull_request.number }}
+          path: mutants.out/
+
+  mutation-nightly:
+    name: Full Mutation Scan (Nightly)
+    runs-on: [self-hosted, front]
+    timeout-minutes: 240
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --locked --version 24.11.0
+
+      - name: Create .env for tests
+        run: |
+          cat > .env << EOF
+          DATABASE_URL=${{ secrets.DATABASE_URL }}
+          TIKHUB_API_KEY=${{ secrets.TIKHUB_API_KEY }}
+          TIKHUB_BASE_URL=${{ vars.TIKHUB_BASE_URL || 'https://api.tikhub.io' }}
+          FACEBOOK_RAPIDAPI_KEY=${{ secrets.FACEBOOK_RAPIDAPI_KEY }}
+          FACEBOOK_RAPIDAPI_HOST=${{ vars.FACEBOOK_RAPIDAPI_HOST || 'facebook-scraper3.p.rapidapi.com' }}
+          FACEBOOK_RAPIDAPI_BASE_URL=${{ vars.FACEBOOK_RAPIDAPI_BASE_URL || 'https://facebook-scraper3.p.rapidapi.com' }}
+          EOF
+
+      - name: Run full mutation scan
+        run: |
+          cargo mutants \
+            --in-place \
+            --timeout 300 \
+            -- --all-features --test-threads=1
+
+      - name: Upload full mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report-full-${{ github.run_number }}
+          path: mutants.out/
+
+      - name: Generate mutation summary
+        if: always()
+        run: |
+          if [ -f mutants.out/mutants.json ]; then
+            echo "## Full Mutation Scan Results" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            cargo mutants --list --json | jq -r '.outcomes | group_by(.outcome) | map({outcome: .[0].outcome, count: length}) | .[] | "- \(.outcome): \(.count)"' >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "Results available in artifact" >> $GITHUB_STEP_SUMMARY
+          fi
