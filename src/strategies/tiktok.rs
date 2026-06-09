@@ -92,8 +92,10 @@ impl PlatformStrategy for TikTokStrategy {
             options = options.with_region(self.default_region.clone());
         }
 
-        // Set count from config
-        let count = config.max_videos.map(|v| v.min(20) as u32).unwrap_or(10);
+        // Set the desired TOTAL number of videos. The adapter paginates the
+        // TikHub search endpoint (<=20 per page) to reach this total, so we
+        // must NOT clamp it to the per-page cap here.
+        let count = config.max_videos.map(|v| v.max(0) as u32).unwrap_or(10);
         options = options.with_count(count);
 
         // Set sort type if specified (0=relevance, 1=most_liked)
@@ -179,7 +181,7 @@ impl PlatformStrategy for TikTokStrategy {
     }
 
     fn max_videos_per_search(&self) -> u32 {
-        20 // TikHub API limit
+        20 // TikHub per-PAGE size (the adapter paginates to reach larger totals)
     }
 
     fn max_comments_per_video(&self) -> u32 {

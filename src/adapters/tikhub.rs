@@ -3,6 +3,9 @@
 //! This adapter wraps the TikHubClient to implement the port interfaces.
 //! It provides automatic retry and proper error mapping.
 
+use std::collections::HashSet;
+use std::time::Duration;
+
 use async_trait::async_trait;
 
 use crate::domain::errors::{GatewayError, GatewayResult};
@@ -12,8 +15,222 @@ use crate::ports::{
     CommentGateway, ContentGateway,
 };
 use crate::tikhub::{
-    CommentParams, SearchParams, TikHubClient, TikHubError, TikHubRetryConfig, UserVideoParams,
+    AwemeInfo, CommentParams, SearchParams, TikHubClient, TikHubError, TikHubRetryConfig,
+    UserVideoParams,
 };
+
+/// Delay between fetching consecutive pages, to avoid upstream rate limiting.
+/// Zeroed under `cfg(test)` so property tests (hundreds of cases × multiple
+/// pages) run instantly; production builds keep the real 500ms delay.
+#[cfg(not(test))]
+const PAGE_FETCH_DELAY: Duration = Duration::from_millis(500);
+#[cfg(test)]
+const PAGE_FETCH_DELAY: Duration = Duration::ZERO;
+
+/// One page of video results from a paginated source.
+struct VideoPage {
+    videos: Vec<AwemeInfo>,
+    next_cursor: Option<i64>,
+    has_more: bool,
+}
+
+/// Abstraction over a single page fetch so the pagination loop can be reused
+/// across the search and user-video paths (and tested independently).
+#[async_trait]
+trait VideoPageFetcher: Sync {
+    async fn fetch(&self, cursor: i64, count: u32) -> Result<VideoPage, TikHubError>;
+}
+
+/// Accumulate up to `target` videos across pages, deduped by `aweme_id`,
+/// truncated to `target`. Mirrors the comment pagination loop in
+/// `TikHubClient::fetch_all_comments_safe`.
+///
+/// `page_size_cap` is the upstream per-page maximum (20 for TikHub search).
+async fn paginate_videos(
+    target: usize,
+    page_size_cap: u32,
+    fetcher: &dyn VideoPageFetcher,
+) -> Result<Vec<AwemeInfo>, TikHubError> {
+    let mut collected: Vec<AwemeInfo> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut cursor: i64 = 0;
+    // Safety guard: bound the number of pages so we never spin forever.
+    let max_pages = target / page_size_cap.max(1) as usize + 2;
+    let mut pages = 0usize;
+
+    loop {
+        let remaining = target.saturating_sub(collected.len());
+        if remaining == 0 {
+            break;
+        }
+
+        if pages >= max_pages {
+            tracing::warn!(
+                target = target,
+                pages = pages,
+                collected = collected.len(),
+                "TikHub: video pagination hit max_pages guard, stopping"
+            );
+            break;
+        }
+        pages += 1;
+
+        let count = (remaining as u32).min(page_size_cap);
+        let page = fetcher.fetch(cursor, count).await?;
+
+        // An empty page terminates pagination even if has_more claims otherwise.
+        if page.videos.is_empty() {
+            break;
+        }
+
+        for video in page.videos {
+            if seen.insert(video.aweme_id.clone()) {
+                collected.push(video);
+            }
+        }
+
+        tracing::info!(
+            page = pages,
+            collected = collected.len(),
+            target = target,
+            has_more = page.has_more,
+            next_cursor = ?page.next_cursor,
+            "TikHub: video page fetched"
+        );
+
+        if !page.has_more {
+            break;
+        }
+
+        match page.next_cursor {
+            Some(next) => {
+                cursor = next;
+                // Small delay before fetching the NEXT page only (never after
+                // the terminal page) to avoid rate limiting.
+                tokio::time::sleep(PAGE_FETCH_DELAY).await;
+            }
+            // No cursor to advance with: stop rather than re-fetch the same page.
+            None => break,
+        }
+    }
+
+    collected.truncate(target);
+    Ok(collected)
+}
+
+/// `VideoPageFetcher` backed by the TikHub search endpoint.
+struct SearchPageFetcher<'a> {
+    client: &'a TikHubClient,
+    keyword: String,
+    region: Option<String>,
+    sort_type: Option<u8>,
+    publish_time: Option<u8>,
+}
+
+#[async_trait]
+impl VideoPageFetcher for SearchPageFetcher<'_> {
+    async fn fetch(&self, cursor: i64, count: u32) -> Result<VideoPage, TikHubError> {
+        let mut params = SearchParams::new(&self.keyword)
+            .with_count(count)
+            .with_offset(cursor.max(0) as u32);
+
+        if let Some(ref region) = self.region {
+            params = params.with_region(region);
+        }
+        if let Some(sort_type) = self.sort_type {
+            params = params.with_sort_type(sort_type);
+        }
+        if let Some(publish_time) = self.publish_time {
+            params = params.with_publish_time(publish_time);
+        }
+
+        let resp = self.client.search_videos_with_retry(&params).await?;
+
+        // `extract_videos` borrows from `resp`; clone into owned values before
+        // `resp` is dropped at the end of this scope.
+        let videos: Vec<AwemeInfo> = TikHubClient::extract_videos(&resp)
+            .into_iter()
+            .cloned()
+            .collect();
+
+        let next_cursor = resp.data.as_ref().and_then(|d| d.cursor);
+        let has_more = resp
+            .data
+            .as_ref()
+            .and_then(|d| d.has_more)
+            .map(|h| h == 1)
+            .unwrap_or(false);
+
+        Ok(VideoPage {
+            videos,
+            next_cursor,
+            has_more,
+        })
+    }
+}
+
+/// Which kind of user identifier a `UserVideoPageFetcher` carries.
+enum UserVideoId {
+    UniqueId(String),
+    SecUserId(String),
+}
+
+/// `VideoPageFetcher` backed by the TikHub user-post-videos endpoint.
+///
+/// Supports both `unique_id` and `sec_user_id` lookups; pagination advances by
+/// `max_cursor` (NOT offset), so `fetch` assigns the loop cursor directly to
+/// `UserVideoParams.max_cursor`.
+struct UserVideoPageFetcher<'a> {
+    client: &'a TikHubClient,
+    id: UserVideoId,
+}
+
+impl<'a> UserVideoPageFetcher<'a> {
+    fn unique_id(client: &'a TikHubClient, unique_id: impl Into<String>) -> Self {
+        Self {
+            client,
+            id: UserVideoId::UniqueId(unique_id.into()),
+        }
+    }
+
+    fn sec_user_id(client: &'a TikHubClient, sec_user_id: impl Into<String>) -> Self {
+        Self {
+            client,
+            id: UserVideoId::SecUserId(sec_user_id.into()),
+        }
+    }
+}
+
+#[async_trait]
+impl VideoPageFetcher for UserVideoPageFetcher<'_> {
+    async fn fetch(&self, cursor: i64, count: u32) -> Result<VideoPage, TikHubError> {
+        let mut params = match &self.id {
+            UserVideoId::UniqueId(id) => UserVideoParams::by_unique_id(id),
+            UserVideoId::SecUserId(id) => UserVideoParams::by_sec_user_id(id),
+        }
+        .with_count(count);
+        // This path paginates by max_cursor; the cursor is already i64.
+        params.max_cursor = cursor;
+
+        let resp = self.client.fetch_user_videos_with_retry(&params).await?;
+
+        // `extract_user_videos` borrows from `resp`; clone into owned values
+        // before `resp` is dropped at the end of this scope.
+        let videos: Vec<AwemeInfo> = TikHubClient::extract_user_videos(&resp)
+            .into_iter()
+            .cloned()
+            .collect();
+
+        let next_cursor = resp.data.as_ref().and_then(|d| d.max_cursor);
+        let has_more = resp.data.as_ref().and_then(|d| d.has_more) == Some(1);
+
+        Ok(VideoPage {
+            videos,
+            next_cursor,
+            has_more,
+        })
+    }
+}
 
 /// TikHub adapter implementing ContentGateway and CommentGateway
 pub struct TikHubAdapter {
@@ -147,25 +364,6 @@ impl TikHubAdapter {
 #[async_trait]
 impl ContentGateway for TikHubAdapter {
     async fn search(&self, options: &SearchOptions) -> GatewayResult<Vec<Content>> {
-        let mut params = SearchParams::new(&options.query)
-            .with_count(options.count)
-            .with_offset(options.offset);
-
-        // Set region if specified
-        if let Some(ref region) = options.region {
-            params = params.with_region(region);
-        }
-
-        // Set sort type if specified (0=relevance, 1=most_liked)
-        if let Some(sort_type) = options.sort_type {
-            params = params.with_sort_type(sort_type);
-        }
-
-        // Set publish time filter if specified (0=all, 1=day, 7=week, 30=month, 90=3months, 180=6months)
-        if let Some(publish_time) = options.publish_time {
-            params = params.with_publish_time(publish_time);
-        }
-
         tracing::debug!(
             keyword = %options.query,
             region = ?options.region,
@@ -175,16 +373,21 @@ impl ContentGateway for TikHubAdapter {
             "TikHub search params"
         );
 
-        // Use retry-enabled search
-        let response = self
-            .client
-            .search_videos_with_retry(&params)
+        // TikHub's search endpoint returns at most 20 items per request, so we
+        // paginate (offset/cursor loop) to reach the requested total.
+        let fetcher = SearchPageFetcher {
+            client: &self.client,
+            keyword: options.query.clone(),
+            region: options.region.clone(),
+            sort_type: options.sort_type,
+            publish_time: options.publish_time,
+        };
+
+        let videos = paginate_videos(options.count as usize, 20, &fetcher)
             .await
             .map_err(Self::convert_error)?;
 
-        // Extract videos from the response
-        let videos = TikHubClient::extract_videos(&response);
-        Ok(videos.iter().map(|v| Self::convert_content(v)).collect())
+        Ok(videos.iter().map(Self::convert_content).collect())
     }
 
     async fn fetch_by_keyword(
@@ -199,17 +402,14 @@ impl ContentGateway for TikHubAdapter {
             }
             KeywordType::UserId(user_id) => self.fetch_user_content(user_id, options.count).await,
             KeywordType::SecUserId(sec_uid) => {
-                let params = UserVideoParams::by_sec_user_id(sec_uid).with_count(options.count);
-
-                // Use retry-enabled fetch
-                let response = self
-                    .client
-                    .fetch_user_videos_with_retry(&params)
+                // TikHub's user-videos endpoint returns at most 20 items per
+                // request, so paginate (max_cursor loop) to reach the total.
+                let fetcher = UserVideoPageFetcher::sec_user_id(&self.client, sec_uid);
+                let videos = paginate_videos(options.count as usize, 20, &fetcher)
                     .await
                     .map_err(Self::convert_error)?;
 
-                let videos = TikHubClient::extract_user_videos(&response);
-                Ok(videos.iter().map(|v| Self::convert_content(v)).collect())
+                Ok(videos.iter().map(Self::convert_content).collect())
             }
             KeywordType::ContentId(content_id) => match self.fetch_by_id(content_id).await? {
                 Some(content) => Ok(vec![content]),
@@ -219,17 +419,14 @@ impl ContentGateway for TikHubAdapter {
     }
 
     async fn fetch_user_content(&self, user_id: &str, count: u32) -> GatewayResult<Vec<Content>> {
-        let params = UserVideoParams::by_unique_id(user_id).with_count(count);
-
-        // Use retry-enabled fetch
-        let response = self
-            .client
-            .fetch_user_videos_with_retry(&params)
+        // TikHub's user-videos endpoint returns at most 20 items per request,
+        // so paginate (max_cursor loop) to reach the requested total.
+        let fetcher = UserVideoPageFetcher::unique_id(&self.client, user_id);
+        let videos = paginate_videos(count as usize, 20, &fetcher)
             .await
             .map_err(Self::convert_error)?;
 
-        let videos = TikHubClient::extract_user_videos(&response);
-        Ok(videos.iter().map(|v| Self::convert_content(v)).collect())
+        Ok(videos.iter().map(Self::convert_content).collect())
     }
 
     async fn fetch_by_id(&self, content_id: &str) -> GatewayResult<Option<Content>> {
@@ -391,5 +588,254 @@ mod tests {
         assert_eq!(domain_comment.author, "commenter");
         assert_eq!(domain_comment.likes, 50);
         assert!(!domain_comment.is_reply);
+    }
+
+    /// Property-based tests for the core pagination accumulation logic
+    /// (`paginate_videos`), driven by an in-memory fake fetcher (no HTTP).
+    ///
+    /// These pin the loop contract: dedup by `aweme_id`, never exceed `target`,
+    /// bounded by supply, exact accumulation for well-formed scripts, and a
+    /// bounded page-call count even when a script claims `has_more` forever.
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        const CAP: u32 = 20;
+
+        /// A `VideoPageFetcher` that replays a scripted sequence of pages,
+        /// ignoring cursor/count. The pagination loop alone decides when to
+        /// stop; the fake just supplies whatever the script says.
+        struct FakeFetcher {
+            script: Vec<VideoPage>,
+            calls: AtomicUsize,
+        }
+
+        impl FakeFetcher {
+            fn new(script: Vec<VideoPage>) -> Self {
+                Self {
+                    script,
+                    calls: AtomicUsize::new(0),
+                }
+            }
+
+            fn calls(&self) -> usize {
+                self.calls.load(Ordering::SeqCst)
+            }
+        }
+
+        #[async_trait]
+        impl VideoPageFetcher for FakeFetcher {
+            async fn fetch(&self, _cursor: i64, _count: u32) -> Result<VideoPage, TikHubError> {
+                let idx = self.calls.fetch_add(1, Ordering::SeqCst);
+                match self.script.get(idx) {
+                    Some(page) => Ok(VideoPage {
+                        videos: page.videos.clone(),
+                        next_cursor: page.next_cursor,
+                        has_more: page.has_more,
+                    }),
+                    // Defensive: script exhausted -> empty terminal page.
+                    None => Ok(VideoPage {
+                        videos: Vec::new(),
+                        next_cursor: None,
+                        has_more: false,
+                    }),
+                }
+            }
+        }
+
+        /// Minimal `AwemeInfo` carrying only the id the loop dedups on.
+        fn aweme(id: i64) -> AwemeInfo {
+            AwemeInfo {
+                aweme_id: id.to_string(),
+                desc: None,
+                create_time: None,
+                share_url: None,
+                author: None,
+                statistics: None,
+                video: None,
+                music: None,
+            }
+        }
+
+        /// Block on the async helper from a sync proptest body.
+        fn run(target: usize, fake: &FakeFetcher) -> Vec<AwemeInfo> {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .unwrap();
+            rt.block_on(paginate_videos(target, CAP, fake))
+                .expect("fake fetcher never errors")
+        }
+
+        /// Strategy: a single page as (ids, has_more). next_cursor is derived.
+        /// Ids may overlap across pages (deliberately) to exercise dedup.
+        fn arb_page() -> impl Strategy<Value = (Vec<i64>, bool)> {
+            (
+                prop::collection::vec(0i64..50, 0..=(CAP as usize)),
+                any::<bool>(),
+            )
+        }
+
+        /// Strategy: a free-form script of up to 12 pages plus a target.
+        fn arb_script() -> impl Strategy<Value = (usize, Vec<(Vec<i64>, bool)>)> {
+            (0usize..=200, prop::collection::vec(arb_page(), 0..=12))
+        }
+
+        /// Turn a (ids, has_more) spec into a `VideoPage` with a sensible cursor.
+        fn page_from(ids: Vec<i64>, has_more: bool, cursor_seed: i64) -> VideoPage {
+            VideoPage {
+                videos: ids.into_iter().map(aweme).collect(),
+                next_cursor: Some(cursor_seed + 1),
+                has_more,
+            }
+        }
+
+        proptest! {
+            /// A. Returned aweme_ids are always unique, for ANY script
+            /// (including overlapping ids across pages).
+            #[test]
+            fn prop_dedup_unique((target, pages) in arb_script()) {
+                let script: Vec<VideoPage> = pages
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (ids, has_more))| page_from(ids, has_more, i as i64))
+                    .collect();
+                let fake = FakeFetcher::new(script);
+                let result = run(target, &fake);
+
+                let unique: std::collections::HashSet<&String> =
+                    result.iter().map(|v| &v.aweme_id).collect();
+                prop_assert_eq!(unique.len(), result.len());
+            }
+
+            /// B. Result never exceeds target.
+            #[test]
+            fn prop_never_exceeds_target((target, pages) in arb_script()) {
+                let script: Vec<VideoPage> = pages
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (ids, has_more))| page_from(ids, has_more, i as i64))
+                    .collect();
+                let fake = FakeFetcher::new(script);
+                let result = run(target, &fake);
+
+                prop_assert!(result.len() <= target);
+            }
+
+            /// C. Result is bounded by the total unique ids supplied across the
+            /// pages the loop actually consumed (the tighter supply oracle).
+            #[test]
+            fn prop_bounded_by_supply((target, pages) in arb_script()) {
+                // Keep an owned copy of the id lists to compute the supply oracle
+                // after the loop reports how many pages it consumed.
+                let id_lists: Vec<Vec<i64>> =
+                    pages.iter().map(|(ids, _)| ids.clone()).collect();
+                let script: Vec<VideoPage> = pages
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (ids, has_more))| page_from(ids, has_more, i as i64))
+                    .collect();
+                let fake = FakeFetcher::new(script);
+                let result = run(target, &fake);
+
+                // The loop fetches `calls()` pages; the first `calls()` entries
+                // of the script were consumed. Unique ids across those pages is
+                // an upper bound on what could be collected.
+                let consumed = fake.calls();
+                let supplied_unique: std::collections::HashSet<i64> = id_lists
+                    .iter()
+                    .take(consumed)
+                    .flatten()
+                    .copied()
+                    .collect();
+                prop_assert!(result.len() <= supplied_unique.len());
+            }
+
+            /// E. Page-consumption guard: even when every page claims
+            /// has_more=true forever, the loop makes at most
+            /// `target / cap + 2` fetch calls.
+            #[test]
+            fn prop_calls_bounded_by_guard(target in 0usize..=200) {
+                // Script longer than the guard, every page non-empty + has_more.
+                // Use globally-unique ids so dedup never short-circuits supply.
+                let guard = target / (CAP as usize) + 2;
+                let n_pages = guard + 5;
+                let mut next_id = 0i64;
+                let script: Vec<VideoPage> = (0..n_pages)
+                    .map(|i| {
+                        let ids: Vec<i64> = (0..CAP as i64)
+                            .map(|_| {
+                                let id = next_id;
+                                next_id += 1;
+                                id
+                            })
+                            .collect();
+                        page_from(ids, true, i as i64)
+                    })
+                    .collect();
+                let fake = FakeFetcher::new(script);
+                let _ = run(target, &fake);
+
+                prop_assert!(fake.calls() <= guard);
+            }
+        }
+
+        /// Well-formed script: globally-unique ids, every page non-empty,
+        /// has_more=true on all but the last (last has_more=false).
+        ///
+        /// The number of pages is capped at the loop's `max_pages` guard for the
+        /// chosen target (`target / CAP + 2`), so the guard never terminates the
+        /// loop mid-stream — the only stop conditions are reaching `target` or
+        /// exhausting the (finite, well-formed) script. That makes the exact
+        /// oracle `min(target, total_supplied)` hold without modeling the guard.
+        fn arb_wellformed() -> impl Strategy<Value = (usize, Vec<Vec<i64>>)> {
+            (0usize..=200)
+                .prop_flat_map(|target| {
+                    let guard = target / (CAP as usize) + 2;
+                    let max_pages = guard.min(12);
+                    // Page sizes 1..=CAP; ids assigned uniquely below.
+                    (
+                        Just(target),
+                        prop::collection::vec(1usize..=(CAP as usize), 1..=max_pages),
+                    )
+                })
+                .prop_map(|(target, sizes)| {
+                    let mut next_id = 0i64;
+                    let pages: Vec<Vec<i64>> = sizes
+                        .into_iter()
+                        .map(|size| {
+                            (0..size)
+                                .map(|_| {
+                                    let id = next_id;
+                                    next_id += 1;
+                                    id
+                                })
+                                .collect()
+                        })
+                        .collect();
+                    (target, pages)
+                })
+        }
+
+        proptest! {
+            /// D. Exact accumulation for well-formed scripts: result length is
+            /// exactly min(target, total_supplied), since ids are globally
+            /// unique and there is no mid-stream termination.
+            #[test]
+            fn prop_exact_for_wellformed((target, pages) in arb_wellformed()) {
+                let total_supplied: usize = pages.iter().map(|p| p.len()).sum();
+                let last = pages.len() - 1;
+                let script: Vec<VideoPage> = pages
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, ids)| page_from(ids, i != last, i as i64))
+                    .collect();
+                let fake = FakeFetcher::new(script);
+                let result = run(target, &fake);
+
+                prop_assert_eq!(result.len(), target.min(total_supplied));
+            }
+        }
     }
 }

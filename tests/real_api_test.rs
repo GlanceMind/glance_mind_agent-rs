@@ -22,7 +22,9 @@ use glance_mind_agent_rs::tikhub::{
     // Twitter
     TwitterSearchParams,
 };
-use glance_mind_agent_rs::{ContentGateway, InstagramAdapter, KeywordType, SearchOptions};
+use glance_mind_agent_rs::{
+    ContentGateway, InstagramAdapter, KeywordType, SearchOptions, TikHubAdapter,
+};
 
 /// Verified on 2026-05-09 with the current local TikHub key:
 /// V2 general_search returns HTTP 200, business code=200, 8 items,
@@ -76,6 +78,42 @@ async fn test_tiktok_search_real() {
             panic!("TikTok search failed: {:?}", e);
         }
     }
+}
+
+/// Live end-to-end validation of the pagination fix: drives the
+/// `ContentGateway::search` adapter (not the low-level client) with a desired
+/// total of 40, which TikHub can only satisfy by paginating across multiple
+/// ≤20-item pages. Asserts the result crossed the single-page cap of 20,
+/// proving the offset/cursor loop works against the real API. Auto-skips
+/// without a TikHub key, like the other live tests here.
+#[tokio::test]
+async fn test_tiktok_adapter_paginates_real() {
+    let Some(client) = create_client() else {
+        return;
+    };
+
+    let adapter = TikHubAdapter::new(client);
+    let options = SearchOptions::new("fitness")
+        .with_count(40)
+        .with_region("US");
+
+    println!("\n🔍 Testing TikTok adapter pagination (target=40)...");
+
+    let result = adapter
+        .search(&options)
+        .await
+        .expect("real TikHub adapter search should succeed");
+
+    println!(
+        "✅ Adapter pagination returned {} videos (target 40)",
+        result.len()
+    );
+
+    assert!(
+        result.len() > 20,
+        "pagination must exceed the single-page cap of 20; got {} (pre-fix this was always ≤20)",
+        result.len()
+    );
 }
 
 // ============================================================

@@ -51,6 +51,8 @@ governor = "0.10.4"
 
 [dev-dependencies]
 tokio-test = "0.4"
+mockito = "1.7"
+proptest = "1"
 
 [[bin]]
 name = "generate-fixtures"

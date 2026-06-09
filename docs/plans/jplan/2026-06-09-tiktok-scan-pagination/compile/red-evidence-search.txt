@@ -1,0 +1,46 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+warning: the following packages contain code that will be rejected by a future version of Rust: redis v0.25.4
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running tests/tikhub_search_pagination.rs (target/debug/deps/tikhub_search_pagination-413c43c37b7611b6)
+
+running 6 tests
+test f7_single_page_single_request ... ok
+test f3_empty_second_page_terminates_at_20 ... ok
+test f4_overlapping_pages_dedup_unique_ids ... ok
+test f5_per_request_count_never_exceeds_20 ... FAILED
+test f2_partial_second_page_returns_35 ... FAILED
+test f1_two_full_pages_returns_40 ... FAILED
+
+failures:
+
+---- f5_per_request_count_never_exceeds_20 stdout ----
+
+thread 'f5_per_request_count_never_exceeds_20' panicked at tests/tikhub_search_pagination.rs:244:5:
+assertion `left == right` failed
+  left: 20
+ right: 40
+
+---- f2_partial_second_page_returns_35 stdout ----
+
+thread 'f2_partial_second_page_returns_35' panicked at tests/tikhub_search_pagination.rs:125:5:
+assertion `left == right` failed
+  left: 20
+ right: 35
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- f1_two_full_pages_returns_40 stdout ----
+
+thread 'f1_two_full_pages_returns_40' panicked at tests/tikhub_search_pagination.rs:89:5:
+assertion `left == right` failed
+  left: 20
+ right: 40
+
+
+failures:
+    f1_two_full_pages_returns_40
+    f2_partial_second_page_returns_35
+    f5_per_request_count_never_exceeds_20
+
+test result: FAILED. 3 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `--test tikhub_search_pagination`
