@@ -182,10 +182,7 @@ async fn u3_sec_user_id_paginates_two_pages_returns_40() {
     let options = SearchOptions::new("x").with_count(40).with_region("US");
 
     let result = adapter
-        .fetch_by_keyword(
-            &KeywordType::SecUserId("MS4wLjABAAAA".into()),
-            &options,
-        )
+        .fetch_by_keyword(&KeywordType::SecUserId("MS4wLjABAAAA".into()), &options)
         .await
         .expect("fetch succeeds");
 

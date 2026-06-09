@@ -82,7 +82,9 @@ async fn f1_two_full_pages_returns_40() {
         .await;
 
     let adapter = adapter_for(&server);
-    let options = SearchOptions::new("travel").with_count(40).with_region("US");
+    let options = SearchOptions::new("travel")
+        .with_count(40)
+        .with_region("US");
 
     let result = adapter.search(&options).await.expect("search succeeds");
 
@@ -192,7 +194,9 @@ async fn f4_overlapping_pages_dedup_unique_ids() {
         .await;
 
     let adapter = adapter_for(&server);
-    let options = SearchOptions::new("travel").with_count(40).with_region("US");
+    let options = SearchOptions::new("travel")
+        .with_count(40)
+        .with_region("US");
 
     let result = adapter.search(&options).await.expect("search succeeds");
 
@@ -237,7 +241,9 @@ async fn f5_per_request_count_never_exceeds_20() {
         .await;
 
     let adapter = adapter_for(&server);
-    let options = SearchOptions::new("travel").with_count(40).with_region("US");
+    let options = SearchOptions::new("travel")
+        .with_count(40)
+        .with_region("US");
 
     let result = adapter.search(&options).await.expect("search succeeds");
 
@@ -268,11 +274,44 @@ async fn f7_single_page_single_request() {
         .await;
 
     let adapter = adapter_for(&server);
-    let options = SearchOptions::new("travel").with_count(10).with_region("US");
+    let options = SearchOptions::new("travel")
+        .with_count(10)
+        .with_region("US");
 
     let result = adapter.search(&options).await.expect("search succeeds");
 
     assert_eq!(result.len(), 10);
     // Exactly one upstream request was made.
     m1.assert_async().await;
+}
+
+// ---------------------------------------------------------------------------
+// R6a: an EMPTY first page (offset=0 -> search_item_list: [], has_more=0)
+// yields an empty result Vec. This guards that pagination returning nothing
+// for a truly empty first page still produces `result.is_empty()`, so the
+// orchestrator's "zero results -> end campaign" path (src/orchestrator.rs)
+// keeps firing after the pagination change. Regression guard for existing-
+// correct behavior (paginate_videos stops on an empty first page).
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn r6a_empty_first_page_returns_empty_vec() {
+    let mut server = mockito::Server::new_async().await;
+
+    let _m1 = server
+        .mock("GET", SEARCH_PATH)
+        .match_query(Matcher::UrlEncoded("offset".into(), "0".into()))
+        .with_status(200)
+        .with_body(search_body(&[], 0, 0))
+        .create_async()
+        .await;
+
+    let adapter = adapter_for(&server);
+    let options = SearchOptions::new("nomatch")
+        .with_count(100)
+        .with_region("US");
+
+    let result = adapter.search(&options).await.expect("search succeeds");
+
+    assert!(result.is_empty());
+    assert_eq!(result.len(), 0);
 }
