@@ -3,6 +3,9 @@
 //! This adapter wraps the TikHubClient to implement the port interfaces.
 //! It provides automatic retry and proper error mapping.
 
+use std::collections::HashSet;
+use std::time::Duration;
+
 use async_trait::async_trait;
 
 use crate::domain::errors::{GatewayError, GatewayResult};
@@ -12,8 +15,142 @@ use crate::ports::{
     CommentGateway, ContentGateway,
 };
 use crate::tikhub::{
-    CommentParams, SearchParams, TikHubClient, TikHubError, TikHubRetryConfig, UserVideoParams,
+    AwemeInfo, CommentParams, SearchParams, TikHubClient, TikHubError, TikHubRetryConfig,
+    UserVideoParams,
 };
+
+/// One page of video results from a paginated source.
+struct VideoPage {
+    videos: Vec<AwemeInfo>,
+    next_cursor: Option<i64>,
+    has_more: bool,
+}
+
+/// Abstraction over a single page fetch so the pagination loop can be reused
+/// across the search and user-video paths (and tested independently).
+#[async_trait]
+trait VideoPageFetcher: Sync {
+    async fn fetch(&self, cursor: i64, count: u32) -> Result<VideoPage, TikHubError>;
+}
+
+/// Accumulate up to `target` videos across pages, deduped by `aweme_id`,
+/// truncated to `target`. Mirrors the comment pagination loop in
+/// `TikHubClient::fetch_all_comments_safe`.
+///
+/// `page_size_cap` is the upstream per-page maximum (20 for TikHub search).
+async fn paginate_videos(
+    target: usize,
+    page_size_cap: u32,
+    fetcher: &dyn VideoPageFetcher,
+) -> Result<Vec<AwemeInfo>, TikHubError> {
+    let mut collected: Vec<AwemeInfo> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut cursor: i64 = 0;
+    // Safety guard: bound the number of pages so we never spin forever.
+    let max_pages = target / page_size_cap.max(1) as usize + 2;
+    let mut pages = 0usize;
+
+    loop {
+        let remaining = target.saturating_sub(collected.len());
+        if remaining == 0 {
+            break;
+        }
+
+        if pages >= max_pages {
+            tracing::warn!(
+                target = target,
+                pages = pages,
+                collected = collected.len(),
+                "TikHub: video pagination hit max_pages guard, stopping"
+            );
+            break;
+        }
+        pages += 1;
+
+        let count = (remaining as u32).min(page_size_cap);
+        let page = fetcher.fetch(cursor, count).await?;
+
+        // An empty page terminates pagination even if has_more claims otherwise.
+        if page.videos.is_empty() {
+            break;
+        }
+
+        for video in page.videos {
+            if seen.insert(video.aweme_id.clone()) {
+                collected.push(video);
+            }
+        }
+
+        if !page.has_more {
+            break;
+        }
+
+        match page.next_cursor {
+            Some(next) => {
+                cursor = next;
+                // Small delay before fetching the NEXT page only (never after
+                // the terminal page) to avoid rate limiting.
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            // No cursor to advance with: stop rather than re-fetch the same page.
+            None => break,
+        }
+    }
+
+    collected.truncate(target);
+    Ok(collected)
+}
+
+/// `VideoPageFetcher` backed by the TikHub search endpoint.
+struct SearchPageFetcher<'a> {
+    client: &'a TikHubClient,
+    keyword: String,
+    region: Option<String>,
+    sort_type: Option<u8>,
+    publish_time: Option<u8>,
+}
+
+#[async_trait]
+impl VideoPageFetcher for SearchPageFetcher<'_> {
+    async fn fetch(&self, cursor: i64, count: u32) -> Result<VideoPage, TikHubError> {
+        let mut params = SearchParams::new(&self.keyword)
+            .with_count(count)
+            .with_offset(cursor as u32);
+
+        if let Some(ref region) = self.region {
+            params = params.with_region(region);
+        }
+        if let Some(sort_type) = self.sort_type {
+            params = params.with_sort_type(sort_type);
+        }
+        if let Some(publish_time) = self.publish_time {
+            params = params.with_publish_time(publish_time);
+        }
+
+        let resp = self.client.search_videos_with_retry(&params).await?;
+
+        // `extract_videos` borrows from `resp`; clone into owned values before
+        // `resp` is dropped at the end of this scope.
+        let videos: Vec<AwemeInfo> = TikHubClient::extract_videos(&resp)
+            .into_iter()
+            .cloned()
+            .collect();
+
+        let next_cursor = resp.data.as_ref().and_then(|d| d.cursor);
+        let has_more = resp
+            .data
+            .as_ref()
+            .and_then(|d| d.has_more)
+            .map(|h| h == 1)
+            .unwrap_or(false);
+
+        Ok(VideoPage {
+            videos,
+            next_cursor,
+            has_more,
+        })
+    }
+}
 
 /// TikHub adapter implementing ContentGateway and CommentGateway
 pub struct TikHubAdapter {
@@ -147,25 +284,6 @@ impl TikHubAdapter {
 #[async_trait]
 impl ContentGateway for TikHubAdapter {
     async fn search(&self, options: &SearchOptions) -> GatewayResult<Vec<Content>> {
-        let mut params = SearchParams::new(&options.query)
-            .with_count(options.count)
-            .with_offset(options.offset);
-
-        // Set region if specified
-        if let Some(ref region) = options.region {
-            params = params.with_region(region);
-        }
-
-        // Set sort type if specified (0=relevance, 1=most_liked)
-        if let Some(sort_type) = options.sort_type {
-            params = params.with_sort_type(sort_type);
-        }
-
-        // Set publish time filter if specified (0=all, 1=day, 7=week, 30=month, 90=3months, 180=6months)
-        if let Some(publish_time) = options.publish_time {
-            params = params.with_publish_time(publish_time);
-        }
-
         tracing::debug!(
             keyword = %options.query,
             region = ?options.region,
@@ -175,16 +293,21 @@ impl ContentGateway for TikHubAdapter {
             "TikHub search params"
         );
 
-        // Use retry-enabled search
-        let response = self
-            .client
-            .search_videos_with_retry(&params)
+        // TikHub's search endpoint returns at most 20 items per request, so we
+        // paginate (offset/cursor loop) to reach the requested total.
+        let fetcher = SearchPageFetcher {
+            client: &self.client,
+            keyword: options.query.clone(),
+            region: options.region.clone(),
+            sort_type: options.sort_type,
+            publish_time: options.publish_time,
+        };
+
+        let videos = paginate_videos(options.count as usize, 20, &fetcher)
             .await
             .map_err(Self::convert_error)?;
 
-        // Extract videos from the response
-        let videos = TikHubClient::extract_videos(&response);
-        Ok(videos.iter().map(|v| Self::convert_content(v)).collect())
+        Ok(videos.iter().map(Self::convert_content).collect())
     }
 
     async fn fetch_by_keyword(
