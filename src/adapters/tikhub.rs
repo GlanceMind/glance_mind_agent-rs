@@ -161,6 +161,69 @@ impl VideoPageFetcher for SearchPageFetcher<'_> {
     }
 }
 
+/// Which kind of user identifier a `UserVideoPageFetcher` carries.
+enum UserVideoId {
+    UniqueId(String),
+    SecUserId(String),
+}
+
+/// `VideoPageFetcher` backed by the TikHub user-post-videos endpoint.
+///
+/// Supports both `unique_id` and `sec_user_id` lookups; pagination advances by
+/// `max_cursor` (NOT offset), so `fetch` assigns the loop cursor directly to
+/// `UserVideoParams.max_cursor`.
+struct UserVideoPageFetcher<'a> {
+    client: &'a TikHubClient,
+    id: UserVideoId,
+}
+
+impl<'a> UserVideoPageFetcher<'a> {
+    fn unique_id(client: &'a TikHubClient, unique_id: impl Into<String>) -> Self {
+        Self {
+            client,
+            id: UserVideoId::UniqueId(unique_id.into()),
+        }
+    }
+
+    fn sec_user_id(client: &'a TikHubClient, sec_user_id: impl Into<String>) -> Self {
+        Self {
+            client,
+            id: UserVideoId::SecUserId(sec_user_id.into()),
+        }
+    }
+}
+
+#[async_trait]
+impl VideoPageFetcher for UserVideoPageFetcher<'_> {
+    async fn fetch(&self, cursor: i64, count: u32) -> Result<VideoPage, TikHubError> {
+        let mut params = match &self.id {
+            UserVideoId::UniqueId(id) => UserVideoParams::by_unique_id(id),
+            UserVideoId::SecUserId(id) => UserVideoParams::by_sec_user_id(id),
+        }
+        .with_count(count);
+        // This path paginates by max_cursor; the cursor is already i64.
+        params.max_cursor = cursor;
+
+        let resp = self.client.fetch_user_videos_with_retry(&params).await?;
+
+        // `extract_user_videos` borrows from `resp`; clone into owned values
+        // before `resp` is dropped at the end of this scope.
+        let videos: Vec<AwemeInfo> = TikHubClient::extract_user_videos(&resp)
+            .into_iter()
+            .cloned()
+            .collect();
+
+        let next_cursor = resp.data.as_ref().and_then(|d| d.max_cursor);
+        let has_more = resp.data.as_ref().and_then(|d| d.has_more) == Some(1);
+
+        Ok(VideoPage {
+            videos,
+            next_cursor,
+            has_more,
+        })
+    }
+}
+
 /// TikHub adapter implementing ContentGateway and CommentGateway
 pub struct TikHubAdapter {
     client: TikHubClient,
@@ -331,17 +394,14 @@ impl ContentGateway for TikHubAdapter {
             }
             KeywordType::UserId(user_id) => self.fetch_user_content(user_id, options.count).await,
             KeywordType::SecUserId(sec_uid) => {
-                let params = UserVideoParams::by_sec_user_id(sec_uid).with_count(options.count);
-
-                // Use retry-enabled fetch
-                let response = self
-                    .client
-                    .fetch_user_videos_with_retry(&params)
+                // TikHub's user-videos endpoint returns at most 20 items per
+                // request, so paginate (max_cursor loop) to reach the total.
+                let fetcher = UserVideoPageFetcher::sec_user_id(&self.client, sec_uid);
+                let videos = paginate_videos(options.count as usize, 20, &fetcher)
                     .await
                     .map_err(Self::convert_error)?;
 
-                let videos = TikHubClient::extract_user_videos(&response);
-                Ok(videos.iter().map(|v| Self::convert_content(v)).collect())
+                Ok(videos.iter().map(Self::convert_content).collect())
             }
             KeywordType::ContentId(content_id) => match self.fetch_by_id(content_id).await? {
                 Some(content) => Ok(vec![content]),
@@ -351,17 +411,14 @@ impl ContentGateway for TikHubAdapter {
     }
 
     async fn fetch_user_content(&self, user_id: &str, count: u32) -> GatewayResult<Vec<Content>> {
-        let params = UserVideoParams::by_unique_id(user_id).with_count(count);
-
-        // Use retry-enabled fetch
-        let response = self
-            .client
-            .fetch_user_videos_with_retry(&params)
+        // TikHub's user-videos endpoint returns at most 20 items per request,
+        // so paginate (max_cursor loop) to reach the requested total.
+        let fetcher = UserVideoPageFetcher::unique_id(&self.client, user_id);
+        let videos = paginate_videos(count as usize, 20, &fetcher)
             .await
             .map_err(Self::convert_error)?;
 
-        let videos = TikHubClient::extract_user_videos(&response);
-        Ok(videos.iter().map(|v| Self::convert_content(v)).collect())
+        Ok(videos.iter().map(Self::convert_content).collect())
     }
 
     async fn fetch_by_id(&self, content_id: &str) -> GatewayResult<Option<Content>> {
