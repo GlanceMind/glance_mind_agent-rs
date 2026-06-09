@@ -81,6 +81,15 @@ async fn paginate_videos(
             }
         }
 
+        tracing::info!(
+            page = pages,
+            collected = collected.len(),
+            target = target,
+            has_more = page.has_more,
+            next_cursor = ?page.next_cursor,
+            "TikHub: video page fetched"
+        );
+
         if !page.has_more {
             break;
         }
@@ -115,7 +124,7 @@ impl VideoPageFetcher for SearchPageFetcher<'_> {
     async fn fetch(&self, cursor: i64, count: u32) -> Result<VideoPage, TikHubError> {
         let mut params = SearchParams::new(&self.keyword)
             .with_count(count)
-            .with_offset(cursor as u32);
+            .with_offset(cursor.max(0) as u32);
 
         if let Some(ref region) = self.region {
             params = params.with_region(region);

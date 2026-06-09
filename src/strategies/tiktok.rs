@@ -95,7 +95,7 @@ impl PlatformStrategy for TikTokStrategy {
         // Set the desired TOTAL number of videos. The adapter paginates the
         // TikHub search endpoint (<=20 per page) to reach this total, so we
         // must NOT clamp it to the per-page cap here.
-        let count = config.max_videos.map(|v| v as u32).unwrap_or(10);
+        let count = config.max_videos.map(|v| v.max(0) as u32).unwrap_or(10);
         options = options.with_count(count);
 
         // Set sort type if specified (0=relevance, 1=most_liked)
