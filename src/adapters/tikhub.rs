@@ -19,6 +19,14 @@ use crate::tikhub::{
     UserVideoParams,
 };
 
+/// Delay between fetching consecutive pages, to avoid upstream rate limiting.
+/// Zeroed under `cfg(test)` so property tests (hundreds of cases × multiple
+/// pages) run instantly; production builds keep the real 500ms delay.
+#[cfg(not(test))]
+const PAGE_FETCH_DELAY: Duration = Duration::from_millis(500);
+#[cfg(test)]
+const PAGE_FETCH_DELAY: Duration = Duration::ZERO;
+
 /// One page of video results from a paginated source.
 struct VideoPage {
     videos: Vec<AwemeInfo>,
@@ -99,7 +107,7 @@ async fn paginate_videos(
                 cursor = next;
                 // Small delay before fetching the NEXT page only (never after
                 // the terminal page) to avoid rate limiting.
-                tokio::time::sleep(Duration::from_millis(500)).await;
+                tokio::time::sleep(PAGE_FETCH_DELAY).await;
             }
             // No cursor to advance with: stop rather than re-fetch the same page.
             None => break,
@@ -580,5 +588,254 @@ mod tests {
         assert_eq!(domain_comment.author, "commenter");
         assert_eq!(domain_comment.likes, 50);
         assert!(!domain_comment.is_reply);
+    }
+
+    /// Property-based tests for the core pagination accumulation logic
+    /// (`paginate_videos`), driven by an in-memory fake fetcher (no HTTP).
+    ///
+    /// These pin the loop contract: dedup by `aweme_id`, never exceed `target`,
+    /// bounded by supply, exact accumulation for well-formed scripts, and a
+    /// bounded page-call count even when a script claims `has_more` forever.
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        const CAP: u32 = 20;
+
+        /// A `VideoPageFetcher` that replays a scripted sequence of pages,
+        /// ignoring cursor/count. The pagination loop alone decides when to
+        /// stop; the fake just supplies whatever the script says.
+        struct FakeFetcher {
+            script: Vec<VideoPage>,
+            calls: AtomicUsize,
+        }
+
+        impl FakeFetcher {
+            fn new(script: Vec<VideoPage>) -> Self {
+                Self {
+                    script,
+                    calls: AtomicUsize::new(0),
+                }
+            }
+
+            fn calls(&self) -> usize {
+                self.calls.load(Ordering::SeqCst)
+            }
+        }
+
+        #[async_trait]
+        impl VideoPageFetcher for FakeFetcher {
+            async fn fetch(&self, _cursor: i64, _count: u32) -> Result<VideoPage, TikHubError> {
+                let idx = self.calls.fetch_add(1, Ordering::SeqCst);
+                match self.script.get(idx) {
+                    Some(page) => Ok(VideoPage {
+                        videos: page.videos.clone(),
+                        next_cursor: page.next_cursor,
+                        has_more: page.has_more,
+                    }),
+                    // Defensive: script exhausted -> empty terminal page.
+                    None => Ok(VideoPage {
+                        videos: Vec::new(),
+                        next_cursor: None,
+                        has_more: false,
+                    }),
+                }
+            }
+        }
+
+        /// Minimal `AwemeInfo` carrying only the id the loop dedups on.
+        fn aweme(id: i64) -> AwemeInfo {
+            AwemeInfo {
+                aweme_id: id.to_string(),
+                desc: None,
+                create_time: None,
+                share_url: None,
+                author: None,
+                statistics: None,
+                video: None,
+                music: None,
+            }
+        }
+
+        /// Block on the async helper from a sync proptest body.
+        fn run(target: usize, fake: &FakeFetcher) -> Vec<AwemeInfo> {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .unwrap();
+            rt.block_on(paginate_videos(target, CAP, fake))
+                .expect("fake fetcher never errors")
+        }
+
+        /// Strategy: a single page as (ids, has_more). next_cursor is derived.
+        /// Ids may overlap across pages (deliberately) to exercise dedup.
+        fn arb_page() -> impl Strategy<Value = (Vec<i64>, bool)> {
+            (
+                prop::collection::vec(0i64..50, 0..=(CAP as usize)),
+                any::<bool>(),
+            )
+        }
+
+        /// Strategy: a free-form script of up to 12 pages plus a target.
+        fn arb_script() -> impl Strategy<Value = (usize, Vec<(Vec<i64>, bool)>)> {
+            (0usize..=200, prop::collection::vec(arb_page(), 0..=12))
+        }
+
+        /// Turn a (ids, has_more) spec into a `VideoPage` with a sensible cursor.
+        fn page_from(ids: Vec<i64>, has_more: bool, cursor_seed: i64) -> VideoPage {
+            VideoPage {
+                videos: ids.into_iter().map(aweme).collect(),
+                next_cursor: Some(cursor_seed + 1),
+                has_more,
+            }
+        }
+
+        proptest! {
+            /// A. Returned aweme_ids are always unique, for ANY script
+            /// (including overlapping ids across pages).
+            #[test]
+            fn prop_dedup_unique((target, pages) in arb_script()) {
+                let script: Vec<VideoPage> = pages
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (ids, has_more))| page_from(ids, has_more, i as i64))
+                    .collect();
+                let fake = FakeFetcher::new(script);
+                let result = run(target, &fake);
+
+                let unique: std::collections::HashSet<&String> =
+                    result.iter().map(|v| &v.aweme_id).collect();
+                prop_assert_eq!(unique.len(), result.len());
+            }
+
+            /// B. Result never exceeds target.
+            #[test]
+            fn prop_never_exceeds_target((target, pages) in arb_script()) {
+                let script: Vec<VideoPage> = pages
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (ids, has_more))| page_from(ids, has_more, i as i64))
+                    .collect();
+                let fake = FakeFetcher::new(script);
+                let result = run(target, &fake);
+
+                prop_assert!(result.len() <= target);
+            }
+
+            /// C. Result is bounded by the total unique ids supplied across the
+            /// pages the loop actually consumed (the tighter supply oracle).
+            #[test]
+            fn prop_bounded_by_supply((target, pages) in arb_script()) {
+                // Keep an owned copy of the id lists to compute the supply oracle
+                // after the loop reports how many pages it consumed.
+                let id_lists: Vec<Vec<i64>> =
+                    pages.iter().map(|(ids, _)| ids.clone()).collect();
+                let script: Vec<VideoPage> = pages
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (ids, has_more))| page_from(ids, has_more, i as i64))
+                    .collect();
+                let fake = FakeFetcher::new(script);
+                let result = run(target, &fake);
+
+                // The loop fetches `calls()` pages; the first `calls()` entries
+                // of the script were consumed. Unique ids across those pages is
+                // an upper bound on what could be collected.
+                let consumed = fake.calls();
+                let supplied_unique: std::collections::HashSet<i64> = id_lists
+                    .iter()
+                    .take(consumed)
+                    .flatten()
+                    .copied()
+                    .collect();
+                prop_assert!(result.len() <= supplied_unique.len());
+            }
+
+            /// E. Page-consumption guard: even when every page claims
+            /// has_more=true forever, the loop makes at most
+            /// `target / cap + 2` fetch calls.
+            #[test]
+            fn prop_calls_bounded_by_guard(target in 0usize..=200) {
+                // Script longer than the guard, every page non-empty + has_more.
+                // Use globally-unique ids so dedup never short-circuits supply.
+                let guard = target / (CAP as usize) + 2;
+                let n_pages = guard + 5;
+                let mut next_id = 0i64;
+                let script: Vec<VideoPage> = (0..n_pages)
+                    .map(|i| {
+                        let ids: Vec<i64> = (0..CAP as i64)
+                            .map(|_| {
+                                let id = next_id;
+                                next_id += 1;
+                                id
+                            })
+                            .collect();
+                        page_from(ids, true, i as i64)
+                    })
+                    .collect();
+                let fake = FakeFetcher::new(script);
+                let _ = run(target, &fake);
+
+                prop_assert!(fake.calls() <= guard);
+            }
+        }
+
+        /// Well-formed script: globally-unique ids, every page non-empty,
+        /// has_more=true on all but the last (last has_more=false).
+        ///
+        /// The number of pages is capped at the loop's `max_pages` guard for the
+        /// chosen target (`target / CAP + 2`), so the guard never terminates the
+        /// loop mid-stream — the only stop conditions are reaching `target` or
+        /// exhausting the (finite, well-formed) script. That makes the exact
+        /// oracle `min(target, total_supplied)` hold without modeling the guard.
+        fn arb_wellformed() -> impl Strategy<Value = (usize, Vec<Vec<i64>>)> {
+            (0usize..=200)
+                .prop_flat_map(|target| {
+                    let guard = target / (CAP as usize) + 2;
+                    let max_pages = guard.min(12);
+                    // Page sizes 1..=CAP; ids assigned uniquely below.
+                    (
+                        Just(target),
+                        prop::collection::vec(1usize..=(CAP as usize), 1..=max_pages),
+                    )
+                })
+                .prop_map(|(target, sizes)| {
+                    let mut next_id = 0i64;
+                    let pages: Vec<Vec<i64>> = sizes
+                        .into_iter()
+                        .map(|size| {
+                            (0..size)
+                                .map(|_| {
+                                    let id = next_id;
+                                    next_id += 1;
+                                    id
+                                })
+                                .collect()
+                        })
+                        .collect();
+                    (target, pages)
+                })
+        }
+
+        proptest! {
+            /// D. Exact accumulation for well-formed scripts: result length is
+            /// exactly min(target, total_supplied), since ids are globally
+            /// unique and there is no mid-stream termination.
+            #[test]
+            fn prop_exact_for_wellformed((target, pages) in arb_wellformed()) {
+                let total_supplied: usize = pages.iter().map(|p| p.len()).sum();
+                let last = pages.len() - 1;
+                let script: Vec<VideoPage> = pages
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, ids)| page_from(ids, i != last, i as i64))
+                    .collect();
+                let fake = FakeFetcher::new(script);
+                let result = run(target, &fake);
+
+                prop_assert_eq!(result.len(), target.min(total_supplied));
+            }
+        }
     }
 }
