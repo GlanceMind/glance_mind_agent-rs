@@ -1,0 +1,14 @@
+   Compiling glance_mind_agent_rs v0.1.0 (/Users/jacksoom/programer/aihub/glance_mind_agent_rs/.claude/worktrees/elegant-shannon-efe705)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.65s
+warning: the following packages contain code that will be rejected by a future version of Rust: redis v0.25.4
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running tests/tikhub_user_videos_pagination.rs (target/debug/deps/tikhub_user_videos_pagination-585fa58145687a7c)
+
+running 4 tests
+test u3_sec_user_id_paginates_two_pages_returns_40 ... ok
+test u4_empty_second_page_terminates_at_20 ... ok
+test u1_unique_id_paginates_two_pages_returns_40 ... ok
+test u2_per_request_count_never_exceeds_20 ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+
