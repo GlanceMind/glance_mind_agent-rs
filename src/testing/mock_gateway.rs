@@ -25,6 +25,8 @@ pub struct MockContentGateway {
     search_pages: RwLock<HashMap<String, Vec<Vec<Content>>>>,
     /// M1-T3:Page-level error injection (0-based page index)
     page_errors: RwLock<HashMap<usize, MockError>>,
+    /// M1-T4 测试基建:per-keyword 原样回放的 `FetchOutcome`(纯存取,无逻辑)
+    raw_outcomes: RwLock<HashMap<String, FetchOutcome>>,
     /// Whether to simulate errors
     error_mode: RwLock<Option<MockError>>,
     /// Call tracking
@@ -69,6 +71,7 @@ impl MockContentGateway {
             user_contents: RwLock::new(HashMap::new()),
             search_pages: RwLock::new(HashMap::new()),
             page_errors: RwLock::new(HashMap::new()),
+            raw_outcomes: RwLock::new(HashMap::new()),
             error_mode: RwLock::new(None),
             calls: RwLock::new(Vec::new()),
         }
@@ -122,6 +125,16 @@ impl MockContentGateway {
     pub fn set_page_error_at(&self, page_idx: usize, error: MockError) {
         let mut errors = self.page_errors.write().unwrap();
         errors.insert(page_idx, error);
+    }
+
+    /// M1-T4 测试基建 setter(m1-pagination-core.md §3 M1-T4 测试 9 / DR-01b 防御载体):
+    /// 为 keyword 注入「原样回放」的 `FetchOutcome` —— `fetch_by_keyword_with_outcome`
+    /// 命中时直接返回该值(纯存取,无逻辑)。允许测试以字面构造(绕过
+    /// `FetchOutcome::partial` 构造器,字段 pub 直构)注入违例形状,
+    /// 验证 orchestrator 侧防御性兜底(D3 第六行)。
+    pub fn set_raw_outcome(&self, keyword: &str, outcome: FetchOutcome) {
+        let mut raw = self.raw_outcomes.write().unwrap();
+        raw.insert(keyword.to_lowercase(), outcome);
     }
 
     /// 第 `page_idx` 页的注入错误 → `GatewayError`(映射沿用 `check_error` 样板)。
@@ -223,6 +236,14 @@ impl ContentGateway for MockContentGateway {
         keyword: &KeywordType,
         options: &SearchOptions,
     ) -> GatewayResult<FetchOutcome> {
+        // M1-T4 测试基建:raw outcome 注入优先(原样回放,纯存取;见 `set_raw_outcome`)
+        if let KeywordType::Search(q) | KeywordType::Hashtag(q) = keyword {
+            let raw = self.raw_outcomes.read().unwrap();
+            if let Some(outcome) = raw.get(&q.to_lowercase()) {
+                return Ok(outcome.clone());
+            }
+        }
+
         let injected = match keyword {
             KeywordType::Search(q) | KeywordType::Hashtag(q) => {
                 let paged = self.search_pages.read().unwrap();

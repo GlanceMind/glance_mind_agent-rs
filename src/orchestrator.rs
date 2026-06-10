@@ -1046,4 +1046,449 @@ mod tests {
                 if content_id == "pfbid023XrzksHBkgtAN1ErALXUUrtAAHTfj9A8r3kDG6PqB8777auXLE1BAhUE93A9bKwel"
         ));
     }
+
+    // ===== M1-T4 测试载荷(m1-pagination-core.md §2 D3 + §3 M1-T4;断言 = 计划原文契约) =====
+    //
+    // 装配:复用既有 MockRepository/MockCommentGateway/MockAiAnalyzer 样板;
+    // gateway = M1-T3 的分页注入 MockContentGateway;strategy = TikTokStrategy
+    // (其 `build_search_options` 不 clamp count:options.count = max_videos,
+    //  使任务级 max_count 经 fetch 路径可观测;facebook strategy 会 clamp 到 20,不适用)。
+    // `stop_campaign_gracefully` 调用计数经 CountingProgressTracker(委托 MockRepository,
+    // 仅计数,不 mock 被测对象,AG-005 合规)。
+
+    use std::sync::atomic::AtomicUsize;
+
+    use crate::domain::errors::DbResult;
+    use crate::ports::content_gateway::{FetchOutcome, FetchShortfall};
+    use crate::ports::progress_tracker::{CampaignStopResult, TaskProgressUpdate};
+    use crate::strategies::TikTokStrategy;
+    use crate::testing::MockContentGateway;
+    use crate::TaskResult;
+
+    const M1T4_TASK_ID: i64 = 9100;
+    const M1T4_CAMPAIGN_ID: i32 = 910;
+
+    /// ProgressTracker 委托包装:全量转发 MockRepository,仅对
+    /// `stop_campaign_gracefully` 计数(D3 设计裁决断言载体;M1-T4 测试 1/6)。
+    struct CountingProgressTracker {
+        inner: Arc<MockRepository>,
+        stop_campaign_calls: AtomicUsize,
+    }
+
+    impl CountingProgressTracker {
+        fn new(inner: Arc<MockRepository>) -> Self {
+            Self {
+                inner,
+                stop_campaign_calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn stop_campaign_call_count(&self) -> usize {
+            self.stop_campaign_calls.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl ProgressTracker for CountingProgressTracker {
+        async fn get_task(&self, task_id: i64) -> DbResult<Option<TaskInfo>> {
+            self.inner.get_task(task_id).await
+        }
+
+        async fn update_task_status(&self, task_id: i64, status: TaskStatus) -> DbResult<()> {
+            self.inner.update_task_status(task_id, status).await
+        }
+
+        async fn update_task_progress(
+            &self,
+            task_id: i64,
+            increment: i32,
+        ) -> DbResult<TaskProgressUpdate> {
+            self.inner.update_task_progress(task_id, increment).await
+        }
+
+        async fn set_task_error(
+            &self,
+            task_id: i64,
+            error: &str,
+            terminal_reason: &TaskTerminalReason,
+        ) -> DbResult<()> {
+            self.inner
+                .set_task_error(task_id, error, terminal_reason)
+                .await
+        }
+
+        async fn complete_task(
+            &self,
+            task_id: i64,
+            terminal_reason: &TaskTerminalReason,
+        ) -> DbResult<()> {
+            self.inner.complete_task(task_id, terminal_reason).await
+        }
+
+        async fn fail_task(
+            &self,
+            task_id: i64,
+            error: &str,
+            terminal_reason: &TaskTerminalReason,
+        ) -> DbResult<()> {
+            self.inner.fail_task(task_id, error, terminal_reason).await
+        }
+
+        async fn should_stop(&self, task_id: i64) -> DbResult<bool> {
+            self.inner.should_stop(task_id).await
+        }
+
+        async fn increment_processed(&self, campaign_id: i32, count: i32) -> DbResult<()> {
+            self.inner.increment_processed(campaign_id, count).await
+        }
+
+        async fn get_processed_count(&self, campaign_id: i32) -> DbResult<i32> {
+            self.inner.get_processed_count(campaign_id).await
+        }
+
+        async fn stop_campaign_gracefully(&self, campaign_id: i32) -> DbResult<CampaignStopResult> {
+            self.stop_campaign_calls.fetch_add(1, Ordering::SeqCst);
+            self.inner.stop_campaign_gracefully(campaign_id).await
+        }
+    }
+
+    /// 生成 `n` 条 content_id 互异的测试 Content(沿 mock_gateway.rs M1-T3 样板)。
+    fn page(prefix: &str, start: usize, n: usize) -> Vec<Content> {
+        (start..start + n)
+            .map(|i| Content::new("mock", format!("{prefix}{i}")))
+            .collect()
+    }
+
+    struct PaginationHarness {
+        gateway: Arc<MockContentGateway>,
+        repo: Arc<MockRepository>,
+        tracker: Arc<CountingProgressTracker>,
+        orchestrator: WorkflowOrchestrator,
+        config: TaskConfig,
+    }
+
+    impl PaginationHarness {
+        fn new(keywords: &[&str], max_videos: i32) -> Self {
+            let gateway = Arc::new(MockContentGateway::new());
+            let repo = Arc::new(MockRepository::new());
+            let tracker = Arc::new(CountingProgressTracker::new(repo.clone()));
+
+            repo.add_campaign(CampaignConfig {
+                id: M1T4_CAMPAIGN_ID,
+                user_id: 1,
+                name: "m1-t4 pagination mapping".to_string(),
+                platform_id: 2,
+                status: CampaignStatus::Active,
+                target_audience: None,
+                product_prompt: None,
+                reply_strategy: None,
+                dm_strategy: None,
+                reply_post_strategy: None,
+                max_comments: Some(100_000),
+                processed_comments: 0,
+            });
+            repo.add_task(TaskInfo {
+                id: M1T4_TASK_ID,
+                campaign_id: M1T4_CAMPAIGN_ID,
+                platform_id: 2,
+                keywords: Some(json!(keywords)),
+                status: TaskStatus::Pending,
+                progress: 0,
+                error_message: None,
+                terminal_reason: None,
+            });
+
+            let orchestrator = WorkflowOrchestrator::builder()
+                .add_content_gateway("tiktok", gateway.clone())
+                .add_comment_gateway("tiktok", Arc::new(MockCommentGateway::new()))
+                .ai_analyzer(Arc::new(MockAiAnalyzer::simple()))
+                .content_repository(repo.clone())
+                .prompt_repository(repo.clone())
+                .progress_tracker(tracker.clone())
+                .add_strategy(Arc::new(TikTokStrategy::new()))
+                .build()
+                .expect("orchestrator should build");
+
+            let config = TaskConfig::new(M1T4_CAMPAIGN_ID, "tiktok")
+                .with_keywords(keywords.iter().map(|k| k.to_string()).collect())
+                .with_max_videos(max_videos);
+
+            Self {
+                gateway,
+                repo,
+                tracker,
+                orchestrator,
+                config,
+            }
+        }
+
+        async fn run(&self) -> TaskResult {
+            self.orchestrator
+                .process_task(M1T4_TASK_ID, self.config.clone())
+                .await
+                .expect("process_task must return a TaskResult")
+        }
+
+        async fn task_info(&self) -> TaskInfo {
+            self.repo
+                .get_task(M1T4_TASK_ID)
+                .await
+                .unwrap()
+                .expect("task must exist")
+        }
+
+        async fn terminal_reason(&self) -> String {
+            self.task_info()
+                .await
+                .terminal_reason
+                .expect("terminal_reason must be set after process_task")
+        }
+    }
+
+    /// M1-T4 测试 1(T-002a / F-003):mock 注入 2 页(20+10)、max_videos=50 →
+    /// terminal_reason 以 "NO_MORE_POSSIBLE_DATA" 开头、task completed、
+    /// contents_processed==30,且 `stop_campaign_gracefully` 未被调用(D3 设计裁决:
+    /// contents 非空 + Exhausted 只记 terminal_reason,campaign 级完结交 M6)。
+    #[tokio::test]
+    async fn exhausted_maps_to_no_more_possible_data() {
+        let h = PaginationHarness::new(&["kw"], 50);
+        h.gateway
+            .add_search_pages("kw", vec![page("a", 0, 20), page("a", 20, 10)]);
+
+        let result = h.run().await;
+        let reason = h.terminal_reason().await;
+
+        assert!(
+            reason.starts_with("NO_MORE_POSSIBLE_DATA"),
+            "terminal_reason must start with \"NO_MORE_POSSIBLE_DATA\", got {reason:?}"
+        );
+        assert_eq!(h.task_info().await.status, TaskStatus::Completed);
+        assert_eq!(result.contents_processed, 30);
+        assert_eq!(
+            h.tracker.stop_campaign_call_count(),
+            0,
+            "contents 非空 + Exhausted 不得调用 stop_campaign_gracefully(D3 设计裁决)"
+        );
+    }
+
+    /// M1-T4 测试 2(T-002b / F-002 / I-005):第 2 页注入 RateLimit、第 1 页 20 条 →
+    /// terminal_reason 以 "COMPLETED_WITH_PARTIAL_ERRORS" 开头、task completed、
+    /// contents_processed==20(已落进展保留)。
+    #[tokio::test]
+    async fn partial_failure_maps_to_completed_with_partial_errors() {
+        let h = PaginationHarness::new(&["kw"], 50);
+        h.gateway
+            .add_search_pages("kw", vec![page("a", 0, 20), page("a", 20, 10)]);
+        h.gateway
+            .set_page_error_at(1, crate::testing::mock_gateway::MockError::RateLimit);
+
+        let result = h.run().await;
+        let reason = h.terminal_reason().await;
+
+        assert!(
+            reason.starts_with("COMPLETED_WITH_PARTIAL_ERRORS"),
+            "terminal_reason must start with \"COMPLETED_WITH_PARTIAL_ERRORS\", got {reason:?}"
+        );
+        assert_eq!(h.task_info().await.status, TaskStatus::Completed);
+        assert_eq!(result.contents_processed, 20);
+    }
+
+    /// M1-T4 测试 3(T-002c):3 页喂满 50 → terminal_reason 以 "COMPLETED" 开头
+    /// 且不含 "PARTIAL"、不含 "NO_MORE"。
+    #[tokio::test]
+    async fn full_delivery_maps_to_completed() {
+        let h = PaginationHarness::new(&["kw"], 50);
+        h.gateway.add_search_pages(
+            "kw",
+            vec![page("a", 0, 20), page("a", 20, 20), page("a", 40, 20)],
+        );
+
+        let result = h.run().await;
+        let reason = h.terminal_reason().await;
+
+        assert!(
+            reason.starts_with("COMPLETED"),
+            "terminal_reason must start with \"COMPLETED\", got {reason:?}"
+        );
+        assert!(
+            !reason.contains("PARTIAL"),
+            "terminal_reason must not contain \"PARTIAL\", got {reason:?}"
+        );
+        assert!(
+            !reason.contains("NO_MORE"),
+            "terminal_reason must not contain \"NO_MORE\", got {reason:?}"
+        );
+        assert_eq!(h.task_info().await.status, TaskStatus::Completed);
+        assert_eq!(result.contents_processed, 50);
+    }
+
+    /// M1-T4 测试 4(F-001 / R-008;**允许先绿**,AG-006 变异证明):第 1 页即
+    /// 不可恢复错误 → task failed、terminal_reason 以 "PROVIDER_FAILURE" 开头
+    /// (既有零进展失败路径回归保护)。
+    ///
+    /// 注入双轨编码同一语义「第 1 页即不可恢复错误」:
+    /// - `set_error_mode(Network)`:RED 期 orchestrator 走旧 `fetch_by_keyword` 时报错;
+    /// - `set_page_error_at(0, Network)`:GREEN 期 outcome 路径在第 0 页(零进展)报错。
+    #[tokio::test]
+    async fn zero_progress_failure_maps_to_failed() {
+        let h = PaginationHarness::new(&["kw"], 50);
+        h.gateway
+            .add_search_pages("kw", vec![page("a", 0, 20), page("a", 20, 10)]);
+        h.gateway
+            .set_page_error_at(0, crate::testing::mock_gateway::MockError::Network);
+        h.gateway
+            .set_error_mode(Some(crate::testing::mock_gateway::MockError::Network));
+
+        let result = h.run().await;
+        let reason = h.terminal_reason().await;
+
+        assert_eq!(h.task_info().await.status, TaskStatus::Failed);
+        assert!(
+            reason.starts_with("PROVIDER_FAILURE"),
+            "terminal_reason must start with \"PROVIDER_FAILURE\", got {reason:?}"
+        );
+        assert!(!result.success);
+    }
+
+    /// M1-T4 测试 5(T-004 / I-009):页失败 message 含 `api_key=sk-test-secret-123` →
+    /// terminal_reason 含 "[REDACTED]"、不含明文(新 partial 路径必须走
+    /// `TaskTerminalReason` 构造器,不得手拼字符串绕过脱敏)。
+    /// 注入经 `set_raw_outcome`(合法 partial 形状:contents 非空)。
+    #[tokio::test]
+    async fn partial_failure_message_is_redacted() {
+        let h = PaginationHarness::new(&["kw"], 50);
+        h.gateway.set_raw_outcome(
+            "kw",
+            FetchOutcome {
+                contents: page("a", 0, 20),
+                shortfall: Some(FetchShortfall::PartialFailure {
+                    message: "page 2 failed: api_key=sk-test-secret-123 rate limited".to_string(),
+                }),
+            },
+        );
+
+        let _result = h.run().await;
+        let reason = h.terminal_reason().await;
+
+        assert!(
+            reason.contains("[REDACTED]"),
+            "terminal_reason must contain \"[REDACTED]\", got {reason:?}"
+        );
+        assert!(
+            !reason.contains("sk-test-secret-123"),
+            "terminal_reason must not leak the plaintext secret, got {reason:?}"
+        );
+    }
+
+    /// M1-T4 测试 6(现状回归;**允许先绿**,AG-006):零结果搜索 →
+    /// `stop_campaign_gracefully` 被调用、terminal_reason 为 NO_MORE_POSSIBLE_DATA。
+    #[tokio::test]
+    async fn empty_first_page_keeps_campaign_stop_behavior() {
+        let h = PaginationHarness::new(&["kw"], 50);
+        // 不注入任何页/结果 → 零结果搜索
+
+        let _result = h.run().await;
+        let reason = h.terminal_reason().await;
+
+        assert_eq!(
+            h.tracker.stop_campaign_call_count(),
+            1,
+            "零结果搜索必须调用 stop_campaign_gracefully(既有 campaign stop 行为)"
+        );
+        assert!(
+            reason.starts_with("NO_MORE_POSSIBLE_DATA"),
+            "terminal_reason must start with \"NO_MORE_POSSIBLE_DATA\", got {reason:?}"
+        );
+        assert_eq!(h.task_info().await.status, TaskStatus::Completed);
+    }
+
+    /// M1-T4 测试 7(DR-11 聚合优先级):K=2,kw1=PartialFailure、kw2=Exhausted →
+    /// terminal_reason 以 "COMPLETED_WITH_PARTIAL_ERRORS" 开头
+    /// (D3 聚合优先级:PartialFailure > Exhausted,B2;None 仍不覆盖 Some)。
+    ///
+    /// RED 两段式预言(计划 §3 M1-T4 原文,以实跑输出为准记录):
+    /// - 初始 RED(orchestrator 未消费 shortfall):got "COMPLETED: ...";
+    /// - 映射接通后、优先级未实现的中途态:got "NO_MORE_POSSIBLE_DATA: ..."
+    ///   (last-Some-wins 下 kw2 的 Exhausted 覆盖 kw1 的 PartialFailure)。
+    #[tokio::test]
+    async fn mixed_shortfall_partial_wins_over_exhausted() {
+        let h = PaginationHarness::new(&["kw1", "kw2"], 50);
+        // kw1 = PartialFailure 形状:2 页(20+10),第 2 页 RateLimit(第 1 页已有 20 条进展)
+        h.gateway
+            .add_search_pages("kw1", vec![page("a", 0, 20), page("a", 20, 10)]);
+        h.gateway
+            .set_page_error_at(1, crate::testing::mock_gateway::MockError::RateLimit);
+        // kw2 = Exhausted 形状:单页 5 条(idx 0,不触发 page_error_at(1)),
+        // 末页 cursor=None 且远少于剩余配额 → 上游枯竭
+        h.gateway.add_search_pages("kw2", vec![page("b", 0, 5)]);
+
+        let _result = h.run().await;
+        let reason = h.terminal_reason().await;
+
+        assert!(
+            reason.starts_with("COMPLETED_WITH_PARTIAL_ERRORS"),
+            "PartialFailure must win over Exhausted in aggregation (DR-11), got {reason:?}"
+        );
+    }
+
+    /// M1-T4 测试 8(D-13 任务级 max_count):K=2、max_videos=50、kw1 注入 30 条、
+    /// kw2 注入 30(≥30)条 → 任务总处理 50 且 kw2 实取 20
+    /// (remaining 跨 keyword 传递;I-001 任务级)。
+    /// 预期 RED(现状每 keyword 独立 count=50):`left: 60, right: 50`。
+    #[tokio::test]
+    async fn two_keywords_share_task_level_max_count() {
+        let h = PaginationHarness::new(&["kw1", "kw2"], 50);
+        h.gateway
+            .add_search_pages("kw1", vec![page("a", 0, 20), page("a", 20, 10)]);
+        h.gateway
+            .add_search_pages("kw2", vec![page("b", 0, 20), page("b", 20, 10)]);
+
+        let result = h.run().await;
+
+        assert_eq!(result.contents_processed, 50);
+        let kw2_taken = h
+            .repo
+            .get_all_contents()
+            .iter()
+            .filter(|c| c.content_id.starts_with('b'))
+            .count();
+        assert_eq!(
+            kw2_taken, 20,
+            "kw2 must only take the remaining task-level quota (50 - 30 = 20)"
+        );
+    }
+
+    /// M1-T4 测试 9(DR-01b 防御):mock 直接回放违例形状
+    /// 「空 contents + Some(PartialFailure)」(字面构造绕过 `FetchOutcome::partial`
+    /// 构造器)→ task failed(`fail_task` 零进展错误路径),terminal_reason
+    /// **不**以 "COMPLETED_WITH_PARTIAL_ERRORS" 开头(D3 第六行防御性兜底)。
+    #[tokio::test]
+    async fn defensive_empty_contents_partial_failure_fails_task() {
+        let h = PaginationHarness::new(&["kw"], 50);
+        h.gateway.set_raw_outcome(
+            "kw",
+            FetchOutcome {
+                contents: vec![],
+                shortfall: Some(FetchShortfall::PartialFailure {
+                    message: "upstream failed mid-pagination".to_string(),
+                }),
+            },
+        );
+
+        let _result = h.run().await;
+        let info = h.task_info().await;
+
+        assert_eq!(
+            info.status,
+            TaskStatus::Failed,
+            "task is failed; got {:?} with {:?}",
+            info.status,
+            info.terminal_reason
+        );
+        let reason = info.terminal_reason.unwrap_or_default();
+        assert!(
+            !reason.starts_with("COMPLETED_WITH_PARTIAL_ERRORS"),
+            "violating shape must not be treated as a normal partial, got {reason:?}"
+        );
+    }
 }
