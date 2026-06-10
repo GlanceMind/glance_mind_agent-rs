@@ -25,6 +25,7 @@ use crate::domain::errors::{WorkflowError, WorkflowResult};
 use crate::domain::{Comment, Content, KeywordType, TaskConfig, TaskResult};
 use crate::ports::{
     ai_analyzer::AnalysisContext,
+    content_gateway::{FetchOutcome, FetchShortfall},
     progress_tracker::{TaskStatus, TaskTerminalReason},
     AiAnalyzer, CommentGateway, ContentGateway, ContentRepository, ProgressTracker,
     PromptRepository,
@@ -60,6 +61,12 @@ impl KeywordProcessOutcome {
             analyses: 0,
             terminal_hint: Some(TaskTerminalReason::no_more_possible_data()),
         }
+    }
+
+    /// 附加 shortfall 映射出的 terminal_hint(D3 六行映射;m1-pagination-core.md §2)。
+    fn with_terminal_hint(mut self, hint: Option<TaskTerminalReason>) -> Self {
+        self.terminal_hint = hint;
+        self
     }
 }
 
@@ -346,7 +353,22 @@ impl WorkflowOrchestrator {
         let keywords = task_config.keywords.clone();
         let total_keywords = keywords.len();
 
+        // D-13:任务级 max_count —— keyword 循环间累计已得 contents,
+        // 后续 keyword 只取 remaining = max_videos − 累计(I-001 任务级)。
+        let task_max_contents: Option<i64> = task_config.max_videos.map(|v| i64::from(v.max(0)));
+
         for (i, keyword) in keywords.iter().enumerate() {
+            // D-13:remaining ≤ 0 时跳过剩余 keyword(任务总处理数 ≤ max_count)
+            let remaining = task_max_contents.map(|max| max - i64::from(total_contents));
+            if matches!(remaining, Some(r) if r <= 0) {
+                info!(
+                    task_id,
+                    "Task-level max_videos quota reached, skipping remaining keywords"
+                );
+                break;
+            }
+            let remaining: Option<u32> = remaining.map(|r| u32::try_from(r).unwrap_or(u32::MAX));
+
             // Check if we should stop (campaign stopped or task cancelled)
             if self
                 .progress_tracker
@@ -374,6 +396,7 @@ impl WorkflowOrchestrator {
                     &analysis_context,
                     content_gateway,
                     comment_gateway,
+                    remaining,
                 )
                 .await
             {
@@ -381,8 +404,19 @@ impl WorkflowOrchestrator {
                     total_contents += outcome.contents;
                     total_comments += outcome.comments;
                     total_analyses += outcome.analyses;
-                    if outcome.terminal_hint.is_some() {
-                        terminal_hint = outcome.terminal_hint;
+                    // DR-11 聚合优先级:PartialFailure 类 hint > Exhausted 类 hint
+                    // (部分失败不得被枯竭标签掩盖,B2);其余沿 last-Some-wins 现状
+                    // (None 不覆盖 Some)。code 字符串 = C-004 跨服务契约(M1-T6 pin)。
+                    if let Some(hint) = outcome.terminal_hint {
+                        let current_partial_wins = matches!(
+                            terminal_hint.as_ref(),
+                            Some(current)
+                                if current.code == "COMPLETED_WITH_PARTIAL_ERRORS"
+                                    && hint.code != "COMPLETED_WITH_PARTIAL_ERRORS"
+                        );
+                        if !current_partial_wins {
+                            terminal_hint = Some(hint);
+                        }
                     }
                 }
                 Err(e) => {
@@ -458,16 +492,33 @@ impl WorkflowOrchestrator {
         analysis_context: &AnalysisContext,
         content_gateway: &Arc<dyn ContentGateway>,
         comment_gateway: &Arc<dyn CommentGateway>,
+        remaining: Option<u32>,
     ) -> WorkflowResult<KeywordProcessOutcome> {
-        // Fetch content based on keyword type
-        let contents = self
-            .fetch_content(config, strategy, keyword, content_gateway)
+        // Fetch content based on keyword type (D3:经 FetchOutcome 携带欠交付原因)
+        let FetchOutcome {
+            contents,
+            shortfall,
+        } = self
+            .fetch_content(config, strategy, keyword, content_gateway, remaining)
             .await?;
         info!(task_id, keyword = %keyword.value(), count = contents.len(), "Fetched content");
 
         // Check if search returned zero results (matching Python agent behavior)
         // For keyword searches, empty results trigger campaign end
         if contents.is_empty() {
+            // D3 第六行(DR-01b 防御):「空 contents + PartialFailure」违例形状
+            // 不得当作正常 partial —— 按零进展错误路径 fail_task(F-001 语义)。
+            if let Some(FetchShortfall::PartialFailure { message }) = &shortfall {
+                error!(
+                    task_id,
+                    keyword = %keyword.value(),
+                    "Invalid FetchOutcome: empty contents with PartialFailure shortfall"
+                );
+                return Err(WorkflowError::InvalidTask(format!(
+                    "invalid FetchOutcome: empty contents with PartialFailure shortfall ({message})"
+                )));
+            }
+
             warn!(task_id, keyword = %keyword.value(), "Keyword search returned zero results");
 
             // Only trigger campaign stop for keyword/hashtag searches (matching Python agent)
@@ -657,28 +708,48 @@ impl WorkflowOrchestrator {
             info!(task_id, keyword = %keyword.value(), "Video processing stopped early");
         }
 
-        Ok(KeywordProcessOutcome::processed(
-            contents_count,
-            comments_count,
-            analyses_count,
-        ))
+        // D3 终态映射(contents 非空;m1-pagination-core.md §2 D3):
+        // - None → 现状 COMPLETED 路径(terminal_hint 不设);
+        // - Exhausted → NO_MORE_POSSIBLE_DATA(只记 terminal_reason,
+        //   不调 stop_campaign_gracefully —— campaign 级完结交 M6,D3 设计裁决);
+        // - PartialFailure → COMPLETED_WITH_PARTIAL_ERRORS(message 必经
+        //   TaskTerminalReason 构造器脱敏,I-009;不得手拼字符串)。
+        let terminal_hint = match shortfall {
+            None => None,
+            Some(FetchShortfall::Exhausted) => Some(TaskTerminalReason::no_more_possible_data()),
+            Some(FetchShortfall::PartialFailure { message }) => {
+                Some(TaskTerminalReason::completed_with_partial_errors(message))
+            }
+        };
+
+        Ok(
+            KeywordProcessOutcome::processed(contents_count, comments_count, analyses_count)
+                .with_terminal_hint(terminal_hint),
+        )
     }
 
     /// Fetch content based on keyword type
+    ///
+    /// 返回 `FetchOutcome`(D3:contents + 欠交付原因);`remaining` 为 D-13 任务级
+    /// 剩余配额 —— 只下压、不抬高 strategy 的 count(保持平台 clamp 不变)。
     async fn fetch_content(
         &self,
         config: &TaskConfig,
         strategy: &dyn PlatformStrategy,
         keyword: &KeywordType,
         content_gateway: &Arc<dyn ContentGateway>,
-    ) -> WorkflowResult<Vec<Content>> {
-        let search_options = strategy.build_search_options(config, keyword);
-        let contents = content_gateway
-            .fetch_by_keyword(keyword, &search_options)
+        remaining: Option<u32>,
+    ) -> WorkflowResult<FetchOutcome> {
+        let mut search_options = strategy.build_search_options(config, keyword);
+        if let Some(remaining) = remaining {
+            search_options.count = search_options.count.min(remaining);
+        }
+        let outcome = content_gateway
+            .fetch_by_keyword_with_outcome(keyword, &search_options)
             .await
             .map_err(WorkflowError::Gateway)?;
 
-        Ok(contents)
+        Ok(outcome)
     }
 
     /// Process a single content item (video/post)
