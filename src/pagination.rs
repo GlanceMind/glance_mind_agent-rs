@@ -47,22 +47,96 @@ pub struct PageOutcome {
 
 impl PaginationLoop {
     pub fn new(max_count: usize) -> Self {
-        todo!()
+        Self {
+            max_count,
+            seen_ids: HashSet::new(),
+            seen_cursors: HashSet::new(),
+            accepted: 0,
+            empty_streak: 0,
+        }
     }
 
     /// 喂入一页(条目 id 列表 + 下一页 cursor),返回「新接受的 id 子集」与决策。
     /// 去重(I-003):seen id 不重复接受;接受数严格 ≤ max_count(I-001,页内截断)。
+    ///
+    /// 信号判定顺序(D2 冻结):
+    /// 1. 接受本页新条目(去重 + 截断到剩余额度);
+    /// 2. 达量 → `Stop(ReachedMaxCount)`(SM#F8:优先于一切枯竭信号);
+    /// 3. 空进展计数/复位(DR-03:按 `newly_accepted.is_empty()`);
+    /// 4. 连续空进展达 `MAX_EMPTY_PAGES` → `Stop(EmptyPageLimit)`;
+    /// 5. `next_cursor=None` → `Stop(UpstreamExhausted)`;
+    /// 6. 重复 cursor → `Stop(CursorLoop)`;
+    /// 7. 否则 `Continue { cursor }`。
     pub fn accept_page(&mut self, item_ids: &[String], next_cursor: Option<String>) -> PageOutcome {
-        todo!()
+        // 1. 去重接受 + 页内截断(I-001/I-003)
+        let mut newly_accepted = Vec::new();
+        for id in item_ids {
+            if self.accepted >= self.max_count {
+                break;
+            }
+            if self.seen_ids.insert(id.clone()) {
+                self.accepted += 1;
+                newly_accepted.push(id.clone());
+            }
+        }
+
+        // 2. 达量优先(SM#F8 冻结:即使同页 cursor 缺失/重复/空也取 ReachedMaxCount)
+        if self.accepted >= self.max_count {
+            return PageOutcome {
+                newly_accepted,
+                decision: PageDecision::Stop(StopReason::ReachedMaxCount),
+            };
+        }
+
+        // 3. 空进展计数(DR-03:重复内容页与字面空页同等计入)
+        if newly_accepted.is_empty() {
+            self.empty_streak += 1;
+        } else {
+            self.empty_streak = 0;
+        }
+
+        // 4. 连续空进展上限(F-005)
+        if self.empty_streak >= MAX_EMPTY_PAGES {
+            return PageOutcome {
+                newly_accepted,
+                decision: PageDecision::Stop(StopReason::EmptyPageLimit),
+            };
+        }
+
+        // 5./6./7. cursor 信号(F-003/F-004)
+        let decision = match next_cursor {
+            None => PageDecision::Stop(StopReason::UpstreamExhausted),
+            Some(cursor) => {
+                if self.seen_cursors.insert(cursor.clone()) {
+                    PageDecision::Continue { cursor }
+                } else {
+                    PageDecision::Stop(StopReason::CursorLoop)
+                }
+            }
+        };
+        PageOutcome {
+            newly_accepted,
+            decision,
+        }
     }
 
     pub fn accepted_count(&self) -> usize {
-        todo!()
+        self.accepted
     }
 
     /// 终止原因 → 欠交付原因映射(I-004 接线;达量→None;枯竭族 且 accepted<max → Exhausted)
     pub fn shortfall_for(&self, stop: &StopReason) -> Option<FetchShortfall> {
-        todo!()
+        match stop {
+            StopReason::ReachedMaxCount => None,
+            StopReason::UpstreamExhausted | StopReason::CursorLoop | StopReason::EmptyPageLimit => {
+                if self.accepted < self.max_count {
+                    Some(FetchShortfall::Exhausted)
+                } else {
+                    // 防御:枯竭族但已达量(理论不可达,SM#F8 下达量必为 ReachedMaxCount)
+                    None
+                }
+            }
+        }
     }
 }
 
