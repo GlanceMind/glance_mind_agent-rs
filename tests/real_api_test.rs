@@ -31,6 +31,23 @@ use glance_mind_agent_rs::{
 /// and the first item includes a shortcode.
 const INSTAGRAM_LIVE_SMOKE_KEYWORD: &str = "cat";
 
+fn live_api_tests_enabled() -> bool {
+    let _ = dotenvy::dotenv();
+    // CI opt-in: on GitHub Actions the live suites only run when RUN_REAL_API_TESTS
+    // is explicitly set (D-14; CI always has credentials, so the env-skip alone
+    // would never trigger there).
+    if std::env::var_os("GITHUB_ACTIONS").is_some()
+        && std::env::var_os("RUN_REAL_API_TESTS").is_none()
+    {
+        return false;
+    }
+    // Credential unset or empty -> skip (empty string counts as unset).
+    match std::env::var("TIKHUB_API_KEY") {
+        Ok(v) if !v.trim().is_empty() => true,
+        _ => false,
+    }
+}
+
 /// Helper to create client from env
 fn create_client() -> Option<TikHubClient> {
     match TikHubClient::from_env() {
@@ -48,6 +65,10 @@ fn create_client() -> Option<TikHubClient> {
 
 #[tokio::test]
 async fn test_tiktok_search_real() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_tiktok_search_real - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let Some(client) = create_client() else {
         return;
     };
@@ -88,6 +109,10 @@ async fn test_tiktok_search_real() {
 /// without a TikHub key, like the other live tests here.
 #[tokio::test]
 async fn test_tiktok_adapter_paginates_real() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_tiktok_adapter_paginates_real - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let Some(client) = create_client() else {
         return;
     };
@@ -122,6 +147,10 @@ async fn test_tiktok_adapter_paginates_real() {
 
 #[tokio::test]
 async fn test_instagram_hashtag_search_v1_real() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_instagram_hashtag_search_v1_real - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let Some(client) = create_client() else {
         return;
     };
@@ -182,6 +211,10 @@ async fn test_instagram_hashtag_search_v1_real() {
 
 #[tokio::test]
 async fn test_instagram_web_api_deprecated() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_instagram_web_api_deprecated - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let Some(client) = create_client() else {
         return;
     };
@@ -218,6 +251,10 @@ async fn test_instagram_web_api_deprecated() {
 
 #[tokio::test]
 async fn test_instagram_v3_general_search_real() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_instagram_v3_general_search_real - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let Some(client) = create_client() else {
         return;
     };
@@ -272,6 +309,10 @@ async fn test_instagram_v3_general_search_real() {
 
 #[tokio::test]
 async fn test_instagram_v2_general_search_real() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_instagram_v2_general_search_real - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let Some(client) = create_client() else {
         return;
     };
@@ -308,6 +349,10 @@ async fn test_instagram_v2_general_search_real() {
 
 #[tokio::test]
 async fn test_instagram_adapter_uses_fallback_capable_search_real() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_instagram_adapter_uses_fallback_capable_search_real - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let _ = dotenvy::dotenv();
     let Ok(adapter) = InstagramAdapter::from_env() else {
         eprintln!("⚠️  Skipping test - InstagramAdapter::from_env failed");
@@ -348,6 +393,10 @@ async fn test_instagram_adapter_uses_fallback_capable_search_real() {
 
 #[tokio::test]
 async fn test_instagram_v2_hashtag_search_real() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_instagram_v2_hashtag_search_real - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let Some(client) = create_client() else {
         return;
     };
@@ -381,6 +430,10 @@ async fn test_instagram_v2_hashtag_search_real() {
 
 #[tokio::test]
 async fn test_instagram_v2_reels_search_real() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_instagram_v2_reels_search_real - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let Some(client) = create_client() else {
         return;
     };
@@ -418,6 +471,10 @@ async fn test_instagram_v2_reels_search_real() {
 
 #[tokio::test]
 async fn test_reddit_search_real() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_reddit_search_real - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let Some(client) = create_client() else {
         return;
     };
@@ -461,6 +518,10 @@ async fn test_reddit_search_real() {
 
 #[tokio::test]
 async fn test_twitter_search_real() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_twitter_search_real - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let Some(client) = create_client() else {
         return;
     };
@@ -505,6 +566,10 @@ async fn test_twitter_search_real() {
 
 #[tokio::test]
 async fn test_all_platforms_summary() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_all_platforms_summary - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let Some(client) = create_client() else {
         return;
     };
@@ -630,6 +695,10 @@ async fn test_all_platforms_summary() {
 
 #[tokio::test]
 async fn test_tiktok_comments_real() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_tiktok_comments_real - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let Some(client) = create_client() else {
         return;
     };
@@ -685,6 +754,10 @@ async fn test_tiktok_comments_real() {
 
 #[tokio::test]
 async fn test_instagram_comments_real() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_instagram_comments_real - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let Some(client) = create_client() else {
         return;
     };
@@ -753,6 +826,10 @@ async fn test_instagram_comments_real() {
 
 #[tokio::test]
 async fn test_reddit_comments_real() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_reddit_comments_real - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let Some(client) = create_client() else {
         return;
     };
@@ -820,6 +897,10 @@ async fn test_reddit_comments_real() {
 
 #[tokio::test]
 async fn test_twitter_comments_real() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_twitter_comments_real - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let Some(client) = create_client() else {
         return;
     };
@@ -888,6 +969,10 @@ async fn test_twitter_comments_real() {
 
 #[tokio::test]
 async fn test_all_apis_comprehensive() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_all_apis_comprehensive - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let Some(client) = create_client() else {
         return;
     };

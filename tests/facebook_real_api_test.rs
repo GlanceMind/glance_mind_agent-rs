@@ -48,6 +48,23 @@ fn live_test_mutex() -> &'static Mutex<()> {
     LIVE_TEST_MUTEX.get_or_init(|| Mutex::new(()))
 }
 
+fn live_api_tests_enabled() -> bool {
+    let _ = dotenvy::dotenv();
+    // CI opt-in: on GitHub Actions the live suites only run when RUN_REAL_API_TESTS
+    // is explicitly set (D-14; CI always has credentials, so the env-skip alone
+    // would never trigger there).
+    if std::env::var_os("GITHUB_ACTIONS").is_some()
+        && std::env::var_os("RUN_REAL_API_TESTS").is_none()
+    {
+        return false;
+    }
+    // Credential unset or empty -> skip (empty string counts as unset).
+    match std::env::var("FACEBOOK_RAPIDAPI_KEY") {
+        Ok(v) if !v.trim().is_empty() => true,
+        _ => false,
+    }
+}
+
 fn require_rapidapi_config() -> RapidApiConfig {
     let _ = dotenvy::dotenv();
 
@@ -591,6 +608,10 @@ async fn pick_live_post_with_comments() -> (Value, Vec<Value>) {
 
 #[tokio::test]
 async fn test_facebook_keyword_posts_real() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_facebook_keyword_posts_real - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let raw_body = fetch_raw_json("/search/posts", &[("query", POSTS_QUERY)]).await;
     let raw_posts = assert_list_results(&raw_body, "/search/posts");
@@ -640,6 +661,10 @@ async fn test_facebook_keyword_posts_real() {
 
 #[tokio::test]
 async fn test_facebook_keyword_posts_real_paginates_search_results() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_facebook_keyword_posts_real_paginates_search_results - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let adapter = create_adapter();
     let strategy = FacebookStrategy::new();
@@ -674,6 +699,10 @@ async fn test_facebook_keyword_posts_real_paginates_search_results() {
 
 #[tokio::test]
 async fn test_facebook_keyword_posts_real_covers_all_search_params() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_facebook_keyword_posts_real_covers_all_search_params - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let raw_body =
         fetch_raw_json("/search/posts", &[("query", "china travel beijing,china")]).await;
@@ -721,6 +750,10 @@ async fn test_facebook_keyword_posts_real_covers_all_search_params() {
 
 #[tokio::test]
 async fn test_facebook_keyword_pages_real() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_facebook_keyword_pages_real - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let raw_pages_body =
         fetch_raw_json("/search/pages", &[("query", PAGE_QUERY_WITH_LOCATION)]).await;
@@ -764,6 +797,10 @@ async fn test_facebook_keyword_pages_real() {
 
 #[tokio::test]
 async fn test_facebook_keyword_pages_real_paginates_page_posts() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_facebook_keyword_pages_real_paginates_page_posts - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let adapter = create_adapter();
     let strategy = FacebookStrategy::new();
@@ -802,6 +839,10 @@ async fn test_facebook_keyword_pages_real_paginates_page_posts() {
 
 #[tokio::test]
 async fn test_facebook_keyword_places_real() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_facebook_keyword_places_real - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let raw_places_body =
         fetch_raw_json("/search/places", &[("query", PLACE_QUERY_WITH_LOCATION)]).await;
@@ -838,6 +879,10 @@ async fn test_facebook_keyword_places_real() {
 
 #[tokio::test]
 async fn test_facebook_page_real_text_and_numeric() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_facebook_page_real_text_and_numeric - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let page_posts_body = fetch_raw_json("/page/posts", &[("page_id", PAGE_ID)]).await;
     let page_posts = assert_list_results(&page_posts_body, "/page/posts");
@@ -891,6 +936,10 @@ async fn test_facebook_page_real_text_and_numeric() {
 
 #[tokio::test]
 async fn test_facebook_post_url_real() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_facebook_post_url_real - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let raw_post_body = fetch_raw_json("/post", &[("post_id", POST_LOOKUP_ID)]).await;
     let raw_post = assert_object_result(&raw_post_body, "/post");
@@ -945,6 +994,10 @@ async fn test_facebook_post_url_real() {
 
 #[tokio::test]
 async fn test_facebook_post_fetch_real() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_facebook_post_fetch_real - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let raw_post_body = fetch_raw_json("/post", &[("post_id", POST_ID)]).await;
     let raw_post = assert_object_result(&raw_post_body, "/post");
@@ -966,6 +1019,10 @@ async fn test_facebook_post_fetch_real() {
 
 #[tokio::test]
 async fn test_facebook_post_comments_real() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_facebook_post_comments_real - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let raw_comments_body = fetch_raw_json("/post/comments", &[("post_id", POST_ID)]).await;
     let raw_comments = assert_list_results(&raw_comments_body, "/post/comments");
@@ -1013,6 +1070,10 @@ async fn test_facebook_post_comments_real() {
 
 #[tokio::test]
 async fn test_facebook_post_comments_real_fetch_all_comments() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_facebook_post_comments_real_fetch_all_comments - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let (raw_post, raw_comments) = pick_live_post_with_comments().await;
     let post_id = raw_post
