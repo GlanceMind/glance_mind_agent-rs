@@ -8,6 +8,7 @@ use crate::domain::errors::{GatewayError, GatewayResult};
 use crate::domain::{Comment, Content, KeywordType, SearchOptions};
 use crate::ports::{
     comment_gateway::{FetchCommentsOptions, FetchCommentsResult},
+    content_gateway::FetchOutcome,
     CommentGateway, ContentGateway,
 };
 
@@ -90,6 +91,25 @@ impl MockContentGateway {
         *mode = error;
     }
 
+    /// M1-T3 分页注入(FR-003):为 keyword 注入多页搜索结果(页间隐式 cursor 由 mock 内部生成)。
+    ///
+    /// 契约(m1-pagination-core.md §3 M1-T3 测试 2):
+    /// - mock 的 `fetch_by_keyword_with_outcome` override 内部用 `PaginationLoop` 驱动
+    ///   (共享构造 dogfooding;AG-005 合规:mock 的是上游数据,不是状态机);
+    /// - **legacy 桥接(冻结)**:`add_search_pages` 同时使 legacy `fetch_by_keyword`
+    ///   返回各页 flatten 后截断到 `options.count` 的结果。
+    pub fn add_search_pages(&self, _keyword: &str, _pages: Vec<Vec<Content>>) {
+        todo!("M1-T3 实现载荷:分页注入存储 + legacy flatten 桥接")
+    }
+
+    /// M1-T3:在第 `page_idx` 页(0-based)注入错误,翻页驱动行进至该页时触发。
+    ///
+    /// 语义(DR-10 冻结):PartialFailure 触发集 = 仅 `GatewayError::RateLimited` 且已有进展;
+    /// 其余错误即使有进展也整体 `Err`;零进展(第 1 页即错)一律整体 `Err`(F-001)。
+    pub fn set_page_error_at(&self, _page_idx: usize, _error: MockError) {
+        todo!("M1-T3 实现载荷:页级错误注入存储")
+    }
+
     /// Get all tracked calls
     pub fn get_calls(&self) -> Vec<GatewayCall> {
         self.calls.read().unwrap().clone()
@@ -166,6 +186,16 @@ impl ContentGateway for MockContentGateway {
                 None => Ok(vec![]),
             },
         }
+    }
+
+    /// M1-T3 override 骨架:按注入页驱动 `PaginationLoop`,产出 `FetchOutcome`/`Err`
+    /// (语义 = m1-pagination-core.md §3 M1-T3 测试 2/3/4/6;DR-10 触发集冻结)。
+    async fn fetch_by_keyword_with_outcome(
+        &self,
+        _keyword: &KeywordType,
+        _options: &SearchOptions,
+    ) -> GatewayResult<FetchOutcome> {
+        todo!("M1-T3 实现载荷:分页注入驱动 + shortfall 产出")
     }
 
     async fn fetch_user_content(&self, user_id: &str, count: u32) -> GatewayResult<Vec<Content>> {
@@ -429,5 +459,132 @@ mod tests {
                 max: 5
             }] if content_id == "v123"
         ));
+    }
+
+    // ===== M1-T3 测试载荷(m1-pagination-core.md §3 M1-T3;断言 = 计划原文契约) =====
+
+    use crate::ports::content_gateway::FetchShortfall;
+
+    /// 生成 `n` 条 content_id 互异的测试 Content(沿仓内 `Content::new` 样板)。
+    fn page(prefix: &str, start: usize, n: usize) -> Vec<Content> {
+        (start..start + n)
+            .map(|i| Content::new("mock", format!("{prefix}{i}")))
+            .collect()
+    }
+
+    fn search_kw() -> KeywordType {
+        KeywordType::Search("kw".to_string())
+    }
+
+    /// M1-T3 测试 2:注入 2 页(20+10)、count=50 → 30 条 + Exhausted。
+    #[tokio::test]
+    async fn mock_gateway_paged_injection_exhausted() {
+        let gateway = MockContentGateway::new();
+        gateway.add_search_pages("kw", vec![page("a", 0, 20), page("a", 20, 10)]);
+
+        let outcome = gateway
+            .fetch_by_keyword_with_outcome(&search_kw(), &SearchOptions::new("kw").with_count(50))
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.contents.len(), 30);
+        assert_eq!(outcome.shortfall, Some(FetchShortfall::Exhausted));
+    }
+
+    /// M1-T3 测试 3:注入 3 页(20+20+20)、count=50 → 50 条、shortfall=None。
+    #[tokio::test]
+    async fn mock_gateway_paged_injection_reaches_count() {
+        let gateway = MockContentGateway::new();
+        gateway.add_search_pages(
+            "kw",
+            vec![page("a", 0, 20), page("a", 20, 20), page("a", 40, 20)],
+        );
+
+        let outcome = gateway
+            .fetch_by_keyword_with_outcome(&search_kw(), &SearchOptions::new("kw").with_count(50))
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.contents.len(), 50);
+        assert!(outcome.shortfall.is_none());
+    }
+
+    /// M1-T3 测试 4:第 2 页 RateLimit + 第 1 页已有 20 条 → PartialFailure 含 "rate"
+    /// (大小写不敏感);第 1 页即错(零进展)→ 整体 Err(GatewayError::RateLimited)(F-001)。
+    #[tokio::test]
+    async fn mock_gateway_page_failure_with_progress() {
+        // 有进展分支
+        let gateway = MockContentGateway::new();
+        gateway.add_search_pages("kw", vec![page("a", 0, 20), page("a", 20, 10)]);
+        gateway.set_page_error_at(1, MockError::RateLimit);
+
+        let outcome = gateway
+            .fetch_by_keyword_with_outcome(&search_kw(), &SearchOptions::new("kw").with_count(50))
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.contents.len(), 20);
+        match outcome.shortfall {
+            Some(FetchShortfall::PartialFailure { ref message }) => {
+                assert!(
+                    message.to_lowercase().contains("rate"),
+                    "PartialFailure message must contain \"rate\" (case-insensitive), got {message:?}"
+                );
+            }
+            ref other => panic!("expected Some(PartialFailure), got {other:?}"),
+        }
+
+        // 零进展分支(第 1 页即错)
+        let gateway = MockContentGateway::new();
+        gateway.add_search_pages("kw", vec![page("a", 0, 20), page("a", 20, 10)]);
+        gateway.set_page_error_at(0, MockError::RateLimit);
+
+        let result = gateway
+            .fetch_by_keyword_with_outcome(&search_kw(), &SearchOptions::new("kw").with_count(50))
+            .await;
+
+        assert!(
+            matches!(result, Err(GatewayError::RateLimited { .. })),
+            "zero-progress failure must be overall Err(GatewayError::RateLimited), got {result:?}"
+        );
+    }
+
+    /// M1-T3 测试 6(DR-10 触发集冻结):第 2 页注入非 429(network 类)错误、
+    /// 第 1 页已有 20 条 → 整体 Err;不得收敛为 PartialFailure
+    /// (触发集 = 仅 `GatewayError::RateLimited`,扩大须经 root)。
+    #[tokio::test]
+    async fn non_rate_limited_error_with_progress_is_err() {
+        let gateway = MockContentGateway::new();
+        gateway.add_search_pages("kw", vec![page("a", 0, 20), page("a", 20, 10)]);
+        gateway.set_page_error_at(1, MockError::Network);
+
+        let result = gateway
+            .fetch_by_keyword_with_outcome(&search_kw(), &SearchOptions::new("kw").with_count(50))
+            .await;
+
+        assert!(
+            matches!(result, Err(_)),
+            "non-rate-limited error with progress must be overall Err (DR-10), got {result:?}"
+        );
+    }
+
+    /// M1-T3 测试 8(legacy 桥接冻结):注入 2 页(20+10)→ legacy `fetch_by_keyword`
+    /// 返回各页 flatten 后截断到 `options.count` 的结果:count=50 → 30 条;count=25 → 25 条。
+    #[tokio::test]
+    async fn legacy_fetch_sees_flattened_pages() {
+        let gateway = MockContentGateway::new();
+        gateway.add_search_pages("kw", vec![page("a", 0, 20), page("a", 20, 10)]);
+
+        let full = gateway
+            .fetch_by_keyword(&search_kw(), &SearchOptions::new("kw").with_count(50))
+            .await
+            .unwrap();
+        assert_eq!(full.len(), 30);
+
+        let truncated = gateway
+            .fetch_by_keyword(&search_kw(), &SearchOptions::new("kw").with_count(25))
+            .await
+            .unwrap();
+        assert_eq!(truncated.len(), 25);
     }
 }
