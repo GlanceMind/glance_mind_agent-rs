@@ -1,11 +1,12 @@
 //! Mock Gateway implementations for testing
 
 use async_trait::async_trait;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 
 use crate::domain::errors::{GatewayError, GatewayResult};
 use crate::domain::{Comment, Content, KeywordType, SearchOptions};
+use crate::pagination::{PageDecision, PaginationLoop};
 use crate::ports::{
     comment_gateway::{FetchCommentsOptions, FetchCommentsResult},
     content_gateway::FetchOutcome,
@@ -20,6 +21,10 @@ pub struct MockContentGateway {
     search_results: RwLock<HashMap<String, Vec<Content>>>,
     /// Contents by user ID
     user_contents: RwLock<HashMap<String, Vec<Content>>>,
+    /// M1-T3:Paged search results by keyword (页间隐式 cursor 由 mock 内部生成)
+    search_pages: RwLock<HashMap<String, Vec<Vec<Content>>>>,
+    /// M1-T3:Page-level error injection (0-based page index)
+    page_errors: RwLock<HashMap<usize, MockError>>,
     /// Whether to simulate errors
     error_mode: RwLock<Option<MockError>>,
     /// Call tracking
@@ -62,6 +67,8 @@ impl MockContentGateway {
             contents: RwLock::new(HashMap::new()),
             search_results: RwLock::new(HashMap::new()),
             user_contents: RwLock::new(HashMap::new()),
+            search_pages: RwLock::new(HashMap::new()),
+            page_errors: RwLock::new(HashMap::new()),
             error_mode: RwLock::new(None),
             calls: RwLock::new(Vec::new()),
         }
@@ -98,16 +105,36 @@ impl MockContentGateway {
     ///   (共享构造 dogfooding;AG-005 合规:mock 的是上游数据,不是状态机);
     /// - **legacy 桥接(冻结)**:`add_search_pages` 同时使 legacy `fetch_by_keyword`
     ///   返回各页 flatten 后截断到 `options.count` 的结果。
-    pub fn add_search_pages(&self, _keyword: &str, _pages: Vec<Vec<Content>>) {
-        todo!("M1-T3 实现载荷:分页注入存储 + legacy flatten 桥接")
+    pub fn add_search_pages(&self, keyword: &str, pages: Vec<Vec<Content>>) {
+        // legacy 桥接(冻结):flatten 后同步注入 search_results,
+        // 使旧 `fetch_by_keyword` 路径返回 flatten 截断到 options.count 的结果。
+        let flattened: Vec<Content> = pages.iter().flatten().cloned().collect();
+        self.add_search_results(keyword, flattened);
+
+        let mut paged = self.search_pages.write().unwrap();
+        paged.insert(keyword.to_lowercase(), pages);
     }
 
     /// M1-T3:在第 `page_idx` 页(0-based)注入错误,翻页驱动行进至该页时触发。
     ///
     /// 语义(DR-10 冻结):PartialFailure 触发集 = 仅 `GatewayError::RateLimited` 且已有进展;
     /// 其余错误即使有进展也整体 `Err`;零进展(第 1 页即错)一律整体 `Err`(F-001)。
-    pub fn set_page_error_at(&self, _page_idx: usize, _error: MockError) {
-        todo!("M1-T3 实现载荷:页级错误注入存储")
+    pub fn set_page_error_at(&self, page_idx: usize, error: MockError) {
+        let mut errors = self.page_errors.write().unwrap();
+        errors.insert(page_idx, error);
+    }
+
+    /// 第 `page_idx` 页的注入错误 → `GatewayError`(映射沿用 `check_error` 样板)。
+    fn page_error_for(&self, page_idx: usize) -> Option<GatewayError> {
+        let errors = self.page_errors.read().unwrap();
+        errors.get(&page_idx).map(|e| match e {
+            MockError::Network => GatewayError::Network("Mock network error".into()),
+            MockError::RateLimit => GatewayError::RateLimited {
+                retry_after_secs: Some(60),
+            },
+            MockError::NotFound => GatewayError::NotFound("Mock not found".into()),
+            MockError::Auth => GatewayError::AuthFailed("Mock auth error".into()),
+        })
     }
 
     /// Get all tracked calls
@@ -188,14 +215,77 @@ impl ContentGateway for MockContentGateway {
         }
     }
 
-    /// M1-T3 override 骨架:按注入页驱动 `PaginationLoop`,产出 `FetchOutcome`/`Err`
+    /// M1-T3 override:按注入页驱动 `PaginationLoop`(共享构造 dogfooding;
+    /// mock 的是上游页数据,不是状态机),产出 `FetchOutcome`/`Err`
     /// (语义 = m1-pagination-core.md §3 M1-T3 测试 2/3/4/6;DR-10 触发集冻结)。
     async fn fetch_by_keyword_with_outcome(
         &self,
-        _keyword: &KeywordType,
-        _options: &SearchOptions,
+        keyword: &KeywordType,
+        options: &SearchOptions,
     ) -> GatewayResult<FetchOutcome> {
-        todo!("M1-T3 实现载荷:分页注入驱动 + shortfall 产出")
+        let injected = match keyword {
+            KeywordType::Search(q) | KeywordType::Hashtag(q) => {
+                let paged = self.search_pages.read().unwrap();
+                paged.get(&q.to_lowercase()).cloned()
+            }
+            _ => None,
+        };
+
+        let Some(pages) = injected else {
+            // 未注入 keyword:走既有路径,滚动兼容语义(shortfall=None)
+            return Ok(FetchOutcome::complete(
+                self.fetch_by_keyword(keyword, options).await?,
+            ));
+        };
+
+        let mut driver = PaginationLoop::new(options.count as usize);
+        let mut delivered: Vec<Content> = Vec::new();
+
+        for (idx, page) in pages.iter().enumerate() {
+            if let Some(err) = self.page_error_for(idx) {
+                // DR-10(冻结):PartialFailure 触发集 = 仅 RateLimited 且已有进展
+                // (过滤后交付非空);非 RateLimited 错误无论进展、RateLimited 零进展
+                // → 整体 Err(F-001)。
+                if matches!(err, GatewayError::RateLimited { .. }) && !delivered.is_empty() {
+                    return FetchOutcome::partial(delivered, err.to_string());
+                }
+                return Err(err);
+            }
+
+            let item_ids: Vec<String> = page.iter().map(|c| c.content_id.clone()).collect();
+            // 页间隐式 cursor:末页归一化为 None(上游枯竭信号)
+            let next_cursor = if idx + 1 < pages.len() {
+                Some(format!("mock-cursor-{}", idx + 1))
+            } else {
+                None
+            };
+
+            let outcome = driver.accept_page(&item_ids, next_cursor);
+            let accepted: HashSet<&String> = outcome.newly_accepted.iter().collect();
+            delivered.extend(
+                page.iter()
+                    .filter(|c| accepted.contains(&c.content_id))
+                    .cloned(),
+            );
+
+            if let PageDecision::Stop(reason) = outcome.decision {
+                return Ok(FetchOutcome {
+                    contents: delivered,
+                    shortfall: driver.shortfall_for(&reason),
+                });
+            }
+        }
+
+        // 注入页耗尽仍 Continue(仅 pages 为空时可达;非空末页 cursor=None 必 Stop):
+        // 补一页 (空, None) 经状态机收尾(终止经 shortfall_for)。
+        let outcome = driver.accept_page(&[], None);
+        let PageDecision::Stop(reason) = outcome.decision else {
+            unreachable!("cursor=None 必产生 Stop");
+        };
+        Ok(FetchOutcome {
+            contents: delivered,
+            shortfall: driver.shortfall_for(&reason),
+        })
     }
 
     async fn fetch_user_content(&self, user_id: &str, count: u32) -> GatewayResult<Vec<Content>> {

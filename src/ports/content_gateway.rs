@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 
-use crate::domain::errors::GatewayResult;
+use crate::domain::errors::{GatewayError, GatewayResult};
 use crate::domain::{Content, KeywordType, SearchOptions};
 
 /// 取数欠交付原因(per R-007;cursor 不过 trait,A005 drop)
@@ -24,13 +24,19 @@ pub struct FetchOutcome {
 
 impl FetchOutcome {
     /// 构造:足量交付(`shortfall = None`)。
-    pub fn complete(_contents: Vec<Content>) -> Self {
-        todo!("M1-T3 实现载荷:complete 构造器(shortfall=None)")
+    pub fn complete(contents: Vec<Content>) -> Self {
+        Self {
+            contents,
+            shortfall: None,
+        }
     }
 
     /// 构造:上游枯竭欠交付(`shortfall = Some(FetchShortfall::Exhausted)`)。
-    pub fn exhausted(_contents: Vec<Content>) -> Self {
-        todo!("M1-T3 实现载荷:exhausted 构造器(shortfall=Some(Exhausted))")
+    pub fn exhausted(contents: Vec<Content>) -> Self {
+        Self {
+            contents,
+            shortfall: Some(FetchShortfall::Exhausted),
+        }
     }
 
     /// 构造:部分失败(`shortfall = Some(FetchShortfall::PartialFailure { message })`)。
@@ -39,8 +45,19 @@ impl FetchOutcome {
     /// 零可交付进展(过滤后为空)的失败一律走 `Err`(F-001 语义)。
     /// 本构造器对空 `contents` 必须返回 `Err`(归一化为错误),
     /// 不得产出「空 contents + Some(PartialFailure)」的合法 `FetchOutcome`。
-    pub fn partial(_contents: Vec<Content>, _message: impl Into<String>) -> GatewayResult<Self> {
-        todo!("M1-T3 实现载荷:partial 构造器(DR-01:空 contents → Err)")
+    pub fn partial(contents: Vec<Content>, message: impl Into<String>) -> GatewayResult<Self> {
+        if contents.is_empty() {
+            // DR-01:零可交付进展的失败归一化为 Err(F-001 语义)
+            return Err(GatewayError::InvalidParams(
+                "PartialFailure requires non-empty contents (DR-01): zero-progress failures must be Err".into(),
+            ));
+        }
+        Ok(Self {
+            contents,
+            shortfall: Some(FetchShortfall::PartialFailure {
+                message: message.into(),
+            }),
+        })
     }
 }
 
