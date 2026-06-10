@@ -108,7 +108,8 @@ let count = config.max_videos.map(|v| v as u32).unwrap_or(10);
 **预期 RED 失败信息**(adapter 尚未 override 默认方法时,默认方法返回 `shortfall=None`):
 - 测试 2:`assertion 'left == right' failed: left: None, right: Some(Exhausted)`;
 - 测试 5:`assertion 'left == right' failed: left: None, right: Some(PartialFailure { .. })`;
-- 测试 6(若实现者错误地把零进展也包成 PartialFailure):`assertion failed: matches!(result, Err(GatewayError::RateLimited { .. }))`。
+- 测试 6(若实现者错误地把零进展也包成 PartialFailure):`assertion failed: matches!(result, Err(GatewayError::RateLimited { .. }))`;
+- 测试 8(默认方法 shortfall=None 时):五形状中除达量外,逐形状 `left: None, right: Some(Exhausted)` 类不等断言失败。
 RED 证据 = 上述测试在「仅有 M1 默认方法、facebook 未 override」状态下的失败输出。
 
 **GREEN(实现子 agent)**:在 `impl ContentGateway for FacebookAdapter` 内 override
@@ -119,10 +120,10 @@ async fn fetch_by_keyword_with_outcome(
 ```
 内部复用既有 `search()` 分发,但循环须把**终止原因/失败分支**翻译为 `shortfall`:
 - 达 `options.count`(`reached_post_limit` 命中)→ `shortfall = None`;
-- `cursor==None` / seen-cursor 重复 / 空页达上限,且 `contents.len() < options.count` → `Some(Exhausted)`;
-- `RateLimited` 且 `!posts.is_empty()`(有进展)→ `Some(PartialFailure{message})`;
-- `RateLimited` 且 `posts.is_empty()`(零进展)→ `return Err(...)`。
-**实现裁决(§6.1)**:保留既有手写循环,在 `search_posts_paginated`/`fetch_page_posts_paginated`/`fetch_posts_from_search_candidates` 三处出口返回 `(Vec<Content>, Option<FetchShortfall>)`(或等价载体),由 override 汇总;**语义须与 `PaginationLoop::shortfall_for` 表一致**——任务须加一条断言对齐测试(测试 8,见测试载荷区)。
+- `cursor==None` / seen-cursor 重复 / 空页达上限,且 `contents.len() < options.count`(`contents` = **过滤后交付集**长度,DR-09 口径)→ `Some(Exhausted)`;
+- `RateLimited` 且**过滤后交付集非空**(进入 `FetchOutcome.contents` 的过滤后条目数 > 0,DR-09)→ `Some(PartialFailure{message})`;
+- `RateLimited` 且**过滤后交付集为空** → `return Err(...)`(含 raw 非空但全被 date-filter 滤除的形状,测试 9 钉死)。
+**实现裁决(§6.1)**:保留既有手写循环,在 `search_posts_paginated`/`fetch_page_posts_paginated`/`fetch_posts_from_search_candidates` 三处出口返回 `(Vec<Content>, Option<FetchShortfall>)`(或等价载体),由 override 汇总;**语义须与 `PaginationLoop::shortfall_for` 表一致**——任务须加一条断言对齐测试(测试 8,见测试载荷区)。**shortfall 只由最外层循环的最终出口决定**;内层 `fetch_page_posts_paginated` 的枯竭不得外泄为整体 shortfall(测试 13 钉死)。
 
 命令:`cargo test --lib adapters::facebook`。
 
@@ -143,10 +144,10 @@ async fn fetch_by_keyword_with_outcome(
 
 1. `cursor_loop_stops_and_does_not_refetch`(F-004 请求级):第 2 页返回与第 1 页相同 cursor → 适配器**不发第 3 个相同 cursor 请求**(`requests.len() == 2`),收集首两页内容。
 2. `empty_page_streak_stops_at_three`(F-005 请求级):mock 连续返回 3 个空页(cursor 各异 c2/c3/c4)→ 适配器在第 3 空页后停止(`requests.len() == 3`,不发第 4 请求);断言总收集 0 条且(经 T-002 路径)shortfall=Exhausted。
-3. `empty_streak_resets_on_nonempty_page`(F-005 复位):空页 → 非空页(20 条)→ 空页 序列、count=50 → 计数复位,不在第 2 空页误停(`requests.len()` 反映继续翻页直到真正终止)。
-4. `rate_limited_after_progress_stops_with_collected`(F-006 请求级):第 1 页 20 条、第 2 页 429 → `requests.len() == 2`、返回首页 20 条(与 M2-T2 测试 5 同源但断言请求次数,确认不重试到耗尽预算)。
+3. `empty_streak_resets_on_nonempty_page`(F-005 复位):空页 → 非空页(20 条)→ 空页 序列、count=50 → 计数在**本页有新增(去重后)**时复位(D-15 语义),不在第 2 空页误停(`requests.len()` 反映继续翻页直到真正终止)。
+4. `rate_limited_after_progress_stops_with_collected`(F-006 请求级):第 1 页 20 条、第 2 页**排队 4 个 429 响应(各带 `retry-after: 0`)** → `requests.len() == 1 + 4 == 5`、返回首页 20 条(与 M2-T2 测试 5 同源但断言请求次数:**重试耗尽(4 次)后进入 partial 分支,不无限重试**)。
 
-**预期 RED 失败信息**:若实现者(M2-T2)在接 shortfall 时**误改了循环的请求触发条件**(如把 seen-cursor break 删除导致重复请求),测试 1 `assertion 'left == right' failed: left: 3, right: 2`;空页计数实现错误时测试 2 `left: 4, right: 3`。
+**预期 RED 失败信息**:若实现者(M2-T2)在接 shortfall 时**误改了循环的请求触发条件**(如把 seen-cursor break 删除导致重复请求),测试 1 `assertion 'left == right' failed: left: 3, right: 2`;空页计数实现错误时测试 2 `left: 4, right: 3`;T3.4 请求数期望按 5 计(适配器对 429 自动重试 ×3)。
 > **注**:这些请求级行为**现状已正确**(facebook.rs 既有循环)。故测试 1~4 **允许先绿(AG-006)**:其价值是「为 M2-T2 改动钉住既有循环不变量」——必须经 AG-012 预检证明有效(变异 seen-cursor/empty-hop 判定时这些测试须变红)。**AG-006 证明 = 手工金丝雀(只动生产代码、输出留存后还原)**:T3.1 = 临时注释 seen-cursor break → 须红;T3.2/3.3 = 临时改 `MAX_EMPTY_CURSOR_HOPS` 判定(3→999)→ 须红;T3.4 = 临时移除 RateLimited-partial 分支 → 须红。书面豁免仅当金丝雀也不可行且附实际说明。
 
 **GREEN 命令**:`cargo test --lib adapters::facebook`(T-017 组)。
@@ -168,10 +169,10 @@ async fn fetch_by_keyword_with_outcome(
 1. `facebook_exhausted_maps_no_more_possible_data`(T-016 / F-003):MockContentGateway 注入 facebook 2 页(20+10,枯竭)、facebook strategy、`max_videos=50` → `process_task` 后经 `progress_tracker.get_task(id)` 断言 `terminal_reason` 以 `"NO_MORE_POSSIBLE_DATA"` 开头、task completed、`contents_processed == 30`。并断言**未调用** `stop_campaign_gracefully`(MockRepository 调用计数;D3 设计裁决,M1 §6.1)。
 2. `facebook_page2_failure_maps_partial_errors`(T-015 有进展 / F-002):第 1 页 20 条、第 2 页注入失败、`max_videos=50` → terminal_reason 以 `"COMPLETED_WITH_PARTIAL_ERRORS"` 开头、task completed、`contents_processed == 20`(已落进展保留)。
 3. `facebook_page1_failure_maps_failed`(T-015 零进展 / F-001 / R-008):第 1 页即不可恢复错误 → task **failed**、terminal_reason 以 `"PROVIDER_FAILURE"` 开头(既有失败路径回归;**允许先绿**,AG-006 变异证明)。
-4. `facebook_full_delivery_maps_completed`(达量基线):注入 3 页满 50 → terminal_reason 以 `"COMPLETED"` 开头且**不含** `"PARTIAL"`、不含 `"NO_MORE"`、`contents_processed == 50`。
+4. `facebook_full_delivery_maps_completed`(达量基线):注入 3 页(**20+20+10**)满 50 → terminal_reason 以 `"COMPLETED"` 开头且**不含** `"PARTIAL"`、不含 `"NO_MORE"`、`contents_processed == 50`。
 
 **预期 RED 失败信息**:**RED 取证点 = pre-M2-T1 基线**(strategy cap 截断 → count=20 提前达量):测试 1 got `COMPLETED` + contents_processed==20(而非 NO_MORE_POSSIBLE_DATA + 30);测试 2 同理(got `COMPLETED` + contents_processed==20,而非 COMPLETED_WITH_PARTIAL_ERRORS + 20 有进展路径)。
-RED 证据 = 在「M1 已在、M2-T1/T2 尚未落地」的 pre-M2 基线 commit 下的失败输出。
+RED 证据 = 在『M1 已在、**M2-T1/T2 均未落地**(即 pre-M2 基线 commit,与 M2-T5 RED 基线相同)』状态下的失败输出。
 
 **GREEN(实现子 agent)**:确认注入 gateway 实现 facebook 形状的 `fetch_by_keyword_with_outcome`(复用 M1-T3 `MockContentGateway::add_search_pages`/`set_page_error_at`),无需改 orchestrator 生产代码(D3 已在 M1-T4)。若测试暴露 orchestrator 缺陷,**回 M1-T4 修**并在报告注明跨模块依赖。命令:`cargo test --lib orchestrator`。
 

@@ -2,7 +2,7 @@
 
 > 计划族:`docs/plans/jplan/2026-06-10-pagination-max-scan/`(Step 04 起草,2026-06-10)。仓库:本仓。
 > 依赖:M1(D1/D2/D4);**分支选择 gated on V1**(C-005;判定标准 = assumptions.md V1 行)。样板:M2/M3(软依赖)。
-> 账本输入:R-006、V1、T-001(ig 行)/T-014/T-053、PV-005、P-004、C-005、N-001、AG 全局、FR-003、R-012。
+> 账本输入:R-001(ig 行)、R-006、V1、T-001(ig 行)/T-014/T-053、PV-005、P-004、C-005、N-001、AG 全局、FR-003、R-012。
 > 已裁决输入:D-01(若走翻页分支,必须 PaginationLoop)、D-02(hint 可控性消费)、D-04(cap ig=50)、D-12(V1 维持计划内验证)。
 
 ## 0. 模块目标(一句话)
@@ -47,7 +47,7 @@ V1 验证(TikHub instagram `general_search` V3/V2 请求端是否接受分页 to
 **覆盖 ID**:V1、N-001、T-053、P-004、C-005、PV-005(探测即 real gate)。
 **文件**:`tests/real_api_test.rs`(探测测试)+ 账本写回(`ledgers/assumptions.md` V1 行、`ledgers/cross-service-contracts.md` C-005)。
 
-**Gate 控制**:`TIKHUB_API_KEY`;**≤4 次调用**(P-004:V3 首页+token 重发、必要时 V2 同对);只读无清理。
+**Gate 控制**:`TIKHUB_API_KEY`;**≤4 = HTTP 请求上界**(P-004:V3 首页+token 重发、必要时 V2 同对;DR-19:探测用零重试调用,确保「调用数 = 请求数」,预算按 HTTP 请求计);只读无清理。
 **步骤与载荷**:
 1. N-001:核查 TikHub OpenAPI 文档两端点 query 参数表(截图/引文存档);**文档明确支持或排除 → 直接判定,探测调用数可省至 2**。
 2. T-053 探测测试 `real_instagram_general_search_pagination_probe`:V3 首页 → 记录 `next_max_id`/`rank_token`/`has_more` 实测值 → 带 token 重发 → 按 §2.1 标准判定;输出(两页原始 JSON)回灌 `tests/fixtures/instagram/`(PV-005)。
@@ -79,9 +79,10 @@ V1 验证(TikHub instagram `general_search` V3/V2 请求端是否接受分页 to
 1. `paginates_tokens_until_count`:多页 token 链 → 达量、shortfall=None;捕获请求断言第 2+ 请求带 token(T-014-A 主断言)。
 2. `exhausted_when_has_more_false`/token 缺失 → `Some(Exhausted)`。
 3. `repeated_token_stops`(F-004)→ `Some(Exhausted)`。
-4. 空页上限(F-005)/ partial(F-002)/ 零进展 Err(F-001,**允许先绿** AG-006)/ 达量 None / 既有 `search()` 回归(**允许先绿** AG-006)。
-**预期 RED**:测试 1 捕获请求数 1 且无 token 参数;测试 2 `left: None, right: Some(Exhausted)`。
-**GREEN 命令**:`cargo test --lib adapters::instagram`。**反作弊声明**:同 M3-T2(D-01 红线、禁特判 mock)。
+4. 空页上限(F-005)/ partial(F-002)/ 零进展 Err(F-001,**允许先绿** AG-006)/ 达量 None / 既有 `search()` 回归(**允许先绿** AG-006)。**DR-19**:partial 与零进展两条 429 测试规定 mock 429 带 `Retry-After: 0` 且按 tikhub client 重试语义排队(RateLimited max_retries=3,error.rs:140-153)——同一页 429 = 4 次 HTTP 请求,请求数期望按 4 计。
+5. `hard_error_with_progress_is_err`(DR-10,同 M3 形状):第 1 页有进展 + 第 2 页 HTTP 500(硬错误)→ 整体 `Err`(**PartialFailure 触发集仅 RateLimited,M1 D2 冻结**)。**预期 RED**:现状单次调用返回首页 Ok(无 override,shortfall=None)→ `expected Err, got Ok(..)`。
+**预期 RED**:测试 1 捕获请求数 1 且无 token 参数;测试 2 `left: None, right: Some(Exhausted)`;测试 5 `expected Err, got Ok(..)`。
+**GREEN 命令**:`cargo test --lib adapters::instagram`。**GREEN 规格补充(F-02)**:循环终止时记一条结构化日志:platform、accepted_count、StopReason/Partial(可观测性横切,Step 05 F-02)。**反作弊声明**:同 M3-T2(D-01 红线、禁特判 mock)。
 
 ---
 
@@ -93,8 +94,9 @@ V1 验证(TikHub instagram `general_search` V3/V2 请求端是否接受分页 to
 **测试载荷**:
 1. `single_page_underdelivery_reports_exhausted`(T-014-B 主断言/R-006 红线):mock 单页 20 条、count=50 → `contents.len()==20`、`shortfall == Some(Exhausted)`。
 2. `single_page_reaching_count_no_shortfall`:单页 ≥ count → 截取 count 条、`None`。
-3. `zero_progress_error_is_err`(F-001):首调即 429 → `Err`(**允许先绿** AG-006)。
+3. `zero_progress_error_is_err`(F-001):首调即 429 → `Err`(**允许先绿** AG-006)。**DR-19**:mock 429 带 `Retry-After: 0` 且按重试语义排队(RateLimited max_retries=3,error.rs:140-153)——429 = 4 次 HTTP 请求,请求数期望按 4 计。
 4. `legacy_search_unchanged`(回归;**允许先绿** AG-006)。
+> DR-10 注:分支 B 为单页语境,「中途硬错误(有进展 + 后续页 500)」形状不存在,`hard_error_with_progress_is_err` 钉子**不适用**(仅 T3-A 承担)。
 **预期 RED**:测试 1 `left: None, right: Some(Exhausted)`(默认方法无 override)。
 **GREEN 命令**:`cargo test --lib adapters::instagram`。**反作弊声明**:不得修改断言;欠量上报 Exhausted 是 R-006 的规格本体,不得改为 None/COMPLETED 语义。
 
@@ -116,10 +118,12 @@ V1 判定记录写回 assumptions.md V1 行 + C-005;所选分支 T-014 green + R
 |---|---|---|
 | V1 / N-001 / T-053 / P-004 / C-005 | M5-T1 | 判定写回义务 §1.2 |
 | R-006 | M5-T2(前提)+ M5-T3-A 或 T3-B(分支本体) | 分支互斥 §1.1 |
+| R-001(ig 行) | M5-T2 | cap 行删除 + T-001 ig 断言 |
 | T-001(ig) | M5-T2 | — |
 | T-014 | M5-T3-A 或 T3-B | 按 V1 |
 | PV-005 | M5-T1(real+回灌)+ T3-x(mock 侧) | — |
 | I-00x/F-00x(ig 实例) | M5-T3-A(分支 A 时);分支 B 时实例面收窄为 F-001 + R-006 钉子 | 机制归 M1 |
+| DR-10(有进展硬错误 → Err,ig 实例) | M5-T3-A(测试 5 `hard_error_with_progress_is_err`);分支 B 不适用(单页语境,形状不存在,T3-B 已注明) | 触发集仅 RateLimited(M1 D2 冻结);Step 07 patch |
 | AG-010~012 / R-012 / FR-005 | M5-T4 | — |
 | AG-001~007 / AG-020~023 / D-01/D-02/D-04 | §1/§2 继承 | — |
 
@@ -129,3 +133,4 @@ V1 判定记录写回 assumptions.md V1 行 + C-005;所选分支 T-014 green + R
 
 1. 分支 A 的 token 请求参数名(`max_id` vs `pagination_token` vs `rank_token` 组合)以 V1 实测/文档为准——T3-A 任务文本中参数名为占位语义,实现期由 T-053 证据定;若与计划假设冲突,走停下上报。
 2. V2 fallback 路径翻页不做(§2.2);若 Step 06 评审认为必要,作为后续增量(非本计划账本要求)。
+3. **Step 07 patch 记录见 `patches/07-batchF-platforms.md`**(F-07、DR-10/DR-19、F-02)。

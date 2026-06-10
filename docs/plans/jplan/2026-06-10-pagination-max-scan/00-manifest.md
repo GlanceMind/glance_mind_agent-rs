@@ -13,8 +13,8 @@
 
 ## Steps
 
-- current_step: `07-patch-iterate`(Step 06 完成:7 评审并行交付,**P1×8 + P2×14 + P3 批**;路由 Step 07)
-- next_step: `07-patch-iterate`(权威输入 = `reviews/domain/summary.md`;批次与裁决提请见 `handoffs/06-to-07.md`)
+- current_step: `08-traceability`(Step 07 完成:6 批补丁全收口,P0/P1 零遗留;subdriven 双审流程,patch notes 齐)
+- next_step: `08-traceability`(Traceability Compiler PASS/FAIL;必读清单见 `handoffs/07-to-08.md`)
 - completed_steps:
   - `00-init` — 2026-06-10
   - `01-first-principles` — 2026-06-10
@@ -26,6 +26,7 @@
   - `04-draft(M3/M4/M5/ROOT)` — 2026-06-10(用户授权单会话连续起草)
   - `05-autoplan-review` — 2026-06-10(手工等价;无 P0/P1)
   - `06-domain-review` — 2026-06-10(7/7 评审,并行只读子 agent;P1×8 → 路由 Step 07)
+  - `07-patch-iterate` — 2026-06-10(subdriven 双审 ×6 批;P1×8/P2×14/P3 全闭合;patches/07-batch{A..F};执行期新事实 = main PR #5 → M3 改写为迁移任务)
 
 ## Artifact Map
 
@@ -68,7 +69,8 @@
 | Domain reviews | `reviews/domain/{first-principles,protocol,state-machine,test-gate,dependency,failure-recovery,plan-integrator,summary}.md` | ✅(2026-06-10;7/7 并行只读;P1×8) |
 | Handoff 06→07 | `handoffs/06-to-07.md` | ✅(批次 A/B/C + 三项裁决提请) |
 | Domain reviews | `reviews/domain/` | ⬜ |
-| Patches | `patches/` | ⬜ |
+| Patches | `patches/07-batch{A,B,C,D,E,F}-*.md` | ✅(2026-06-10;6 批,各含闭合理由与双审记录) |
+| Handoff 07→08 | `handoffs/07-to-08.md` | ✅ |
 | Traceability compile | `compile/` | ⬜ |
 | Final handoff | `handoff.md` | ⬜ |
 
@@ -90,23 +92,18 @@
 - Concurrency/Resource Reviewer(翻页循环 × 并发处理 × 预算递增)
 - Cross-Service Contract Reviewer(task 协议字段语义跨仓一致)
 
-## Patch Queue(Step 05 + Step 06 合并;**权威明细 = `reviews/domain/summary.md`**,Step 07 按 `handoffs/06-to-07.md` 批次执行)
+## Patch Queue —— **全部闭合(Step 07,2026-06-10)**
 
-**P1(批 A,must-patch)**:DR-01(D3 缺行 空+PartialFailure,双确认)、DR-02(PT-2 属性不可满足,双确认)、DR-03(循环活性缺口/empty 语义)、DR-04(多 keyword 预算超界 → **用户三选一裁决**)、DR-05(M2 429 与重试循环矛盾)、DR-06(scheduler 变异门禁空转族:子目录非独立仓 + --relative + root §4,四重确认)、DR-07(mutation CI 每变异体打付费 live)、DR-08(RT-3 提前为 M1-T0,升级原 F-01)。
+P1×8(DR-01~DR-08,含 DR-04→D-13 用户裁决)、P2×14(DR-09~DR-22 + F-02/F-03)、P3 批(PI/TG/FR/SM/protocol 全清单 + F-04/F-05):逐条改动与闭合理由见 `patches/07-batch{A..F}-*.md`;无降级、无延迟、无 P0/P1 遗留。新增裁决:D-13(任务级 max_count)/D-14(mutation×live 双修)/D-15(facebook 活性改生产行),入 `04-adjudications.md`。执行期新事实:main PR #5(tiktok 独立修复)→ M3 改写为「迁移到共享契约」,既有测试撞红处置入计划(批 F note)。
 
-**P2(批 B)**:DR-09(进展定义统一)、DR-10(recoverable=仅 RateLimited 冻结)、DR-11(last-Some-wins + 混合 shortfall)、DR-12(AG-006 金丝雀化)、DR-13(M2-T4 RED 错置)、DR-14(AG-008 live 探针类别)、DR-15(簿记外先绿)、DR-16(twitter live 分支断言)、DR-17(T2.8 域 + candidates 聚合)、DR-18(M3 伪代码矛盾)、DR-19(TikHub 429 睡眠×mutants)、DR-20(M4 fixture 来源)、DR-21(C-004 前缀碰撞)、DR-22(failed 重派语义文档)+ Step05 F-02(日志规格)/F-03(PR 纪律)。
+## Files Required for Next Invocation(Step 08,Traceability Compile)
 
-**P3(批 C)**:summary §P3 清单(PI F-07~F-11、TG-07~TG-11、FR#5/#6、SM#F6~F9、protocol#2~4、T-010 形状、T-050 预算口径)+ Step05 F-04/F-05。
-
-## Files Required for Next Invocation(Step 07,Patch-Iterate)
-
-必读(per `handoffs/06-to-07.md`,Step 07 只读此清单):
+必读(per `handoffs/07-to-08.md`,Step 08 只读此清单):
 - `docs/plans/jplan/2026-06-10-pagination-max-scan/00-manifest.md`
-- `~/.claude/skills/jplan/references/step-07-patch-iterate.md`(权威流程)
-- `docs/plans/jplan/2026-06-10-pagination-max-scan/reviews/domain/summary.md`(patch 唯一权威输入)
-- `docs/plans/jplan/2026-06-10-pagination-max-scan/handoffs/06-to-07.md`(批次 A/B/C + 受影响文件定位 + 三项裁决提请)
-- 受影响计划与账本(按 finding 定位,清单在 handoff §2/§3)
-- `docs/plans/jplan/2026-06-10-pagination-max-scan/04-adjudications.md`(patch 不得违背 D-01~D-12;D-04 多 keyword 裁决为新增提请)
+- `~/.claude/skills/jplan/references/step-08-traceability.md` + `references/reviewer-prompts.md` 末节 Traceability Compiler
+- `plans/root.md` + `plans/modules/m{1..6}-*.md`(补丁后现行版)
+- `03-split.md` + 全部 `ledgers/*.md` + `04-adjudications.md`(D-01~D-15)
+- `patches/07-batch*.md`(closure rationale 抽查)+ handoff §「Compiler 须知」(允许先绿三形态、M3 迁移改写为有意设计等)
 
 起草顺序:M1 ✅ → M2 ✅ → M6 ✅ → M3 ✅ → M4 ✅ → M5 ✅ → ROOT ✅(**Step 04 全部完成**)。
 
