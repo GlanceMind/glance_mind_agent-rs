@@ -46,6 +46,9 @@ pub struct PageOutcome {
 }
 
 impl PaginationLoop {
+    /// 调用方须保证 `max_count > 0`:传 0 时首次 `accept_page` 即 `Stop(ReachedMaxCount)`
+    /// 且 `shortfall_for` 返回 `None`(静默空完成)——生产路径(redis 映射缺省 10)不会产生 0,
+    /// 但 M2~M5 消费方不得依赖 0 的行为(M1-T2 质量审观察项)。
     pub fn new(max_count: usize) -> Self {
         Self {
             max_count,
