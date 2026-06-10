@@ -22,6 +22,7 @@ pub mod config;
 pub mod adapters;
 pub mod domain;
 pub mod orchestrator;
+pub mod pagination;
 pub mod platform;
 pub mod ports;
 pub mod strategies;

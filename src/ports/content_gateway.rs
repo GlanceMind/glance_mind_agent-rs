@@ -5,6 +5,23 @@ use async_trait::async_trait;
 use crate::domain::errors::GatewayResult;
 use crate::domain::{Content, KeywordType, SearchOptions};
 
+/// 取数欠交付原因(per R-007;cursor 不过 trait,A005 drop)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FetchShortfall {
+    /// 上游枯竭:has_more=false / cursor 缺失 / 空页上限 / 重复 cursor(F-003/F-004/F-005)
+    Exhausted,
+    /// 翻页中途失败但已有部分进展(F-002/F-006);message 仅用于 terminal_reason,入库前必经脱敏
+    PartialFailure { message: String },
+}
+
+/// fetch 路径返回载体
+#[derive(Debug, Clone)]
+pub struct FetchOutcome {
+    pub contents: Vec<Content>,
+    /// None = 足量交付 或 适配器未提供欠交付信息(未迁移平台的滚动兼容语义)
+    pub shortfall: Option<FetchShortfall>,
+}
+
 /// Port for fetching content (videos, posts) from external platforms
 #[async_trait]
 pub trait ContentGateway: Send + Sync {
