@@ -601,6 +601,17 @@ pub struct TaskConfig {
     /// DM strategy instructions
     pub dm_strategy: Option<String>,
 
+    /// 单页大小提示(M1-T5 / D4;**内部域模型字段,非协议形状**——`protocol_gen::TaskConfig`
+    /// 零改动,R-012 合规)。
+    ///
+    /// 跨服务契约(C-002):`search_limit` = 单页大小提示(clamp 到平台页上限,见
+    /// `pagination::platform_page_cap`);`search_offset` = 仅观测字段,agent 不读、
+    /// 不参与取数(I-008)。两字段形状不变、不删(scheduler 写方:lib.rs dispatch_task)。
+    /// 写方 = `redis.rs::to_domain_task_config`;读方 = 各平台 strategy(M2~M5)。
+    /// `None` = 平台默认页大小(老 task / search_limit <= 0 缺省语义,C-001 向后兼容)。
+    #[serde(default)]
+    pub page_size_hint: Option<u32>,
+
     /// Concurrency configuration (optional, uses global defaults if not set)
     #[serde(default)]
     pub concurrency: Option<ConcurrencyConfig>,
@@ -626,6 +637,7 @@ impl TaskConfig {
             target_audience: None,
             reply_strategy: None,
             dm_strategy: None,
+            page_size_hint: None,
             concurrency: None,
             extra: HashMap::new(),
         }

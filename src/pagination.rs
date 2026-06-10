@@ -143,6 +143,24 @@ impl PaginationLoop {
     }
 }
 
+/// 平台单页上限(M1-T5 / D4 取值表,root 冻结;M2~M5 若有上游证据可经 root 修订):
+///
+/// | platform | cap | 来源 |
+/// |---|---|---|
+/// | facebook | 20 | strategies/facebook.rs:131 现行 cap |
+/// | tiktok | 20 | TikHub 硬上限(tikhub/types.rs:297) |
+/// | reddit | 100 | strategies/reddit.rs:100 |
+/// | twitter | 100 | strategies/twitter.rs:123 |
+/// | instagram | 50 | strategies/instagram.rs:99 |
+/// | 未知平台 | 20 | 保守缺省 |
+///
+/// 消费方:`redis.rs::to_domain_task_config`(`search_limit` clamp,C-002);
+/// `page_size_hint` 的 strategy 侧消费归 M2~M5(脚注 F-08)。
+pub fn platform_page_cap(platform: &str) -> u32 {
+    let _ = platform;
+    todo!("M1-T5 实现载荷:D4 取值表(fb20/tiktok20/reddit100/twitter100/ig50/unknown20)")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -456,6 +474,31 @@ mod tests {
             prop_assert!(res2.stop.is_some());
             let stop2 = res2.stop.unwrap();
             prop_assert!(lp2.shortfall_for(&stop2) != Some(FetchShortfall::Exhausted));
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // M1-T5 测试 5:platform_page_cap 取值表(D4 冻结;T-003 配套)
+    // ──────────────────────────────────────────────────────────────────
+
+    /// 单测(M1-T5.5):5 平台 + 未知平台 → D4 取值表完整表驱动断言。
+    /// 期望值如与上游证据冲突,停下上报走 root 修订,不得改测试凑数。
+    #[test]
+    fn platform_page_cap_table() {
+        let table: &[(&str, u32)] = &[
+            ("facebook", 20),
+            ("tiktok", 20),
+            ("reddit", 100),
+            ("twitter", 100),
+            ("instagram", 50),
+            ("unknown", 20),
+        ];
+        for (platform, expected_cap) in table {
+            assert_eq!(
+                platform_page_cap(platform),
+                *expected_cap,
+                "platform_page_cap({platform:?}) 应为 {expected_cap}(D4 冻结表)"
+            );
         }
     }
 }
