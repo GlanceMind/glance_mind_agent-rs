@@ -465,4 +465,19 @@ mod tests {
             prop_assert!(!reason.message.contains(&secret));
         }
     }
+
+    /// C-004 契约 pin:scheduler(M6)将按字符串读取 terminal_reason;以下 6 个 code 字符串
+    /// 自本计划起为跨服务契约,不得重命名(cross-service-contracts.md C-004/§3.2)。
+    #[test]
+    fn task_terminal_reason_codes_are_cross_service_contract() {
+        assert_eq!(TaskTerminalReason::completed().code, "COMPLETED");
+        assert_eq!(TaskTerminalReason::completed_with_partial_errors("e").code, "COMPLETED_WITH_PARTIAL_ERRORS");
+        assert_eq!(TaskTerminalReason::no_more_possible_data().code, "NO_MORE_POSSIBLE_DATA");
+        assert_eq!(TaskTerminalReason::provider_failure("e").code, "PROVIDER_FAILURE");
+        assert_eq!(TaskTerminalReason::cancelled("m").code, "CANCELLED");
+        assert_eq!(TaskTerminalReason::internal_error("e").code, "INTERNAL_ERROR");
+        // M6 读方解析依赖 "CODE: message" 形状(as_terminal_message)
+        assert_eq!(TaskTerminalReason::no_more_possible_data().as_terminal_message()
+            .split(':').next().unwrap(), "NO_MORE_POSSIBLE_DATA");
+    }
 }
