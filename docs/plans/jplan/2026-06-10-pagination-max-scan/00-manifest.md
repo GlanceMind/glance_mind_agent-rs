@@ -7,14 +7,14 @@
 
 ## Plan Family Status
 
-- status: `in-progress`
+- status: **`complete`**(2026-06-10;Step 00~09 全部完成,traceability PASS;实现入口 = `handoff.md`)
 - created: 2026-06-10
 - directory: `docs/plans/jplan/2026-06-10-pagination-max-scan/`
 
 ## Steps
 
-- current_step: `09-handoff`(Step 08 **PASS**:4 分片编译 + 编译期修复闭环,见 `99-traceability.md`)
-- next_step: `09-handoff`(产出最终执行 handoff;只读清单见 `handoffs/08-to-09.md`)
+- current_step: **完成**(Step 09 已交付 `handoff.md`;无后续 jplan 步骤)
+- next_step: **实现执行**(从 M1-T0 起;实现 agent 只读 `handoff.md` + `plans/root.md` + 所实现模块的计划与其点名账本行)
 - completed_steps:
   - `00-init` — 2026-06-10
   - `01-first-principles` — 2026-06-10
@@ -28,6 +28,7 @@
   - `06-domain-review` — 2026-06-10(7/7 评审,并行只读子 agent;P1×8 → 路由 Step 07)
   - `07-patch-iterate` — 2026-06-10(subdriven 双审 ×6 批;P1×8/P2×14/P3 全闭合;patches/07-batch{A..F};执行期新事实 = main PR #5 → M3 改写为迁移任务)
   - `08-traceability` — 2026-06-10(**PASS**;4 分片 + 编译期修复:F-009 行/三条先绿标注/03-split 勘误/SM#F8 补落)
+  - `09-handoff` — 2026-06-10(`handoff.md` 交付;计划族 complete)
 
 ## Artifact Map
 
@@ -74,7 +75,7 @@
 | Handoff 07→08 | `handoffs/07-to-08.md` | ✅ |
 | Traceability compile | `compile/shard-{m1-m2,m3m4m5,m6-root,ledgers-global}.md` + `99-traceability.md` | ✅(2026-06-10;**PASS**) |
 | Handoff 08→09 | `handoffs/08-to-09.md` | ✅ |
-| Final handoff | `handoff.md` | ⬜ |
+| Final handoff | `handoff.md` | ✅(2026-06-10;Step 09;实现阶段唯一入口) |
 
 ## Module Queue(Step 03 定稿;模块图/账本覆盖映射/完成判据见 `03-split.md`)
 
@@ -98,14 +99,13 @@
 
 P1×8(DR-01~DR-08,含 DR-04→D-13 用户裁决)、P2×14(DR-09~DR-22 + F-02/F-03)、P3 批(PI/TG/FR/SM/protocol 全清单 + F-04/F-05):逐条改动与闭合理由见 `patches/07-batch{A..F}-*.md`;无降级、无延迟、无 P0/P1 遗留。新增裁决:D-13(任务级 max_count)/D-14(mutation×live 双修)/D-15(facebook 活性改生产行),入 `04-adjudications.md`。执行期新事实:main PR #5(tiktok 独立修复)→ M3 改写为「迁移到共享契约」,既有测试撞红处置入计划(批 F note)。
 
-## Files Required for Next Invocation(Step 09,Final Handoff)
+## Files Required for Next Invocation(实现阶段)
 
-必读(per `handoffs/08-to-09.md`,Step 09 只读此清单):
-- `docs/plans/jplan/2026-06-10-pagination-max-scan/00-manifest.md`
-- `~/.claude/skills/jplan/references/step-09-handoff.md`(权威流程)
-- `99-traceability.md`(PASS 裁定 + 显式开放项 7 条)
-- `plans/root.md` + `plans/modules/m{1..6}-*.md`
-- `reviews/autoplan/summary.md` + `reviews/domain/summary.md` + `04-adjudications.md`
+jplan 流程已完结。实现 agent 只读:
+- `docs/plans/jplan/2026-06-10-pagination-max-scan/handoff.md`(唯一入口:执行序/约定/开放项)
+- `plans/root.md`(冻结表 + chain gate)
+- **所实现的那一个**模块计划 + 其头部点名的账本行
+- `04-adjudications.md`(D-01~D-15 绑定)
 
 起草顺序:M1 ✅ → M2 ✅ → M6 ✅ → M3 ✅ → M4 ✅ → M5 ✅ → ROOT ✅(**Step 04 全部完成**)。
 
