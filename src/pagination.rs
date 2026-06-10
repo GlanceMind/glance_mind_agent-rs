@@ -157,8 +157,12 @@ impl PaginationLoop {
 /// 消费方:`redis.rs::to_domain_task_config`(`search_limit` clamp,C-002);
 /// `page_size_hint` 的 strategy 侧消费归 M2~M5(脚注 F-08)。
 pub fn platform_page_cap(platform: &str) -> u32 {
-    let _ = platform;
-    todo!("M1-T5 实现载荷:D4 取值表(fb20/tiktok20/reddit100/twitter100/ig50/unknown20)")
+    match platform {
+        "reddit" | "twitter" => 100,
+        "instagram" => 50,
+        // facebook / tiktok / 未知平台 → 保守缺省 20(D4 冻结表)
+        _ => 20,
+    }
 }
 
 #[cfg(test)]

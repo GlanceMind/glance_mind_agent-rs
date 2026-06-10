@@ -464,6 +464,19 @@ impl CrawlerTaskExt for CrawlerTask {
             .with_max_videos(max_count)
             .with_max_comments_per_video(200);
 
+        // 跨服务契约(C-002):`search_limit` = 单页大小提示(clamp 到平台页上限,见 platform_page_cap);
+        // `search_offset` = 仅观测字段,agent 不读、不参与取数。两字段形状不变、不删(scheduler 写方:lib.rs dispatch_task)。
+        //
+        // M1-T5 / D4:search_limit >= 1 → Some(min(limit, 平台页上限));
+        // search_limit <= 0 → None(老 task / 缺省语义,C-001 向后兼容)。
+        // I-008:此映射(及本函数任何路径)不得读取 search_offset。
+        let search_limit = self.config.as_ref().map(|c| c.search_limit).unwrap_or(0);
+        if search_limit >= 1 {
+            config.page_size_hint = Some(
+                (search_limit as u32).min(crate::pagination::platform_page_cap(&platform_name)),
+            );
+        }
+
         // Apply platform-specific search options
         if platform_name.eq_ignore_ascii_case("tiktok") {
             if let Some(tiktok_opts) = search_opts.tiktok {
