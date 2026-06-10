@@ -450,4 +450,19 @@ mod tests {
         assert_eq!(update.progress, 50);
         assert_eq!(update.comments_processed, 100);
     }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// 冒烟属性(M1-T1/FR-001/I-009):任意输入下 redaction 输出有界且敏感值不泄漏
+        #[test]
+        fn prop_redaction_bounded_and_no_secret_leak(
+            prefix in ".{0,80}", secret in "[A-Za-z0-9_-]{8,40}", suffix in ".{0,80}"
+        ) {
+            let msg = format!("{prefix} api_key={secret} {suffix}");
+            let reason = TaskTerminalReason::provider_failure(&msg);
+            prop_assert!(reason.message.chars().count() <= 500);
+            prop_assert!(!reason.message.contains(&secret));
+        }
+    }
 }
