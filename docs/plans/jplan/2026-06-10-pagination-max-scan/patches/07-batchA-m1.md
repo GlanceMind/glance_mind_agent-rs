@@ -14,6 +14,7 @@
 | D-13/DR-04(P1) | M1-T4 任务级 max_count(跨 keyword remaining)+ 测试 8(60 vs 50 RED) | consume 上界与 reserve 对齐;I-001 任务级成立 | State-machine |
 | DR-08/D-14①(P1) | 新任务 M1-T0(三 live 文件 env-skip + CI opt-in 双守卫,零断言改动)+ M1-T7 句修正 | 本地 AG-012 baseline 可跑;CI live 相乘半边关闭 | Test-Gate / Dependency |
 | F-08(P3) | D4/D5 消费名单脚注(仅 tiktok) | 冻结表两读消除 | Plan-Integrator |
+| SM#F8(P3) | D2 优先序冻结注 + M1-T2 组合信号单测(Step 08 编译期补落) | State-machine |
 
 ## 新增测试条目(6 + M1-T0 基建)
 

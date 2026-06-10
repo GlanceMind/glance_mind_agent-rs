@@ -82,7 +82,7 @@ V1 验证(TikHub instagram `general_search` V3/V2 请求端是否接受分页 to
 4. 空页上限(F-005)/ partial(F-002)/ 零进展 Err(F-001,**允许先绿** AG-006)/ 达量 None / 既有 `search()` 回归(**允许先绿** AG-006)。**DR-19**:partial 与零进展两条 429 测试规定 mock 429 带 `Retry-After: 0` 且按 tikhub client 重试语义排队(RateLimited max_retries=3,error.rs:140-153)——同一页 429 = 4 次 HTTP 请求,请求数期望按 4 计。
 5. `hard_error_with_progress_is_err`(DR-10,同 M3 形状):第 1 页有进展 + 第 2 页 HTTP 500(硬错误)→ 整体 `Err`(**PartialFailure 触发集仅 RateLimited,M1 D2 冻结**)。**预期 RED**:现状单次调用返回首页 Ok(无 override,shortfall=None)→ `expected Err, got Ok(..)`。
 **预期 RED**:测试 1 捕获请求数 1 且无 token 参数;测试 2 `left: None, right: Some(Exhausted)`;测试 5 `expected Err, got Ok(..)`。
-**GREEN 命令**:`cargo test --lib adapters::instagram`。**GREEN 规格补充(F-02)**:循环终止时记一条结构化日志:platform、accepted_count、StopReason/Partial(可观测性横切,Step 05 F-02)。**反作弊声明**:同 M3-T2(D-01 红线、禁特判 mock)。
+**GREEN 命令**:`cargo test --lib adapters::instagram`。**GREEN 规格补充(F-02)**:循环终止时记一条结构化日志:platform、accepted_count、StopReason/Partial(可观测性横切,Step 05 F-02)。**最终验收**:同上 + `cargo build --all-features`。**反作弊声明**:同 M3-T2(D-01 红线、禁特判 mock)。
 
 ---
 
@@ -91,14 +91,14 @@ V1 验证(TikHub instagram `general_search` V3/V2 请求端是否接受分页 to
 **覆盖 ID**:R-006(单页分支)、T-014、PV-005(mock 侧)、F-001(实例)。依赖:M5-T1(判定=不支持)、M5-T2。
 **文件**:`src/adapters/instagram.rs`(override + 测试)。
 
-**测试载荷**:
+**测试载荷**(mock 形状取自 T-053 回灌样本,禁凭空捏造):
 1. `single_page_underdelivery_reports_exhausted`(T-014-B 主断言/R-006 红线):mock 单页 20 条、count=50 → `contents.len()==20`、`shortfall == Some(Exhausted)`。
 2. `single_page_reaching_count_no_shortfall`:单页 ≥ count → 截取 count 条、`None`。
 3. `zero_progress_error_is_err`(F-001):首调即 429 → `Err`(**允许先绿** AG-006)。**DR-19**:mock 429 带 `Retry-After: 0` 且按重试语义排队(RateLimited max_retries=3,error.rs:140-153)——429 = 4 次 HTTP 请求,请求数期望按 4 计。
 4. `legacy_search_unchanged`(回归;**允许先绿** AG-006)。
 > DR-10 注:分支 B 为单页语境,「中途硬错误(有进展 + 后续页 500)」形状不存在,`hard_error_with_progress_is_err` 钉子**不适用**(仅 T3-A 承担)。
 **预期 RED**:测试 1 `left: None, right: Some(Exhausted)`(默认方法无 override)。
-**GREEN 命令**:`cargo test --lib adapters::instagram`。**反作弊声明**:不得修改断言;欠量上报 Exhausted 是 R-006 的规格本体,不得改为 None/COMPLETED 语义。
+**GREEN 命令**:`cargo test --lib adapters::instagram`。**最终验收**:同上 + `cargo build --all-features`。**反作弊声明**:不得修改断言;欠量上报 Exhausted 是 R-006 的规格本体,不得改为 None/COMPLETED 语义。
 
 ---
 
@@ -111,6 +111,7 @@ V1 验证(TikHub instagram `general_search` V3/V2 请求端是否接受分页 to
 ## 4. 完成判据与独立验证(03-split §5 M5 行)
 
 V1 判定记录写回 assumptions.md V1 行 + C-005;所选分支 T-014 green + RED 证据;T-053 输出留存(≤4 调用)。命令:`TIKHUB_API_KEY=… cargo test --test real_api_test real_instagram_general_search_pagination_probe -- --nocapture`;`cargo test --lib strategies::instagram adapters::instagram`;AG-012 预检。
+允许先绿清单:M5-T1(书面性质说明,探测型无 RED→GREEN 语义)、M5-T2 缺省测试(AG-006)、T3-A.4 内 F-001/回归两条(AG-006)、T3-B.3/B.4(AG-006);其余测试均须 RED。
 
 ## 5. 账本覆盖映射
 

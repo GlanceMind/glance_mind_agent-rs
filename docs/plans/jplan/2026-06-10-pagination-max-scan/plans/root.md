@@ -12,7 +12,7 @@
 | **D3 orchestrator 映射** | M1 §2 | 映射表六行(以 M1 §2 D3 现行表为准,含两条现状回归行与一条不可达防御行) + 「contents 非空 + Exhausted 不调 stop_campaign_gracefully」(D-03);campaign 级完结区分唯一实现 = M6 |
 | **D4 页大小语义** | M1 §2 + 修订 | `TaskConfig.page_size_hint`(redis 映射 clamp);**修订措辞(D-02)**:hint 按平台可控性消费——tiktok 经 `extra_keys::PAGE_SIZE` 下发(M3 §2.1 载体,**一并冻结**);facebook/reddit/twitter/instagram(V3/V2)上游无单页参数,文档化豁免(各计划注释固化) |
 | **platform_page_cap 冻结表(D-04)** | M1 §2 D4 | fb=20 / tiktok=20 / reddit=100 / twitter=100 / ig=50 / unknown=20;修订须上游实测证据 + 本计划更新 + ASSERTION-CHANGE 流程 |
-| **C-004 terminal_reason 词汇** | M1-T6 pin | 6 个 code 字符串 + `"CODE: message"` 形状;scheduler 前缀匹配读取、容忍 NULL/未知(M6 §2.1);**M6 读方为冒号前 token 精确比较(DR-21)** |
+| **C-004 terminal_reason 词汇** | M1-T6 pin | 6 个 code 字符串 + `"CODE: message"` 形状;scheduler 按冒号前 token 精确比较读取、容忍 NULL/未知(M6 §2.1);**M6 读方为冒号前 token 精确比较(DR-21)** |
 | **C-003 completed_reason 取值** | M6/D-06 | `ONCE_EXECUTED` | `SEARCH_EXHAUSTED`(含 EXHAUST 子串,gm-e2e 白名单安全) |
 
 ## 2. 跨模块不变量终审(root 验收时执行)

@@ -100,6 +100,8 @@ pub struct PageOutcome {
 
 **`empty_streak` 语义(DR-03,冻结)**:`empty_streak` 按 `newly_accepted.is_empty()` 递增(**非**按原始 item_ids 长度)——重复内容页连发与字面空页同等计入,保证页数上界 ≈ ⌈max_count/页⌉ + MAX_EMPTY_PAGES(活性,B4)。钉子测试 = M1-T2 单测 7。
 
+**同页多信号优先序(SM#F8,冻结)**:`ReachedMaxCount` 优先于一切枯竭信号——同页同时达量且 cursor 缺失/重复/空页时取 `ReachedMaxCount`(而非 `UpstreamExhausted`/`CursorLoop`/`EmptyPageLimit`)。终态级等价由 PT-4(T-033)合取保证:达量序列下 `shortfall_for` 永不产出 `Exhausted`,本注消除 T2.8 对齐测试输入歧义。
+
 适配器侧用法(M2~M5 消费契约):async 循环里每拿到一页调 `accept_page`,按 `newly_accepted` 收集内容;`Continue{cursor}` 才发下一请求;循环内捕获可恢复错误(**= 仅 `GatewayError::RateLimited` 且已有进展,见下方 DR-10 冻结**)时按 `FetchShortfall::PartialFailure` 收尾(facebook.rs:569-576 先例语义)。
 
 **PartialFailure 触发集冻结(DR-10)**:**PartialFailure 触发集 = `GatewayError::RateLimited`(与 facebook.rs:569-576 先例一致);其余错误即使有进展也整体 `Err`**(已收集未落库内容丢弃属预期,I-005 仅保护已落库进展)。各平台不得扩大此集合;扩大须经 root 修订。钉子测试 = M1-T3 测试 6。
@@ -116,7 +118,7 @@ pub struct PageOutcome {
 | contents 非空 + Exhausted | `NO_MORE_POSSIBLE_DATA`(terminal_hint) | F-003, I-004 |
 | contents 非空 + PartialFailure | `COMPLETED_WITH_PARTIAL_ERRORS`(terminal_hint,message 经 `TaskTerminalReason` 构造器脱敏) | F-002, I-005, I-009 |
 | contents 空 + (Exhausted 或 None) | 既有零结果路径不变:`stop_campaign_gracefully` + `no_more_possible_data`(orchestrator.rs:470-513) | 现状回归保护 |
-| fetch 返回 Err(零进展) | 既有失败路径不变:`fail_task` + `terminal_reason_for_error`(F-001;保留 eval_once failed 一次重派语义,A007) | R-008 |
+| fetch 返回 Err(零进展) | 既有失败路径不变:`fail_task` + `terminal_reason_for_error`(F-001;保留 eval_once failed 一次重派语义(每 tick 一次、跨 tick 无上限,DR-22),A007) | R-008 |
 | contents 空 + PartialFailure | **不可达**(D1 构造不变量保证,DR-01);防御性处理 = 按零进展错误路径 `fail_task`(若违例出现;载体 = M1-T4 测试 9) | DR-01, F-001 |
 
 多 keyword 聚合更正(DR-11):现状实为 **last-Some-wins**(None 不覆盖 Some,orchestrator.rs:384-385 实证),非 last-wins。**聚合优先级规则(新增,B2)**:多 keyword 混合 shortfall 时 **PartialFailure > Exhausted**(部分失败不得被枯竭标签掩盖)——实现于 M1-T4(terminal_hint 合并处),钉子测试 = M1-T4 测试 7。
@@ -224,6 +226,7 @@ proptest! {
 5. `duplicate_ids_not_double_counted`:两页含相同 id 集 → 第 2 页 `newly_accepted` 为空、`accepted_count()` 不变(I-003)。
 6. `partial_failure_mapping`:`shortfall_for` 不接受 PartialFailure 类 StopReason(枚举不含之);适配器错误路径映射由 M1-T3 的 `FetchOutcome::partial` 构造器测试覆盖 —— 本测试断言 `shortfall_for(&ReachedMaxCount)==None` 与三个枯竭族 → `Some(Exhausted)` 的完整表。
 7. `repeated_content_pages_stop_at_empty_limit`(DR-03):max=50,3 连页内容与第 1 页相同(cursor 各异)→ 第 3 重复页 `Stop(EmptyPageLimit)`(`empty_streak` 按 `newly_accepted.is_empty()` 计,重复内容页 = 空进展页,D2 冻结语义)。
+8. `combined_signal_prefers_reached_max`(SM#F8):max=20,喂 1 页 20 条唯一 id + `next_cursor=None`(末页恰好达量)→ `decision==Stop(ReachedMaxCount)`、`shortfall_for(..)==None`。**预期 RED**:实现若取 `UpstreamExhausted`(先检 cursor 缺失再检达量),则 `assertion 'left == right' failed: left: Stop(UpstreamExhausted), right: Stop(ReachedMaxCount)`;达量优先序须在 `accept_page` 内显式实现(SM#F8 冻结语义)。
 
 proptest 套件(生成器要点按 AG-020~AG-023;页序列建模 `Vec<(Vec<String>, Option<String>)>`):
 - **T-030/PT-1**:`max_count ∈ 1..=200`,页数 `0..=20`,每页条数 `0..=25`,id 取 `[a-d][0-9]{0,2}` 小空间 → 驱动循环至 Stop,`prop_assert!(loop.accepted_count() <= max_count)`。
@@ -448,6 +451,7 @@ git diff main...HEAD -- src/adapters/postgres.rs   # 期望:零改动(F-009 fall
 | DR-01(构造不变量) | M1-T3(测试 7 `partial_constructor_rejects_empty_contents`)+ M1-T4(测试 9 防御兜底) | Step 07 patch;D1 冻结 + D3 第六行 |
 | DR-02(PT-2 可满足改写) | M1-T2(PT-2/T-031 改写 + harness 规范) | 计划期修正,非执行期断言变更 |
 | DR-03(empty_streak 语义) | M1-T2(单测 7 `repeated_content_pages_stop_at_empty_limit`) | facebook 对齐归 M2(D-15) |
+| SM#F8(优先序) | M1-T2(单测 8 `combined_signal_prefers_reached_max`) | ReachedMaxCount 优先;D2 冻结注 |
 | DR-10(触发集冻结) | M1-T3(测试 6 `non_rate_limited_error_with_progress_is_err`) | 仅 RateLimited;扩大须经 root |
 | DR-11(聚合更正+优先级) | M1-T4(测试 7 `mixed_shortfall_partial_wins_over_exhausted`) | last-Some-wins 更正;PartialFailure > Exhausted |
 | D-13(任务级 max_count) | M1-T4(测试 8 `two_keywords_share_task_level_max_count`) | I-001 任务级;remaining 跨 keyword 传递 |

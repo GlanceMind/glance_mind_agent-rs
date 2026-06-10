@@ -131,7 +131,7 @@ loop:
 
 **Gate 控制**:`TIKHUB_API_KEY`(real_api_test.rs:3-4 既有约定);**≤3 = HTTP 请求上界**(DR-19:探针用无重试调用或 `with_retry_config` 零重试,确保「调用数 = 请求数」,预算按 HTTP 请求计);只读无清理;AG-007 漂移区分。
 **测试载荷** — `real_tiktok_search_second_page_offset`:第 1 次调用 offset=0 记录 has_more/cursor 实测值;第 2 次调用 offset=cursor 实测值 → 断言第二页非空且 aweme_id 集合 ≠ 首页(允许部分重叠,断言不全同);两页原始响应回灌 `tests/fixtures/tiktok/search_travel_us_page2.json`(及必要时 page1 刷新),**cursor 推进语义(=下一 offset?)的实测结论写入 fixture 旁注释与完成报告**——若与 M3-T2 实现假设不符,停下上报走断言修正流程(ASSERTION-CHANGE-JUSTIFIED + root 知会),不得静默改 mock。
-**RED/GREEN 说明**:live 契约探针,**允许先绿**(书面理由同 M2-T4 模式,交 Test-Gate Reviewer)。
+**RED/GREEN 说明**:live 契约探针,**允许先绿**(书面理由同 M2-T6/M5-T1 探针性质说明模式,交 Test-Gate Reviewer;AG-008 探针类;AG-007 漂移区分保留)。
 **验收命令**:`TIKHUB_API_KEY=… cargo test --test real_api_test real_tiktok_search_second_page_offset -- --nocapture`(输出留存)。
 **反作弊声明**:不得修改断言;live 红先区分上游漂移(贴原始响应)。
 
@@ -146,6 +146,7 @@ loop:
 ## 4. 完成判据与独立验证(03-split §5 M3 行)
 
 T-001(tiktok)/T-011 green + RED 证据;gated T-051 输出 + 第二页 fixture 回灌;mutants 无 missed。命令:`cargo test --lib strategies::tiktok adapters::tikhub`;`TIKHUB_API_KEY=… cargo test --test real_api_test -- --nocapture`;AG-012 预检。
+允许先绿清单:M3-T1.1/T1.2(PR #5 消解,金丝雀)、T1.5(AG-012)、M3-T2.1 子断言(金丝雀)、T2.7(书面理由)、T2.9(AG-006)、T2.11(金丝雀)、M3-T3(AG-008 探针类;AG-007 漂移区分);其余测试均须 RED。
 
 ## 5. 账本覆盖映射
 

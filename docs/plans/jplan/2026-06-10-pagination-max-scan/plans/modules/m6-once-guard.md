@@ -20,7 +20,7 @@
 7. **AG-007 如实报告**:本仓测试为纯确定性(无 live API),不适用上游漂移豁免;gated DB 测试红须先核对 `DATABASE_URL`。
 8. **AG-013 变异门槛(本仓唯一变异强制,CI 落地前)**:M6 全部 diff 在仓内 `cargo mutants --in-diff` 下无 missed,或逐个书面豁免(预案见 §6.2);D-09 的 CI 工作流落地后成为永久强制。
 9. **契约不变(cross-service-contracts §3)**:`dispatch_task` 写方零行为改动(lib.rs:313-383 仅允许加注释);不改任何跨服务消息/表形状;terminal_reason 读取**必须容忍 NULL/未知值**(滚动部署,§3.3);`SEARCH_EXHAUSTED` 含 `EXHAUST` 子串(C-003,测试钉死)。
-10. **R-008/A007 重派语义保护**:eval_once 对 `failed` 的一次重派分支(schedule_evaluator.rs:120-127)不得改动;campaign 121 回归注释(L128-131,pending 不当 completed)不得削弱。
+10. **R-008/A007 重派语义保护**:eval_once 对 `failed` 的一次重派(每 tick 一次、跨 tick 无上限,DR-22)分支(schedule_evaluator.rs:120-127)不得改动;campaign 121 回归注释(L128-131,pending 不当 completed)不得削弱。
 11. **属性测试豁免(anti-gaming §3 末)**:eval_once/completion 输入域有限(status × process_count↔max_count × terminal_reason 形状),T-020~T-022 表驱动穷举即可,**不引入 proptest**。
 
 ## 2. 设计(本计划定形;消费契约不重设计)
@@ -98,7 +98,7 @@ pub fn eval_once_completion(task: &CrawlerTaskEntity) -> OnceCompletion
 9. `over_delivery_no_warn`(边界 `>=`):`(51, 50, None)` → `OnceExecuted`、`warning == false`。
 10. `completion_reason_strings_are_contract`(C-003 钉子):`OnceExecuted.as_str() == "ONCE_EXECUTED"`、`SearchExhausted.as_str() == "SEARCH_EXHAUSTED"`、且 `assert!("SEARCH_EXHAUSTED".contains("EXHAUST"))`(gm-e2e 子串白名单约束显式入册)。
 11. `decision_unchanged_for_completed_underscan`(I-007 / R-010「不补派」):`evaluate(once_campaign, Some(&underscan_completed_task), now) == DispatchDecision::MarkCompleted`(**不是** `Dispatch`——防御分支零派发;**手工金丝雀验证(DR-12)**:eval_once 零改动,预检不会生成对应变异(Step 06 TG-02);须临时把 `eval_once` `completed` 分支改为返回 `Dispatch` → 本测试须红;还原后复绿;只动生产代码,输出留存。书面豁免仅当金丝雀不可行时方可作为替代)。注:临时改动期间既有 33 条断言中关联用例亦会同步变红——属预期伴随(eval_once 行为改变覆盖全部用例);观察目标 = 本测试变红即确认有效;还原后全部 33+新增测试须复绿,输出留存。
-12. `failed_retry_semantics_untouched`(R-008/A007 回归钉):`failed` task → `Dispatch`(既有一次重派语义;**手工金丝雀验证(DR-12)**:临时把 `eval_once` `failed` 分支改为返回 `Skip` → 本测试须红;还原后复绿;只动生产代码,输出留存。书面豁免仅当金丝雀不可行时方可作为替代)。注:临时改动期间既有 33 条断言中关联用例亦会同步变红——属预期伴随(eval_once 行为改变覆盖全部用例);观察目标 = 本测试变红即确认有效;还原后全部 33+新增测试须复绿,输出留存。
+12. `failed_retry_semantics_untouched`(R-008/A007 回归钉):`failed` task → `Dispatch`(既有一次重派语义,每 tick 一次、跨 tick 无上限,DR-22;**手工金丝雀验证(DR-12)**:临时把 `eval_once` `failed` 分支改为返回 `Skip` → 本测试须红;还原后复绿;只动生产代码,输出留存。书面豁免仅当金丝雀不可行时方可作为替代)。注:临时改动期间既有 33 条断言中关联用例亦会同步变红——属预期伴随(eval_once 行为改变覆盖全部用例);观察目标 = 本测试变红即确认有效;还原后全部 33+新增测试须复绿,输出留存。
 
 **预期 RED 失败信息**(骨架 `todo!()` 下):测试 1~10 `panicked at src/schedule_evaluator.rs:<line>: not yet implemented`;实现中途断言型失败示例:测试 4 `assertion 'left == right' failed: left: OnceExecuted, right: SearchExhausted`、测试 1 `assertion 'left == right' failed: left: false, right: true`(warning 位)。RED 证据 = `cargo test`(仓内)本组全红输出。
 

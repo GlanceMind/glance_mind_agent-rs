@@ -29,7 +29,7 @@
 | M3 `agent-rs/tiktok-p1` | glance_mind_agent_rs | tiktok strategy cap 解除 + 适配器 offset 翻页循环(单页≤20,has_more 终止)+ mock/real gates | M1(M2 为样板参照,软依赖) | 4 |
 | M4 `agent-rs/reddit-twitter-p1` | glance_mind_agent_rs | reddit/twitter strategy cap 解除 + content 路径启用 cursor 翻页(各自评论侧既有模式镜像移植)+ mock/real gates | M1(M2 软依赖) | 5 |
 | M5 `agent-rs/instagram-p2` | glance_mind_agent_rs | V1 验证(首任务,N-001+T-053)→ 分支:同构翻页 或 单页+如实 `NO_MORE_POSSIBLE_DATA` | M1;分支选择 gated on V1(C-005) | 6 |
-| M6 `scheduler/once-guard` | glance_mind_worker/glance_mind_scheduler(独立 git 仓、独立提交流程) | eval_once 防御 WARN+指标(不补派)、completed_reason 枯竭区分值(候选 `SEARCH_EXHAUSTED`,命名 Step 04 终确认,须满足 C-003 子串约束)、新增读 `gm_crawler_tasks.terminal_reason`(C-004)、字段语义注释固化(N-002 scheduler 侧)、AG-013 本地变异证据 | M1(语义依赖:消费 agent 写入的 terminal_reason 值;代码无依赖;部署无硬顺序——读方须容忍 NULL/未知值,契约不变约束 §3.3) | 3 |
+| M6 `scheduler/once-guard` | glance_mind_worker/glance_mind_scheduler(**worker 仓子目录,`glance_mind_worker` 单一 git 仓;独立 PR/提交流程**——勘误 per Step 07 DR-06,原「独立 git 仓」为误判) | eval_once 防御 WARN+指标(不补派)、completed_reason 枯竭区分值(候选 `SEARCH_EXHAUSTED`,命名 Step 04 终确认,须满足 C-003 子串约束)、新增读 `gm_crawler_tasks.terminal_reason`(C-004)、字段语义注释固化(N-002 scheduler 侧)、AG-013 本地变异证据 | M1(语义依赖:消费 agent 写入的 terminal_reason 值;代码无依赖;部署无硬顺序——读方须容忍 NULL/未知值,契约不变约束 §3.3) | 3 |
 
 ### 模块图(依赖方向:被依赖 ← 依赖方)
 
@@ -161,7 +161,7 @@
 | M3 | T-001(tiktok)/T-011 green + RED 证据;gated:T-051 输出留存(has_more/cursor 实测值回灌 fixture) | `cargo test`;`TIKHUB_API_KEY=… cargo test --test real_api_test -- --nocapture`;AG-012 预检 |
 | M4 | T-001(reddit/twitter)/T-012/T-013 green + RED 证据;gated:T-052 输出留存 | 同 M3 形式;AG-012 预检 |
 | M5 | V1 判定记录写回 assumptions.md V1 行 + C-005;所选分支的 T-014 green + RED 证据 | `TIKHUB_API_KEY=… cargo test --test …`(T-053 探测 ≤4 调用);`cargo test`;AG-012 预检 |
-| M6 | T-020~T-022 green(T-020/T-021 带 RED 证据;T-022 先绿须经变异证明,AG-006);本地 mutants 无 missed 输出留存(AG-013);P-007 补偿控制完成(形态 Step 04 定);N-002 scheduler 侧注释落地 | scheduler 仓内:`cargo test`;`git diff main...HEAD > /tmp/pr.diff && cargo mutants --in-diff /tmp/pr.diff -- --test-threads=1` |
+| M6 | T-020~T-022 green(T-020/T-021 带 RED 证据;T-022 先绿须经变异证明,AG-006);本地 mutants 无 missed 输出留存(AG-013);P-007 补偿控制完成(形态 Step 04 定);N-002 scheduler 侧注释落地 | scheduler 仓内:`cargo test`;`git diff --relative main...HEAD > /tmp/scheduler-pr.diff && cargo mutants --in-diff /tmp/scheduler-pr.diff -- --test-threads=1`(子目录内执行,`--relative` 必须;以 m6-once-guard.md §4 现行命令为准——勘误 per DR-06) |
 
 ## 6. 模块文件面(input files / output files;per step-03 规范 action 4)
 

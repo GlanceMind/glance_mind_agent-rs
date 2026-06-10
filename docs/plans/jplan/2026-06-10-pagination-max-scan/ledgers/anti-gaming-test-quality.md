@@ -22,8 +22,8 @@
 |----|------|
 | AG-010 | **门禁命令(CI 已存在,`.github/workflows/mutation-rust.yml`)**:PR 上 `cargo mutants --in-diff /tmp/pr.diff --timeout 300 --annotations=github -- --all-features --test-threads=1`(cargo-mutants 24.11.0);nightly 全量。 |
 | AG-011 | **门槛**:本计划 agent-rs 全部 diff(strategies cap 解耦、适配器翻页循环、orchestrator 终态映射、redis 映射)**无 missed mutants**,或对每个 missed 写书面豁免(豁免须说明该变异为何不可测/等价变异,入 PR 描述并由 Step 06 Test-Gate Reviewer 复核)。 |
-| AG-012 | **本地预检命令**(实现任务收尾时,不等 CI):`git diff main...HEAD > /tmp/pr.diff && cargo mutants --in-diff /tmp/pr.diff -- --all-features --test-threads=1`。 |
-| AG-013 | **scheduler 仓**:`glance_mind_scheduler` 当前无等价 mutation CI 工作流 —— Step 04 的 scheduler 模块计划必须包含:本地 `cargo mutants --in-diff` 跑通无 missed(命令同 AG-012,在 scheduler 仓内执行),结果输出留存为完成证据;是否为该仓补 CI 工作流由 Step 04 评审定(推荐补,改动小)。 |
+| AG-012 | **本地预检命令**(实现任务收尾时,不等 CI):`git diff main...HEAD > /tmp/pr.diff && cargo mutants --in-diff /tmp/pr.diff -- --all-features --test-threads=1`;预检须在 live key 未设环境执行(D-14;M1-T0 守卫落地后该前提自动满足)。 |
+| AG-013 | **scheduler 仓**:`glance_mind_scheduler` 当前无等价 mutation CI 工作流 —— Step 04 的 scheduler 模块计划必须包含:本地 `cargo mutants --in-diff` 跑通无 missed(命令同 AG-012,在 scheduler 仓内执行),结果输出留存为完成证据;是否为该仓补 CI 工作流由 Step 04 评审定(推荐补,改动小)——已裁决补(D-09,M6-T4)。 |
 
 ## 3. 属性测试(proptest)——核心翻页/截断逻辑不变量
 

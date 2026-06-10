@@ -91,7 +91,7 @@ let count = config.max_videos.map(|v| v as u32).unwrap_or(10);
 
 **测试载荷(测试子 agent 先写;facebook.rs `#[cfg(test)]`,扩展既有 mock-HTTP 样板)**:
 
-1. `fetch_outcome_reaches_count_no_shortfall`(R-002 / T-010 / PV-001 充足):mock-HTTP 3 页(**20+20+10** 个 `test_post`,T-010 统一形状,与 test-suite 账本一致;前两页带 `cursor`,第 3 页 `cursor:null`)、`options.count=50` → `outcome.contents.len() == 50`、`outcome.shortfall.is_none()`。**并**断言请求序列(用 `spawn_mock_http_server_with_capture`)第 2/3 请求带前页 cursor(`cursor=...`,沿 facebook.rs:1198-1201 样板)。
+1. `fetch_outcome_reaches_count_no_shortfall`(R-002 / T-010 / PV-001 充足):mock-HTTP 3 页(**20+20+10** 个 `test_post`,T-010 统一形状,与 test-suite 账本一致;前两页带 `cursor`,第 3 页 `cursor:null`)、`options.count=50` → `outcome.contents.len() == 50`、`outcome.shortfall.is_none()`。**并**断言请求序列(用 `spawn_mock_http_server_with_capture`)第 2/3 请求带前页 cursor(`cursor=...`,沿 facebook.rs:1198-1201 样板)。(**允许先绿 + AG-006 金丝雀**:RED 基线下默认方法包装既有循环已具备该行为;金丝雀 = 测试 1 临时 truncate 交付集,须使本测试红,还原复绿,输出留存)
 2. `fetch_outcome_exhausted_when_cursor_null_before_count`(F-003):mock 2 页(20+10,第 2 页 `cursor:null`)、`options.count=50` → `contents.len() == 30`、`shortfall == Some(FetchShortfall::Exhausted)`。
 3. `fetch_outcome_cursor_loop_maps_exhausted`(F-004):第 2 页返回与第 1 页相同 `cursor`、未达 count → `shortfall == Some(Exhausted)`(seen-cursor 终止按枯竭语义,facebook.rs:564-566 既有 break 现接 shortfall)。
 4. `fetch_outcome_empty_page_limit_maps_exhausted`(F-005):连续 3 空页(cursor 各异)、未达 count → `shortfall == Some(Exhausted)`(`MAX_EMPTY_CURSOR_HOPS=3` 出口接 shortfall)。
@@ -100,10 +100,10 @@ let count = config.max_videos.map(|v| v as u32).unwrap_or(10);
 7. `default_fetch_by_keyword_still_returns_contents`(回归):既有 `fetch_by_keyword`(无 outcome)对同 mock 3 页(20+20+10)仍返回 50 条 Vec(override 不破坏既有方法;**允许先绿**,AG-006·**手工金丝雀程序(DR-12)**:临时让 `fetch_by_keyword` 返回截断 Vec(如 `truncate(10)`)→ 本测试须红;只动生产代码、RED 输出留存后还原)。
 8. `shortfall_matches_pagination_loop_semantics`(对齐契约,D-01 强制项;**对齐域声明(DR-17a):覆盖无 date-filter 子空间的五形状**):对「达量 / cursor 缺失 / cursor 环 / 空页上限 / **重复内容页**」五形状,断言 facebook 适配器产出的 `shortfall` 与同形状喂入 `PaginationLoop::{accept_page→shortfall_for}` 的结果**逐一相等**(防 facebook 私自定义与 M1 不一致的枯竭语义)。date-filter 子空间的对齐覆盖由测试 9/12 承担。
 9. `date_filter_empty_delivery_with_429_is_err`(DR-01 M2 侧 / D1 构造不变量):options 带 `START_DATE`/`END_DATE`,第 1 页 20 条**全部在日期范围外**(过滤后交付 0),第 2 页排队 4×429(`retry-after: 0`)→ 整体 **`Err(GatewayError::RateLimited{..})`**(D1 构造不变量,M1 §2 冻结:`PartialFailure` ⇒ `contents` 非空;零可交付进展(过滤后为空)的失败一律走 `Err`,不得包成 PartialFailure)。
-10. `hard_error_with_progress_is_err`(DR-10 M2 侧):第 1 页 20 条、第 2 页 HTTP 500 → 整体 `Err`(PartialFailure 触发集冻结 = 仅 `GatewayError::RateLimited`,M1 D2/DR-10 冻结;其余错误即使有进展也整体 `Err`)。
+10. `hard_error_with_progress_is_err`(DR-10 M2 侧):第 1 页 20 条、第 2 页 HTTP 500 → 整体 `Err`(PartialFailure 触发集冻结 = 仅 `GatewayError::RateLimited`,M1 D2/DR-10 冻结;其余错误即使有进展也整体 `Err`)。(**允许先绿 + AG-006 金丝雀**:RED 基线下默认方法包装既有循环已具备该行为;金丝雀 = 测试 10 临时把硬错误收敛为 PartialFailure,须使本测试红,还原复绿,输出留存)
 11. `repeated_content_pages_stop_via_empty_limit`(D-15 / DR-03 fb 对齐):第 1 页 20 条内容,随后 3 连页返回**与第 1 页相同内容**(cursor 各异)→ 终止、`shortfall == Some(Exhausted)`、**不发第 5 请求**(`requests.len() == 4`;空页计数按「本页新增(去重后)数 == 0」递增,D-15 生产行改动的 killing 测试)。
 12. `date_filter_shortfall_uses_filtered_count`(DR-17b):形状 A——raw 50 条、过滤后 30 条、cursor 链尽、`options.count=50` → `contents.len() == 30`、`shortfall == Some(Exhausted)`;形状 B——过滤后达 count → `shortfall == None`(达量/枯竭判定按**过滤后交付计数**,与 `reached_post_limit` 的 date-filter 后判定语义一致)。
-13. `candidates_inner_exhaustion_not_leaked`(DR-17c):`search_type=pages`(两级 candidates 循环),candidate1 内页枯竭(仅少量),candidate2 内页补足达 count → `shortfall == None`(内层 `fetch_page_posts_paginated` 的枯竭不得外泄为整体 shortfall)。
+13. `candidates_inner_exhaustion_not_leaked`(DR-17c):`search_type=pages`(两级 candidates 循环),candidate1 内页枯竭(仅少量),candidate2 内页补足达 count → `shortfall == None`(内层 `fetch_page_posts_paginated` 的枯竭不得外泄为整体 shortfall)。(**允许先绿 + AG-006 金丝雀**:RED 基线下默认方法包装既有循环已具备该行为;金丝雀 = 测试 13 临时让内层枯竭外泄为 Some(Exhausted),须使本测试红,还原复绿,输出留存)
 
 **预期 RED 失败信息**(adapter 尚未 override 默认方法时,默认方法返回 `shortfall=None`):
 - 测试 2:`assertion 'left == right' failed: left: None, right: Some(Exhausted)`;
@@ -257,12 +257,13 @@ cargo mutants --in-diff /tmp/pr.diff -- --all-features --test-threads=1
 # 3. R-012 / 契约面 diff 自查(期望全部零命中)
 git diff main...HEAD --stat -- migrations/ src/schema.rs src/db/schema.rs src/protocol_gen/
 # 期望:facebook strategy/adapter 改动不触及上述路径;page_size_hint 仅域模型(M1),M2 无新协议字段
+git diff main...HEAD -- src/adapters/postgres.rs   # 期望:零改动(F-009 兼容自查,与 M1-T7 同款;fallback 路径未触及)
 ```
 
 **验收判据**:
 1. `cargo test` 全绿(若 CI 上 live-API 套件红,按 AG-007 区分 Facebook 上游漂移并在报告注明,不得弱化断言)。
 2. mutants 无 missed;**事故根因行(facebook.rs:131 cap 删除、adapter shortfall 判定四分支)+ 三条循环(search/page/candidates)的 shortfall 出口各有 killing 测试**,不接受静默豁免;其余 missed → 修生产代码/补断言重跑或写等价变异书面豁免。
-3. 第 3 条 diff 自查零命中(R-012)。
+3. 第 3 条 diff 自查零命中(R-012)(含 F-009 postgres.rs 零改动)。
 4. 每任务 RED→GREEN 证据齐备(确定性任务:失败输出 + 通过输出各一份;real gate 任务:有凭据环境的取证或显式补证记录)。
 5. 提交/PR 前跑 `rust-verify-change` 流程(项目级守卫)。
 
@@ -272,7 +273,7 @@ git diff main...HEAD --stat -- migrations/ src/schema.rs src/db/schema.rs src/pr
 
 ## 5. 模块完成判据与独立验证(03-split §5 M2 行)
 
-- **确定性部分**:T-001(fb)/T-010(= M2-T2 测试 1 达量 + M2-T4 端到端,3 页→50/COMPLETED)/T-015/T-016/T-017/T-040 全 green,每个非「允许先绿」测试有 RED 证据;「允许先绿」测试(M2-T1.4、M2-T2.7、M2-T3.1~4、M2-T4.3、T-050/T-054 为 AG-008 探针类)有 AG-006 变异/金丝雀证明。
+- **确定性部分**:T-001(fb)/T-010(= M2-T2 测试 1 达量 + M2-T4 端到端,3 页→50/COMPLETED)/T-015/T-016/T-017/T-040 全 green,每个非「允许先绿」测试有 RED 证据;「允许先绿」测试(M2-T1.4、M2-T2.1、M2-T2.7、M2-T2.10、M2-T2.13、M2-T3.1~4、M2-T4.3、T-050/T-054(AG-008 探针类))有 AG-006 变异/金丝雀证明。
 - **gated 部分**:T-050/T-054 实跑输出留存(有凭据/有 DB 环境)。
 - **变异**:M2 全 diff 本地 `cargo mutants --in-diff` 无 missed(或书面豁免;事故根因行不豁免)。
 - **独立验证命令**:
