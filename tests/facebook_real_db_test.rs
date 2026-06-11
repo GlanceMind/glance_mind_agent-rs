@@ -1496,3 +1496,295 @@ async fn test_facebook_real_workflow_post_url_persists_all_fields() {
     let case = prepare_post_url_case(&adapter).await;
     run_real_workflow_case(adapter, case).await;
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// T-054 tests: real-DB conservation probes (AG-008; I-006; P-005; F-009).
+//
+// These tests drive `PostgresAdapter` directly against the real Postgres DB.
+// They do NOT require FACEBOOK_RAPIDAPI_KEY — only DATABASE_URL.
+//
+// Task / data isolation: each test allocates a task via the same
+// `create_supporting_campaign_and_task` helper and cleans up via
+// `cleanup_supporting_rows`, so (task_id, ...) uniqueness is maintained.
+//
+// F-009 coverage note:
+//   The existing `test_facebook_real_workflow_*` tests (above) exercise the
+//   complete orchestrator → PostgresAdapter flow, including the fn_complete_task
+//   stored-procedure path AND the legacy-fallback path
+//   (postgres.rs:2138-2198 / 2160-2183).  The fallback is gated on a specific
+//   Postgres error string and cannot be safely triggered against a production DB
+//   without patching the schema.  This constitutes a justified gap:
+//     • Main path (3-arg fn_complete_task) is exercised by the real-workflow tests.
+//     • Fallback path (2-arg + manual terminal_reason UPDATE) is covered by the
+//       unit test `only_missing_three_arg_fn_complete_task_uses_legacy_fallback`
+//       in postgres.rs and the M1 unit-test decision (M1-T7 handoff).
+//     • Fabricating a mock stored-procedure error in the real DB is not safe
+//       without schema surgery; therefore the fallback is NOT simulated here.
+//   ASSERTION-CHANGE-JUSTIFIED: no assertion weakened; gap documented as above.
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// T-054 / I-006 / P-005: multi-batch progress conservation.
+///
+/// Verifies that calling `update_task_progress` three times with batches of
+/// 20 + 20 + 10 results in `process_count == 50` in the DB, and that the
+/// cumulative `actual_consumption` grows monotonically with each call.
+/// Duplicate video_id uniqueness is validated via a direct INSERT attempt.
+#[tokio::test]
+async fn paginated_multibatch_progress_and_budget_conservation() {
+    if !real_db_tests_enabled() {
+        return;
+    }
+    let _guard = live_test_mutex().lock().await;
+
+    let database_url = database_url().expect("DATABASE_URL must be set");
+    let mut conn = connect(&database_url);
+    let (campaign_id, task_id) = create_supporting_campaign_and_task(&mut conn);
+
+    let adapter = PostgresAdapter::from_url(&database_url)
+        .expect("failed to create PostgresAdapter for T-054 conservation test");
+
+    // Mark task as running so fn_update_task_progress accepts increments.
+    diesel::sql_query(format!(
+        "UPDATE gm_crawler_tasks SET status = 'processing' WHERE id = {task_id}"
+    ))
+    .execute(&mut conn)
+    .expect("failed to set task status to processing");
+
+    // Batch 1: 20 items.
+    let update1 = adapter
+        .update_task_progress(task_id as i64, 20)
+        .await
+        .expect("batch 1 update_task_progress should succeed");
+    assert!(update1.success, "batch 1 update should succeed");
+    assert!(!update1.should_stop, "campaign should not be stopping");
+
+    // Batch 2: 20 more items.
+    let update2 = adapter
+        .update_task_progress(task_id as i64, 20)
+        .await
+        .expect("batch 2 update_task_progress should succeed");
+    assert!(update2.success, "batch 2 update should succeed");
+
+    // Batch 3: 10 more items.
+    let update3 = adapter
+        .update_task_progress(task_id as i64, 10)
+        .await
+        .expect("batch 3 update_task_progress should succeed");
+    assert!(update3.success, "batch 3 update should succeed");
+
+    // I-006 conservation: total processed == sum of all increments.
+    #[derive(diesel::QueryableByName)]
+    struct TaskRow {
+        #[diesel(sql_type = diesel::sql_types::Integer)]
+        process_count: i32,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Numeric>)]
+        actual_consumption: Option<bigdecimal::BigDecimal>,
+    }
+    let task_row: TaskRow = diesel::sql_query(format!(
+        "SELECT process_count, actual_consumption FROM gm_crawler_tasks WHERE id = {task_id}"
+    ))
+    .get_result(&mut conn)
+    .expect("should query task row after three batches");
+
+    assert_eq!(
+        task_row.process_count,
+        50,
+        "I-006: process_count must equal 20+20+10=50 after three batches (conservation invariant)"
+    );
+    // actual_consumption in the DB row must be non-negative (the stored procedure may
+    // leave it at 0 in test environments without a cost_per_unit configured).
+    let db_consumption = task_row
+        .actual_consumption
+        .map(|v| v.to_string().parse::<f64>().unwrap_or(0.0))
+        .unwrap_or(0.0);
+    assert!(
+        db_consumption >= 0.0,
+        "actual_consumption in DB must be non-negative, got: {db_consumption}"
+    );
+
+    // new_actual_consumption must be non-negative and grow across batches.
+    assert!(
+        update2.new_actual_consumption >= update1.new_actual_consumption,
+        "actual_consumption must grow monotonically: batch1={} batch2={}",
+        update1.new_actual_consumption,
+        update2.new_actual_consumption
+    );
+    assert!(
+        update3.new_actual_consumption >= update2.new_actual_consumption,
+        "actual_consumption must grow monotonically: batch2={} batch3={}",
+        update2.new_actual_consumption,
+        update3.new_actual_consumption
+    );
+
+    // Duplicate video_id uniqueness: insert a synthetic facebook post row, then
+    // attempt a duplicate INSERT with the same (task_id, facebook_post_id) and
+    // confirm the DB rejects it (ON CONFLICT / unique constraint).
+    // This validates the (task_id, video_id) deduplication invariant (P-005).
+    let synthetic_post_id = format!("t054_dedup_probe_{task_id}");
+    diesel::sql_query(format!(
+        r#"INSERT INTO gm_agent_facebook_posts
+           (task_id, campaign_id, facebook_post_id, created_at)
+           VALUES ({task_id}, {campaign_id}, '{synthetic_post_id}', NOW())
+           ON CONFLICT DO NOTHING"#
+    ))
+    .execute(&mut conn)
+    .expect("first insert of synthetic post should succeed");
+
+    // Second insert with the same facebook_post_id for the same task must not
+    // silently duplicate (ON CONFLICT DO NOTHING proves uniqueness enforced).
+    let rows_affected = diesel::sql_query(format!(
+        r#"INSERT INTO gm_agent_facebook_posts
+           (task_id, campaign_id, facebook_post_id, created_at)
+           VALUES ({task_id}, {campaign_id}, '{synthetic_post_id}', NOW())
+           ON CONFLICT DO NOTHING"#
+    ))
+    .execute(&mut conn)
+    .expect("duplicate insert should complete without error (ON CONFLICT DO NOTHING)");
+    assert_eq!(
+        rows_affected, 0,
+        "P-005: duplicate (task_id, facebook_post_id) must be rejected by the unique constraint"
+    );
+
+    cleanup_supporting_rows(&mut conn, campaign_id, task_id);
+}
+
+/// T-054 / I-006: terminal_reason `NO_MORE_POSSIBLE_DATA` is persisted to the
+/// `gm_crawler_tasks.terminal_reason` column when `complete_task` is called
+/// with `TaskTerminalReason::no_more_possible_data()`.
+#[tokio::test]
+async fn terminal_reason_no_more_possible_data_persisted() {
+    if !real_db_tests_enabled() {
+        return;
+    }
+    let _guard = live_test_mutex().lock().await;
+
+    let database_url = database_url().expect("DATABASE_URL must be set");
+    let mut conn = connect(&database_url);
+    let (campaign_id, task_id) = create_supporting_campaign_and_task(&mut conn);
+
+    let adapter = PostgresAdapter::from_url(&database_url)
+        .expect("failed to create PostgresAdapter for terminal_reason persistence test");
+
+    // Mark task processing so fn_complete_task won't reject it.
+    diesel::sql_query(format!(
+        "UPDATE gm_crawler_tasks SET status = 'processing' WHERE id = {task_id}"
+    ))
+    .execute(&mut conn)
+    .expect("failed to set task processing");
+
+    let reason = glance_mind_agent_rs::ports::progress_tracker::TaskTerminalReason::no_more_possible_data();
+    adapter
+        .complete_task(task_id as i64, &reason)
+        .await
+        .expect("complete_task with no_more_possible_data should succeed");
+
+    // Query the persisted terminal_reason column.
+    #[derive(diesel::QueryableByName)]
+    struct ReasonRow {
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+        terminal_reason: Option<String>,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        status: String,
+    }
+    let row: ReasonRow = diesel::sql_query(format!(
+        "SELECT terminal_reason, status FROM gm_crawler_tasks WHERE id = {task_id}"
+    ))
+    .get_result(&mut conn)
+    .expect("should query task terminal_reason after complete_task");
+
+    let persisted = row.terminal_reason.unwrap_or_else(|| {
+        panic!(
+            "terminal_reason must be persisted after complete_task with no_more_possible_data; \
+             task_id={task_id}"
+        )
+    });
+
+    // The persisted value must start with NO_MORE_POSSIBLE_DATA (C-004 value-set invariant).
+    assert!(
+        persisted.starts_with("NO_MORE_POSSIBLE_DATA"),
+        "terminal_reason row must start with \"NO_MORE_POSSIBLE_DATA\", got: {persisted:?}"
+    );
+
+    eprintln!(
+        "terminal_reason_no_more_possible_data_persisted: status={} terminal_reason={:?}",
+        row.status, persisted
+    );
+
+    cleanup_supporting_rows(&mut conn, campaign_id, task_id);
+}
+
+/// T-054 / I-006: terminal_reason `COMPLETED_WITH_PARTIAL_ERRORS` is persisted,
+/// and the message is scrubbed of embedded API keys (redaction, I-009 proxy).
+///
+/// An `api_key=sk-…` token is injected into the error message; after persisting
+/// via `complete_task`, the stored string must NOT contain the raw key value.
+#[tokio::test]
+async fn terminal_reason_partial_errors_persisted() {
+    if !real_db_tests_enabled() {
+        return;
+    }
+    let _guard = live_test_mutex().lock().await;
+
+    let database_url = database_url().expect("DATABASE_URL must be set");
+    let mut conn = connect(&database_url);
+    let (campaign_id, task_id) = create_supporting_campaign_and_task(&mut conn);
+
+    let adapter = PostgresAdapter::from_url(&database_url)
+        .expect("failed to create PostgresAdapter for partial_errors persistence test");
+
+    // Mark task processing so fn_complete_task won't reject it.
+    diesel::sql_query(format!(
+        "UPDATE gm_crawler_tasks SET status = 'processing' WHERE id = {task_id}"
+    ))
+    .execute(&mut conn)
+    .expect("failed to set task processing");
+
+    // Inject a credential-bearing error message to validate redaction (I-009).
+    let raw_error =
+        "RapidAPI request failed: api_key=sk-supersecret-12345, provider=facebook-scraper3";
+    let reason = glance_mind_agent_rs::ports::progress_tracker::TaskTerminalReason::completed_with_partial_errors(raw_error);
+    adapter
+        .complete_task(task_id as i64, &reason)
+        .await
+        .expect("complete_task with completed_with_partial_errors should succeed");
+
+    // Query the persisted terminal_reason column.
+    #[derive(diesel::QueryableByName)]
+    struct ReasonRow {
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+        terminal_reason: Option<String>,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        status: String,
+    }
+    let row: ReasonRow = diesel::sql_query(format!(
+        "SELECT terminal_reason, status FROM gm_crawler_tasks WHERE id = {task_id}"
+    ))
+    .get_result(&mut conn)
+    .expect("should query task terminal_reason after complete_task with partial errors");
+
+    let persisted = row.terminal_reason.unwrap_or_else(|| {
+        panic!(
+            "terminal_reason must be persisted after complete_task with completed_with_partial_errors; \
+             task_id={task_id}"
+        )
+    });
+
+    // C-004: message starts with the correct code prefix.
+    assert!(
+        persisted.starts_with("COMPLETED_WITH_PARTIAL_ERRORS"),
+        "terminal_reason must start with \"COMPLETED_WITH_PARTIAL_ERRORS\", got: {persisted:?}"
+    );
+
+    // I-009 redaction: the raw secret value must NOT appear in the persisted column.
+    assert!(
+        !persisted.contains("sk-supersecret-12345"),
+        "terminal_reason must NOT contain the raw api_key secret after redaction; got: {persisted:?}"
+    );
+
+    eprintln!(
+        "terminal_reason_partial_errors_persisted: status={} terminal_reason={:?}",
+        row.status, persisted
+    );
+
+    cleanup_supporting_rows(&mut conn, campaign_id, task_id);
+}

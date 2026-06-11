@@ -1068,6 +1068,138 @@ async fn test_facebook_post_comments_real() {
     assert_comment_matches_raw(&result.comments[0], first_raw_comment, POST_ID);
 }
 
+/// AG-008 probe: second-page cursor verification for /search/posts.
+///
+/// AG-008 判据:
+///   1. 实跑输出留存:首页 cursor 非空且有内容 → 用该 cursor 重发得到第二页。
+///   2. fixture 回灌义务:实跑时将两页原始响应落盘到
+///      tests/fixtures/facebook/search_posts_page{1,2}.json(供 M2-T2 mock 固化用);
+///      字段必须取自实跑输出,禁止凭空捏造(PV-001)。
+///   3. 判定可复算:首页 post_id 集合 vs 第二页 post_id 集合的交集 ≠ 全集时判定翻页成功。
+///
+/// DR-05 计费注:live 429 触发适配器 4 次重试,预算按 HTTP 请求计;
+/// 本测试最多 2 次真实 RapidAPI 调用(≤3,P-001)。
+///
+/// 形状对账义务:若第二页 results 元素与 /post 单对象形状不符(缺 post_id / cursor 异常),
+/// 立即停下并上报(不得通过断言降级静默通过)。
+#[tokio::test]
+async fn test_facebook_search_posts_real_second_page_cursor() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_facebook_search_posts_real_second_page_cursor - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
+    let _guard = live_test_mutex().lock().await;
+
+    // Call 1 of ≤3: fetch first page (P-001).
+    let page1_body = fetch_raw_json("/search/posts", &[("query", POSTS_QUERY)]).await;
+    let page1_results = page1_body
+        .get("results")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| {
+            panic!(
+                "/search/posts page 1 should return a `results` array: {page1_body}"
+            )
+        });
+    assert!(
+        !page1_results.is_empty(),
+        "/search/posts page 1 should return at least one result"
+    );
+
+    // AG-008: cursor must be present and non-null to prove the endpoint supports pagination.
+    let page1_cursor = page1_body
+        .get("cursor")
+        .and_then(Value::as_str)
+        .filter(|c| !c.trim().is_empty())
+        .unwrap_or_else(|| {
+            panic!(
+                "/search/posts page 1 must return a non-empty cursor for second-page probe: {page1_body}"
+            )
+        });
+
+    // Collect page 1 post_ids for disjointness check.
+    let page1_ids: std::collections::HashSet<String> = page1_results
+        .iter()
+        .filter_map(|post| post.get("post_id").and_then(Value::as_str))
+        .map(ToString::to_string)
+        .collect();
+    assert!(
+        !page1_ids.is_empty(),
+        "page 1 results must contain at least one post_id; shape mismatch detected — stopping (AG-008 form-check)"
+    );
+
+    // Call 2 of ≤3: fetch second page using the cursor returned by page 1.
+    let page2_body =
+        fetch_raw_json("/search/posts", &[("query", POSTS_QUERY), ("cursor", page1_cursor)])
+            .await;
+    let page2_results = page2_body
+        .get("results")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| {
+            panic!(
+                "/search/posts page 2 should return a `results` array: {page2_body}"
+            )
+        });
+
+    // AG-008 criterion 1: second page must be non-empty.
+    assert!(
+        !page2_results.is_empty(),
+        "/search/posts second page (cursor={page1_cursor:?}) must return at least one result; \
+         if the adapter is not forwarding the cursor this will fail"
+    );
+
+    // Collect page 2 post_ids.
+    let page2_ids: std::collections::HashSet<String> = page2_results
+        .iter()
+        .filter_map(|post| post.get("post_id").and_then(Value::as_str))
+        .map(ToString::to_string)
+        .collect();
+    assert!(
+        !page2_ids.is_empty(),
+        "page 2 results must contain at least one post_id; shape mismatch — stopping (AG-008 form-check)"
+    );
+
+    // AG-008 criterion 3: second page must differ from first page (not all ids identical).
+    let all_ids_same = page2_ids.iter().all(|id| page1_ids.contains(id))
+        && page2_ids.len() == page1_ids.len();
+    assert!(
+        !all_ids_same,
+        "second page post_id set must differ from first page, got identical sets: {page1_ids:?}; \
+         this indicates the adapter is NOT forwarding the cursor"
+    );
+
+    // cursor from page 2 should differ from cursor of page 1 (further pagination available).
+    let page2_cursor = page2_body.get("cursor").and_then(Value::as_str);
+    if let Some(c2) = page2_cursor {
+        assert_ne!(
+            c2, page1_cursor,
+            "page 2 cursor must differ from page 1 cursor"
+        );
+    }
+
+    // PV-001 fixture回灌义务: write raw pages to disk when running live so M2-T2 can consume them.
+    // In a credentialed CI environment this produces:
+    //   tests/fixtures/facebook/search_posts_page1.json
+    //   tests/fixtures/facebook/search_posts_page2.json
+    // Fields are taken verbatim from live output; no fabrication (PV-001).
+    let fixture_dir = std::path::Path::new("tests/fixtures/facebook");
+    if fixture_dir.exists() || std::fs::create_dir_all(fixture_dir).is_ok() {
+        let _ = std::fs::write(
+            fixture_dir.join("search_posts_page1.json"),
+            serde_json::to_string_pretty(&page1_body).unwrap_or_default(),
+        );
+        let _ = std::fs::write(
+            fixture_dir.join("search_posts_page2.json"),
+            serde_json::to_string_pretty(&page2_body).unwrap_or_default(),
+        );
+    }
+
+    eprintln!(
+        "AG-008 probe passed: page1_ids={} page2_ids={} cursor_ok=true",
+        page1_ids.len(),
+        page2_ids.len(),
+    );
+}
+
 #[tokio::test]
 async fn test_facebook_post_comments_real_fetch_all_comments() {
     if !live_api_tests_enabled() {
