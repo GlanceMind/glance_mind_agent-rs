@@ -1705,4 +1705,71 @@ mod tests {
         assert_eq!(h.task_info().await.status, TaskStatus::Completed);
         assert_eq!(result.contents_processed, 50);
     }
+
+    // ===== M2-T5 事故重演回归(m2-facebook-p0.md §4 M2-T5;campaign 269 形状)(T-040) =====
+    //
+    // 覆盖:T-040、R-001/R-002/R-007(综合)、I-001(达量上界证据)、AG-001~AG-006。
+    // 依赖:M2-T1(strategy 解截断)、M2-T2(adapter shortfall)、M2-T4(orchestrator 映射)。
+    // RED 基线 = pre-M2(含 M1、不含 M2;D-11 增补):
+    //   形状 1 → `left: 20, right: 50`(strategy v.min(20) 截断,达量不到 50);
+    //   形状 2 → got "COMPLETED: Task completed successfully"(欠扫静默 COMPLETED,事故本体)。
+    // 金丝雀 A(形状 1):恢复 strategy min(20) → 红 `left:20,right:50` → 还原复绿。
+    // 金丝雀 B′(形状 2):改靶 orchestrator Exhausted→NO_MORE 映射短路 → 红 got COMPLETED
+    //   → 还原复绿(计划原 B 短路 fb override 在 DR-13 mock 装配下不适用;fb override 敏感性
+    //   由 M2-T2 测试 2 及其金丝雀承担)。
+    // 恢复说明:两测试曾被控制器误 `git checkout` 冲掉(未提交),按计划原文+既有产物
+    //   忠实重建,断言语义零变化。
+
+    /// M2-T5 测试 1 `incident_269_shape_sufficient_upstream_scans_50_completed`
+    /// (T-040 / I-001 事故修复证据):facebook strategy、max_videos=50、
+    /// MockContentGateway 注入 3 页(20+20+10,≥50 条可得)→ contents_processed==50、
+    /// terminal_reason 以 "COMPLETED" 开头且不含 "PARTIAL"/"NO_MORE"。
+    #[tokio::test]
+    async fn incident_269_shape_sufficient_upstream_scans_50_completed() {
+        let h = PaginationHarness::facebook(&["kw"], 50);
+        h.gateway.add_search_pages(
+            "kw",
+            vec![page("a", 0, 20), page("a", 20, 20), page("a", 40, 10)],
+        );
+
+        let result = h.run().await;
+        let reason = h.terminal_reason().await;
+
+        assert_eq!(result.contents_processed, 50);
+        assert!(
+            reason.starts_with("COMPLETED"),
+            "terminal_reason must start with \"COMPLETED\", got {reason:?}"
+        );
+        assert!(
+            !reason.contains("PARTIAL"),
+            "terminal_reason must not contain \"PARTIAL\", got {reason:?}"
+        );
+        assert!(
+            !reason.contains("NO_MORE"),
+            "terminal_reason must not contain \"NO_MORE\", got {reason:?}"
+        );
+        assert_eq!(h.task_info().await.status, TaskStatus::Completed);
+    }
+
+    /// M2-T5 测试 2 `incident_269_shape_only_20_available_reports_no_more`
+    /// (T-040 / 如实上报证据):facebook strategy、max_videos=50、
+    /// 上游仅 20 条可得(1 页 20 后枯竭,cursor:null)→ contents_processed==20、
+    /// terminal_reason 以 "NO_MORE_POSSIBLE_DATA" 开头(不得静默 COMPLETED——
+    /// 这正是 campaign 269 事故:扫 20 即标 COMPLETED 掩盖欠扫)。
+    #[tokio::test]
+    async fn incident_269_shape_only_20_available_reports_no_more() {
+        let h = PaginationHarness::facebook(&["kw"], 50);
+        h.gateway
+            .add_search_pages("kw", vec![page("a", 0, 20)]);
+
+        let result = h.run().await;
+        let reason = h.terminal_reason().await;
+
+        assert_eq!(result.contents_processed, 20);
+        assert!(
+            reason.starts_with("NO_MORE_POSSIBLE_DATA"),
+            "under-scan must be reported truthfully, not silently COMPLETED (campaign 269 incident shape), got {reason:?}"
+        );
+        assert_eq!(h.task_info().await.status, TaskStatus::Completed);
+    }
 }
