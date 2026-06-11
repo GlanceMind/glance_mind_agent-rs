@@ -1240,6 +1240,36 @@ mod tests {
 
     impl PaginationHarness {
         fn new(keywords: &[&str], max_videos: i32) -> Self {
+            Self::for_platform(
+                "tiktok",
+                2,
+                Arc::new(TikTokStrategy::new()),
+                keywords,
+                max_videos,
+            )
+        }
+
+        /// M2-T4 facebook 形状装配(m2-facebook-p0.md §4 M2-T4):同一 MockContentGateway
+        /// 分页注入,但 strategy = FacebookStrategy(M2-T1 解截断后 options.count =
+        /// max_videos)、platform = "facebook"(platform_id 3)。override 不在测试路径
+        /// (mock gateway 直接产 shortfall;边界澄清原文)。
+        fn facebook(keywords: &[&str], max_videos: i32) -> Self {
+            Self::for_platform(
+                "facebook",
+                3,
+                Arc::new(FacebookStrategy::new()),
+                keywords,
+                max_videos,
+            )
+        }
+
+        fn for_platform(
+            platform: &'static str,
+            platform_id: i32,
+            strategy: Arc<dyn PlatformStrategy>,
+            keywords: &[&str],
+            max_videos: i32,
+        ) -> Self {
             let gateway = Arc::new(MockContentGateway::new());
             let repo = Arc::new(MockRepository::new());
             let tracker = Arc::new(CountingProgressTracker::new(repo.clone()));
@@ -1247,8 +1277,8 @@ mod tests {
             repo.add_campaign(CampaignConfig {
                 id: M1T4_CAMPAIGN_ID,
                 user_id: 1,
-                name: "m1-t4 pagination mapping".to_string(),
-                platform_id: 2,
+                name: "pagination mapping harness".to_string(),
+                platform_id,
                 status: CampaignStatus::Active,
                 target_audience: None,
                 product_prompt: None,
@@ -1261,7 +1291,7 @@ mod tests {
             repo.add_task(TaskInfo {
                 id: M1T4_TASK_ID,
                 campaign_id: M1T4_CAMPAIGN_ID,
-                platform_id: 2,
+                platform_id,
                 keywords: Some(json!(keywords)),
                 status: TaskStatus::Pending,
                 progress: 0,
@@ -1270,17 +1300,17 @@ mod tests {
             });
 
             let orchestrator = WorkflowOrchestrator::builder()
-                .add_content_gateway("tiktok", gateway.clone())
-                .add_comment_gateway("tiktok", Arc::new(MockCommentGateway::new()))
+                .add_content_gateway(platform, gateway.clone())
+                .add_comment_gateway(platform, Arc::new(MockCommentGateway::new()))
                 .ai_analyzer(Arc::new(MockAiAnalyzer::simple()))
                 .content_repository(repo.clone())
                 .prompt_repository(repo.clone())
                 .progress_tracker(tracker.clone())
-                .add_strategy(Arc::new(TikTokStrategy::new()))
+                .add_strategy(strategy)
                 .build()
                 .expect("orchestrator should build");
 
-            let config = TaskConfig::new(M1T4_CAMPAIGN_ID, "tiktok")
+            let config = TaskConfig::new(M1T4_CAMPAIGN_ID, platform)
                 .with_keywords(keywords.iter().map(|k| k.to_string()).collect())
                 .with_max_videos(max_videos);
 
@@ -1561,5 +1591,118 @@ mod tests {
             !reason.starts_with("COMPLETED_WITH_PARTIAL_ERRORS"),
             "violating shape must not be treated as a normal partial, got {reason:?}"
         );
+    }
+
+    // ===== M2-T4 测试载荷(m2-facebook-p0.md §4 M2-T4;facebook 形状实例化) =====
+    //
+    // DR-13 定位:strategy 解截断(M2-T1)+ adapter shortfall(M2-T2)+ orchestrator
+    // D3 映射(M1-T4)的端到端贯通证据。映射逻辑归 M1-T4,不在此重写;真实 adapter
+    // override 不在测试路径(MockContentGateway 直接产 shortfall)。
+    // RED 取证点 = pre-M2 基线(1047b98,facebook strategy 仍 v.min(20) 截断):
+    // 测试 1/2/4 预期 got COMPLETED + contents_processed==20。
+
+    /// M2-T4 测试 1 `facebook_exhausted_maps_no_more_possible_data`(T-016 / F-003):
+    /// facebook strategy、2 页(20+10,枯竭)、max_videos=50 → terminal_reason 以
+    /// "NO_MORE_POSSIBLE_DATA" 开头、task completed、contents_processed==30、
+    /// `stop_campaign_gracefully` 未调用(D3 设计裁决,M1 §6.1;campaign 级完结交 M6)。
+    #[tokio::test]
+    async fn facebook_exhausted_maps_no_more_possible_data() {
+        let h = PaginationHarness::facebook(&["kw"], 50);
+        h.gateway
+            .add_search_pages("kw", vec![page("a", 0, 20), page("a", 20, 10)]);
+
+        let result = h.run().await;
+        let reason = h.terminal_reason().await;
+
+        assert!(
+            reason.starts_with("NO_MORE_POSSIBLE_DATA"),
+            "terminal_reason must start with \"NO_MORE_POSSIBLE_DATA\", got {reason:?}"
+        );
+        assert_eq!(h.task_info().await.status, TaskStatus::Completed);
+        assert_eq!(result.contents_processed, 30);
+        assert_eq!(
+            h.tracker.stop_campaign_call_count(),
+            0,
+            "contents 非空 + Exhausted 不得调用 stop_campaign_gracefully(D3 设计裁决)"
+        );
+    }
+
+    /// M2-T4 测试 2 `facebook_page2_failure_maps_partial_errors`(T-015 有进展 / F-002):
+    /// 第 1 页 20 条、第 2 页注入失败(RateLimit,DR-10 触发集)、max_videos=50 →
+    /// terminal_reason 以 "COMPLETED_WITH_PARTIAL_ERRORS" 开头、task completed、
+    /// contents_processed==20(已落进展保留)。
+    #[tokio::test]
+    async fn facebook_page2_failure_maps_partial_errors() {
+        let h = PaginationHarness::facebook(&["kw"], 50);
+        h.gateway
+            .add_search_pages("kw", vec![page("a", 0, 20), page("a", 20, 10)]);
+        h.gateway
+            .set_page_error_at(1, crate::testing::mock_gateway::MockError::RateLimit);
+
+        let result = h.run().await;
+        let reason = h.terminal_reason().await;
+
+        assert!(
+            reason.starts_with("COMPLETED_WITH_PARTIAL_ERRORS"),
+            "terminal_reason must start with \"COMPLETED_WITH_PARTIAL_ERRORS\", got {reason:?}"
+        );
+        assert_eq!(h.task_info().await.status, TaskStatus::Completed);
+        assert_eq!(result.contents_processed, 20);
+    }
+
+    /// M2-T4 测试 3 `facebook_page1_failure_maps_failed`(T-015 零进展 / F-001 / R-008;
+    /// **允许先绿**,AG-006 变异证明):第 1 页即不可恢复错误 → task **failed**、
+    /// terminal_reason 以 "PROVIDER_FAILURE" 开头(既有失败路径回归)。
+    /// 注入双轨编码同一语义(沿 M1-T4 测试 4 样板):page_error_at(0) 走 outcome
+    /// 路径,error_mode 兜底 legacy 路径。
+    #[tokio::test]
+    async fn facebook_page1_failure_maps_failed() {
+        let h = PaginationHarness::facebook(&["kw"], 50);
+        h.gateway
+            .add_search_pages("kw", vec![page("a", 0, 20), page("a", 20, 10)]);
+        h.gateway
+            .set_page_error_at(0, crate::testing::mock_gateway::MockError::Network);
+        h.gateway
+            .set_error_mode(Some(crate::testing::mock_gateway::MockError::Network));
+
+        let result = h.run().await;
+        let reason = h.terminal_reason().await;
+
+        assert_eq!(h.task_info().await.status, TaskStatus::Failed);
+        assert!(
+            reason.starts_with("PROVIDER_FAILURE"),
+            "terminal_reason must start with \"PROVIDER_FAILURE\", got {reason:?}"
+        );
+        assert!(!result.success);
+    }
+
+    /// M2-T4 测试 4 `facebook_full_delivery_maps_completed`(达量基线):3 页
+    /// (20+20+10)满 50 → terminal_reason 以 "COMPLETED" 开头且不含 "PARTIAL"、
+    /// 不含 "NO_MORE"、contents_processed==50。
+    #[tokio::test]
+    async fn facebook_full_delivery_maps_completed() {
+        let h = PaginationHarness::facebook(&["kw"], 50);
+        h.gateway.add_search_pages(
+            "kw",
+            vec![page("a", 0, 20), page("a", 20, 20), page("a", 40, 10)],
+        );
+
+        let result = h.run().await;
+        let reason = h.terminal_reason().await;
+
+        assert!(
+            reason.starts_with("COMPLETED"),
+            "terminal_reason must start with \"COMPLETED\", got {reason:?}"
+        );
+        assert!(
+            !reason.contains("PARTIAL"),
+            "terminal_reason must not contain \"PARTIAL\", got {reason:?}"
+        );
+        assert!(
+            !reason.contains("NO_MORE"),
+            "terminal_reason must not contain \"NO_MORE\", got {reason:?}"
+        );
+        assert_eq!(h.task_info().await.status, TaskStatus::Completed);
+        assert_eq!(result.contents_processed, 50);
     }
 }
