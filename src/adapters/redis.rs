@@ -464,6 +464,19 @@ impl CrawlerTaskExt for CrawlerTask {
             .with_max_videos(max_count)
             .with_max_comments_per_video(200);
 
+        // 跨服务契约(C-002):`search_limit` = 单页大小提示(clamp 到平台页上限,见 platform_page_cap);
+        // `search_offset` = 仅观测字段,agent 不读、不参与取数。两字段形状不变、不删(scheduler 写方:lib.rs dispatch_task)。
+        //
+        // M1-T5 / D4:search_limit >= 1 → Some(min(limit, 平台页上限));
+        // search_limit <= 0 → None(老 task / 缺省语义,C-001 向后兼容)。
+        // I-008:此映射(及本函数任何路径)不得读取 search_offset。
+        let search_limit = self.config.as_ref().map(|c| c.search_limit).unwrap_or(0);
+        if search_limit >= 1 {
+            config.page_size_hint = Some(
+                (search_limit as u32).min(crate::pagination::platform_page_cap(&platform_name)),
+            );
+        }
+
         // Apply platform-specific search options
         if platform_name.eq_ignore_ascii_case("tiktok") {
             if let Some(tiktok_opts) = search_opts.tiktok {
@@ -978,5 +991,125 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("Top")
         );
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // M1-T5 redis 字段语义(T-003 / T-034 / I-008 / C-001 / C-002;
+    // m1-pagination-core.md §2 D4 + §3 M1-T5)
+    // ──────────────────────────────────────────────────────────────────
+
+    use proptest::prelude::*;
+
+    /// 构造仅 platform / search_limit / search_offset 可变的 task JSON
+    /// (沿既有 task JSON 样板形状,redis.rs:709)。
+    fn task_with_search_fields(
+        platform_id: i32,
+        search_limit: i32,
+        search_offset: i32,
+    ) -> CrawlerTask {
+        let json = serde_json::json!({
+            "meta": {
+                "task_id": 900,
+                "campaign_id": 42,
+                "source": "scheduler",
+                "timestamp": 1700000000.0
+            },
+            "spec": {
+                "platform": platform_id,
+                "data_type": 1
+            },
+            "config": {
+                "keywords": ["pagination"],
+                "max_count": 10,
+                "search_offset": search_offset,
+                "search_limit": search_limit,
+                "filters": {
+                    "region": "US"
+                }
+            }
+        });
+        serde_json::from_value(json).expect("task JSON 样板应可反序列化")
+    }
+
+    /// 测试 1(T-003a):tiktok task JSON `search_limit=7`
+    /// → `to_domain_task_config(...).page_size_hint == Some(7)`。
+    #[test]
+    fn search_limit_becomes_page_size_hint() {
+        init_test_registry();
+
+        let task = task_with_search_fields(2, 7, 0); // platform 2 = tiktok
+        let config = task.to_domain_task_config(42);
+        assert_eq!(config.page_size_hint, Some(7));
+    }
+
+    /// 测试 2(T-003b):`search_limit=500` → clamp 到各平台页上限
+    /// (D4 取值表,5 平台逐一断言)。
+    #[test]
+    fn search_limit_clamped_to_platform_cap() {
+        init_test_registry();
+
+        // (platform_id, platform_name, D4 cap)
+        let table: &[(i32, &str, u32)] = &[
+            (2, "tiktok", 20),
+            (3, "facebook", 20),
+            (1, "reddit", 100),
+            (5, "twitter", 100),
+            (4, "instagram", 50),
+        ];
+        for (platform_id, platform_name, cap) in table {
+            let task = task_with_search_fields(*platform_id, 500, 0);
+            let config = task.to_domain_task_config(42);
+            assert_eq!(
+                config.platform, *platform_name,
+                "registry 应解析 platform {platform_id} 为 {platform_name}"
+            );
+            assert_eq!(
+                config.page_size_hint,
+                Some(*cap),
+                "{platform_name}: search_limit=500 应 clamp 到 Some({cap})(D4 冻结表)"
+            );
+        }
+    }
+
+    /// 测试 3(T-003c):`search_limit <= 0`(0 与 -3)→ `page_size_hint == None`
+    /// (老 task / 缺省语义,C-001 向后兼容:平台默认页大小)。
+    #[test]
+    fn non_positive_search_limit_falls_back_to_none() {
+        init_test_registry();
+
+        for limit in [0, -3] {
+            let task = task_with_search_fields(2, limit, 0);
+            let config = task.to_domain_task_config(42);
+            assert_eq!(
+                config.page_size_hint, None,
+                "search_limit={limit} 应映射为 None(平台默认页大小)"
+            );
+        }
+    }
+
+    proptest! {
+        /// 测试 4(T-034 / PT-5 / I-008):任意 i32 search_offset,同一 task JSON
+        /// 仅 search_offset 不同 → 两次 `to_domain_task_config` 的
+        /// `serde_json::to_value(..)` 全等(行为等价;TaskConfig 无 PartialEq,
+        /// 以 JSON 全等代理)。`search_offset` 任何路径不读。
+        ///
+        /// **允许先绿**(现状已忽略 offset;本测试是 I-008 的回归钉子,AG-006)。
+        /// 变异豁免预案(计划 §6.3 / M1-T5.4 原文):AG-012 预检中映射函数被注入
+        /// 「读 search_offset」类变异时本测试须变红;若 cargo-mutants 不生成该类变异,
+        /// 以「测试 3+4 联合钉死字段语义」为书面豁免记录(Test-Gate Reviewer 复核)。
+        #[test]
+        fn prop_search_offset_never_changes_task_config(offset in any::<i32>()) {
+            init_test_registry();
+
+            let baseline = task_with_search_fields(2, 7, 0)
+                .to_domain_task_config(42);
+            let with_offset = task_with_search_fields(2, 7, offset)
+                .to_domain_task_config(42);
+
+            prop_assert_eq!(
+                serde_json::to_value(&baseline).unwrap(),
+                serde_json::to_value(&with_offset).unwrap()
+            );
+        }
     }
 }

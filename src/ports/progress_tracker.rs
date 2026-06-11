@@ -450,4 +450,34 @@ mod tests {
         assert_eq!(update.progress, 50);
         assert_eq!(update.comments_processed, 100);
     }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// 冒烟属性(M1-T1/FR-001/I-009):任意输入下 redaction 输出有界且敏感值不泄漏
+        #[test]
+        fn prop_redaction_bounded_and_no_secret_leak(
+            prefix in ".{0,80}", secret in "[A-Za-z0-9_-]{8,40}", suffix in ".{0,80}"
+        ) {
+            let msg = format!("{prefix} api_key={secret} {suffix}");
+            let reason = TaskTerminalReason::provider_failure(&msg);
+            prop_assert!(reason.message.chars().count() <= 500);
+            prop_assert!(!reason.message.contains(&secret));
+        }
+    }
+
+    /// C-004 契约 pin:scheduler(M6)将按字符串读取 terminal_reason;以下 6 个 code 字符串
+    /// 自本计划起为跨服务契约,不得重命名(cross-service-contracts.md C-004/§3.2)。
+    #[test]
+    fn task_terminal_reason_codes_are_cross_service_contract() {
+        assert_eq!(TaskTerminalReason::completed().code, "COMPLETED");
+        assert_eq!(TaskTerminalReason::completed_with_partial_errors("e").code, "COMPLETED_WITH_PARTIAL_ERRORS");
+        assert_eq!(TaskTerminalReason::no_more_possible_data().code, "NO_MORE_POSSIBLE_DATA");
+        assert_eq!(TaskTerminalReason::provider_failure("e").code, "PROVIDER_FAILURE");
+        assert_eq!(TaskTerminalReason::cancelled("m").code, "CANCELLED");
+        assert_eq!(TaskTerminalReason::internal_error("e").code, "INTERNAL_ERROR");
+        // M6 读方解析依赖 "CODE: message" 形状(as_terminal_message)
+        assert_eq!(TaskTerminalReason::no_more_possible_data().as_terminal_message()
+            .split(':').next().unwrap(), "NO_MORE_POSSIBLE_DATA");
+    }
 }
