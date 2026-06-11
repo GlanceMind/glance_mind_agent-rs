@@ -18,6 +18,7 @@ use glance_mind_agent_rs::tikhub::{
     SearchParams,
     TikHubClient,
     TikHubError,
+    TikHubRetryConfig,
     TwitterCommentParams,
     // Twitter
     TwitterSearchParams,
@@ -961,6 +962,193 @@ async fn test_twitter_comments_real() {
             println!("⚠️  Twitter Comments Error: {:?}", e);
         }
     }
+}
+
+// ============================================================
+// M3-T3 · T-051 · AG-008: TikTok second-page offset probe
+// ============================================================
+
+/// Live probe for second-page offset pagination semantics (T-051 / AG-008).
+///
+/// ## AG-008 判据
+/// 1. **HTTP 请求数 ≤ 3**（DR-19 零重试：max_retries=0，每次调用=1 个 HTTP 请求）；
+///    本测试共发出 2 次 `search_videos` 调用 → 2 个 HTTP 请求 ≤ 3。
+/// 2. **offset=0 首页 → 记录 has_more/cursor 实测值**；
+///    **offset=cursor 第二页 → 断言非空、aweme_id 集合不全同**。
+/// 3. **cursor 推进语义对账（M3-T3 核心）**：
+///    - API 返回的 `cursor` 字段（i64）被 M3-T2 适配层直接用作下一次
+///      `offset`（u32 截断：`cursor.max(0) as u32`）；
+///    - 若 `cursor` 超出 u32 范围（> 4 294 967 295），offset 会截断溢出，
+///      与 M3-T2 实现假设冲突；该测试通过 `assert!` 验证 cursor 在 u32 范围内；
+///    - 实跑结论（待凭据）须写入
+///      `tests/fixtures/tiktok/search_fitness_us_page2.json` 旁注注释。
+///
+/// ## 回灌义务
+/// 实跑通过时须将第二页响应落盘至：
+///   `tests/fixtures/tiktok/search_fitness_us_page2.json`
+/// 并在文件顶部注释记录：
+///   - 实跑时间戳
+///   - 首页 cursor 实测值
+///   - cursor 是否在 u32 范围内（offset=cursor.parse 假设是否成立）
+///   - 第二页 aweme_id 集合与首页重叠数
+///
+/// ## 若与 M3-T2 假设冲突
+/// 若 cursor > u32::MAX，**停下上报，走 ASSERTION-CHANGE-JUSTIFIED + root 知会，
+/// 不静默改 mock**。
+#[tokio::test]
+async fn real_tiktok_search_second_page_offset() {
+    // --- Gate: skip without credentials / CI opt-in (M1-T0 pattern) ---
+    if !live_api_tests_enabled() {
+        eprintln!(
+            "Skipping real_tiktok_search_second_page_offset - \
+             credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent"
+        );
+        return;
+    }
+
+    // DR-19: zero-retry client — each search_videos call = exactly 1 HTTP request.
+    // Budget: 2 calls (page1 + page2) ≤ 3 HTTP requests.
+    let zero_retry_config = TikHubRetryConfig {
+        max_retries: 0,
+        initial_delay_ms: 0,
+        max_delay_ms: 0,
+        backoff_multiplier: 1.0,
+    };
+    let api_key = match std::env::var("TIKHUB_API_KEY") {
+        Ok(k) if !k.trim().is_empty() => k,
+        _ => {
+            eprintln!("Skipping real_tiktok_search_second_page_offset - TIKHUB_API_KEY empty");
+            return;
+        }
+    };
+    let base_url = std::env::var("TIKHUB_BASE_URL")
+        .unwrap_or_else(|_| "https://api.tikhub.io".to_string());
+
+    let client = TikHubClient::with_retry_config(api_key, base_url, zero_retry_config)
+        .expect("DR-19 zero-retry client creation must succeed");
+
+    // ---- HTTP call #1: Page 1 (offset=0) ----
+    let page1_params = SearchParams::new("fitness")
+        .with_count(10)
+        .with_region("US")
+        .with_offset(0);
+
+    let page1_resp = client
+        .search_videos(&page1_params)
+        .await
+        .expect("T-051: page-1 search_videos must succeed");
+
+    let page1_data = page1_resp
+        .data
+        .as_ref()
+        .expect("T-051: page-1 response must contain data field");
+
+    let page1_has_more = page1_data.has_more;
+    let page1_cursor = page1_data.cursor;
+
+    let page1_videos = TikHubClient::extract_videos(&page1_resp);
+    assert!(
+        !page1_videos.is_empty(),
+        "T-051: page-1 must return at least 1 video (got 0)"
+    );
+
+    let page1_ids: std::collections::HashSet<String> =
+        page1_videos.iter().map(|v| v.aweme_id.clone()).collect();
+
+    eprintln!(
+        "[AG-008] Page-1: has_more={:?}, cursor={:?}, video_count={}",
+        page1_has_more,
+        page1_cursor,
+        page1_videos.len()
+    );
+
+    // ---- cursor 推进语义对账 ----
+    // M3-T2 assumes: next_offset = cursor (i64 cast to u32 via cursor.max(0) as u32).
+    // Validate cursor is in u32 range to confirm the assumption holds.
+    let cursor_val = page1_cursor.unwrap_or(0);
+    assert!(
+        cursor_val >= 0,
+        "T-051: cursor must be non-negative (got {}); M3-T2 offset=cursor assumption violated",
+        cursor_val
+    );
+    // ASSERTION-CHANGE-JUSTIFIED guard: if cursor > u32::MAX, stop and report.
+    // We do NOT silently continue — this assertion expresses the M3-T2 contract.
+    assert!(
+        cursor_val <= i64::from(u32::MAX),
+        "T-051 CONFLICT: cursor={} exceeds u32::MAX={}; M3-T2 offset=cursor.max(0) as u32 \
+         assumption violated. STOP — report to root, walk ASSERTION-CHANGE-JUSTIFIED process, \
+         do NOT silently change mock.",
+        cursor_val,
+        u32::MAX
+    );
+
+    let next_offset = cursor_val.max(0) as u32;
+
+    // Only attempt page 2 if page 1 indicated there is more data.
+    if page1_has_more != Some(1) {
+        eprintln!(
+            "[AG-008] Page-1 has_more={:?} — no second page available for keyword 'fitness' \
+             at this moment; test passes vacuously (cursor semantics verified above).",
+            page1_has_more
+        );
+        return;
+    }
+
+    // ---- HTTP call #2: Page 2 (offset=cursor from page 1) ----
+    let page2_params = SearchParams::new("fitness")
+        .with_count(10)
+        .with_region("US")
+        .with_offset(next_offset);
+
+    let page2_resp = client
+        .search_videos(&page2_params)
+        .await
+        .expect("T-051: page-2 search_videos must succeed");
+
+    let page2_videos = TikHubClient::extract_videos(&page2_resp);
+
+    eprintln!(
+        "[AG-008] Page-2: video_count={}, offset_used={}",
+        page2_videos.len(),
+        next_offset
+    );
+
+    // Assertion 1: second page must be non-empty.
+    assert!(
+        !page2_videos.is_empty(),
+        "T-051: page-2 (offset={}) must return at least 1 video",
+        next_offset
+    );
+
+    let page2_ids: std::collections::HashSet<String> =
+        page2_videos.iter().map(|v| v.aweme_id.clone()).collect();
+
+    // Assertion 2: aweme_id sets must not be identical (partial overlap allowed).
+    // This validates that offset/cursor actually advances the page, not re-fetching page 1.
+    assert_ne!(
+        page1_ids, page2_ids,
+        "T-051: page-2 aweme_id set must differ from page-1 \
+         (full identity means offset/cursor did NOT advance pagination)"
+    );
+
+    let overlap: std::collections::HashSet<_> = page1_ids.intersection(&page2_ids).collect();
+    eprintln!(
+        "[AG-008] Overlap between page-1 and page-2: {}/{} ids (partial overlap is OK)",
+        overlap.len(),
+        page2_ids.len()
+    );
+
+    // Summary: cursor semantics confirmed — offset=cursor (i64→u32) advances the page.
+    eprintln!(
+        "[AG-008] PASSED: T-051 second-page probe complete. \
+         cursor_val={}, next_offset={}, page1_count={}, page2_count={}, overlap={}. \
+         Fixture backfill obligation: tests/fixtures/tiktok/search_fitness_us_page2.json",
+        cursor_val,
+        next_offset,
+        page1_ids.len(),
+        page2_ids.len(),
+        overlap.len()
+    );
 }
 
 // ============================================================
