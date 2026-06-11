@@ -27,6 +27,23 @@ use twitter_live::{
 
 const SEARCH_TYPE: &str = "Top";
 
+fn live_api_tests_enabled() -> bool {
+    let _ = dotenvy::dotenv();
+    // CI opt-in: on GitHub Actions the live suites only run when RUN_REAL_API_TESTS
+    // is explicitly set (D-14; CI always has credentials, so the env-skip alone
+    // would never trigger there).
+    if std::env::var_os("GITHUB_ACTIONS").is_some()
+        && std::env::var_os("RUN_REAL_API_TESTS").is_none()
+    {
+        return false;
+    }
+    // Credential unset or empty -> skip (empty string counts as unset).
+    match std::env::var("TIKHUB_API_KEY") {
+        Ok(v) if !v.trim().is_empty() => true,
+        _ => false,
+    }
+}
+
 fn assert_tweet_contract(tweet: &TwitterTweet, label: &str) {
     assert!(
         tweet.get_tweet_id().is_some(),
@@ -48,6 +65,10 @@ fn assert_tweet_contract(tweet: &TwitterTweet, label: &str) {
 
 #[tokio::test]
 async fn test_twitter_search_real_contract_and_adapter_mapping() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_twitter_search_real_contract_and_adapter_mapping - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let seed = pick_search_seed().await;
     let client = create_client();
@@ -92,6 +113,10 @@ async fn test_twitter_search_real_contract_and_adapter_mapping() {
 
 #[tokio::test]
 async fn test_twitter_user_real_contract_and_adapter_mapping() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_twitter_user_real_contract_and_adapter_mapping - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let seed = pick_search_seed().await;
     let client = create_client();
@@ -135,6 +160,10 @@ async fn test_twitter_user_real_contract_and_adapter_mapping() {
 
 #[tokio::test]
 async fn test_twitter_detail_real_contract_and_adapter_mapping() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_twitter_detail_real_contract_and_adapter_mapping - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let seed = pick_search_seed().await;
     let client = create_client();
@@ -167,6 +196,10 @@ async fn test_twitter_detail_real_contract_and_adapter_mapping() {
 
 #[tokio::test]
 async fn test_twitter_comments_real_contract_and_adapter_mapping() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_twitter_comments_real_contract_and_adapter_mapping - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let seed = pick_comment_seed().await;
     let client = create_client();
@@ -209,6 +242,10 @@ async fn test_twitter_comments_real_contract_and_adapter_mapping() {
 
 #[tokio::test]
 async fn test_twitter_comments_real_fetch_all_comments_maps_unique_replies() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_twitter_comments_real_fetch_all_comments_maps_unique_replies - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let seed = pick_comment_seed().await;
     let adapter = create_adapter();
@@ -249,6 +286,10 @@ async fn test_twitter_comments_real_fetch_all_comments_maps_unique_replies() {
 
 #[tokio::test]
 async fn test_twitter_rest_id_real_contract_and_adapter_mapping() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping test_twitter_rest_id_real_contract_and_adapter_mapping - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
     let _guard = live_test_mutex().lock().await;
     let seed = pick_rest_id_seed().await;
     let rest_id = seed
