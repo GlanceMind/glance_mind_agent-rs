@@ -124,11 +124,14 @@ impl PlatformStrategy for FacebookStrategy {
     }
 
     fn build_search_options(&self, config: &TaskConfig, keyword: &KeywordType) -> SearchOptions {
+        // D-02:facebook 上游无单页大小参数,page_size_hint 对本平台为文档化 no-op(M2 计划 §2.2-d/§6.3)。
         let region = config
             .region
             .clone()
             .unwrap_or_else(|| self.default_region.clone());
-        let count = config.max_videos.map(|v| v.min(20) as u32).unwrap_or(10);
+        // R-001: options.count = 总量目标(max_videos),不被单页上限截断(事故根因 v.min(20) 删除,campaign 269)。
+        // 单页大小由 page_size_hint 提示(clamp 到 platform_page_cap=20,redis.rs/M1);总量翻页由适配器循环达成。
+        let count = config.max_videos.map(|v| v as u32).unwrap_or(10);
 
         let mut options = SearchOptions::new(keyword.value().to_string())
             .with_platform(self.name())
@@ -235,6 +238,7 @@ impl PlatformStrategy for FacebookStrategy {
         &self.default_region
     }
 
+    /// 上游单页参考大小(非总量上限,R-001);无生产调用方,保留作平台元数据。
     fn max_videos_per_search(&self) -> u32 {
         20
     }
