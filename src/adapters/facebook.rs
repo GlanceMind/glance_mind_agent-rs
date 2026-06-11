@@ -2115,11 +2115,14 @@ mod tests {
             .unwrap();
 
         // 请求级断言:seen-cursor 出口在第 2 页后终止,不发第 3 个请求。
+        // ASSERTION-CHANGE-JUSTIFIED: 仅把请求数读入局部再断言(断言值/意图不变)。
+        // 原写法在 `assert_eq!` 内两次 `requests.lock()`(左操作数 + 失败消息参数),
+        // 二者临时锁守卫在同一语句内同时存活 → std Mutex 非重入 → 断言失败时自死锁挂起,
+        // 在 CI 变异门禁(--test-threads=1)下表现为 400s 超时而非清晰击杀。修复后变异快速断言击杀。
+        let req_count = requests.lock().unwrap().len();
         assert_eq!(
-            requests.lock().unwrap().len(),
-            2,
-            "cursor_loop: seen-cursor must stop after 2nd request, got {}",
-            requests.lock().unwrap().len()
+            req_count, 2,
+            "cursor_loop: seen-cursor must stop after 2nd request, got {req_count}"
         );
         // 语义断言:cursor 环 → Exhausted shortfall(与 M2-T2 测试 3 同语义,从请求计数角度验证)。
         assert_eq!(
@@ -2206,11 +2209,12 @@ mod tests {
             .unwrap();
 
         // 请求级断言:3 个请求全发(复位有效,不在 req 3 的第 2 空页误停于 EmptyPageLimit)。
+        // ASSERTION-CHANGE-JUSTIFIED: 同上,把请求数读入局部避免 `assert_eq!` 失败时
+        // 二次 `requests.lock()` 自死锁(断言值/意图不变)。
+        let req_count = requests.lock().unwrap().len();
         assert_eq!(
-            requests.lock().unwrap().len(),
-            3,
-            "empty_streak_reset: must make 3 requests (empty→nonempty→empty+null-cursor), got {}",
-            requests.lock().unwrap().len()
+            req_count, 3,
+            "empty_streak_reset: must make 3 requests (empty→nonempty→empty+null-cursor), got {req_count}"
         );
         // 收集断言:req 2 的 20 条进入交付集。
         assert_eq!(
@@ -2248,11 +2252,12 @@ mod tests {
             .unwrap();
 
         // 请求级断言:1 次正常请求 + 4 次 429 重试 = 5 次请求。
+        // ASSERTION-CHANGE-JUSTIFIED: 同上,把请求数读入局部避免 `assert_eq!` 失败时
+        // 二次 `requests.lock()` 自死锁(断言值/意图不变)。
+        let req_count = requests.lock().unwrap().len();
         assert_eq!(
-            requests.lock().unwrap().len(),
-            5,
-            "rate_limited_after_progress: expected 1+4=5 requests (1 success + 4 rate-limit retries), got {}",
-            requests.lock().unwrap().len()
+            req_count, 5,
+            "rate_limited_after_progress: expected 1+4=5 requests (1 success + 4 rate-limit retries), got {req_count}"
         );
         // 收集断言:首页 20 条进入 partial 交付。
         assert_eq!(
@@ -2270,6 +2275,411 @@ mod tests {
             }
             other => panic!(
                 "rate_limited_after_progress: expected Some(PartialFailure {{ .. }}), got {other:?}"
+            ),
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // M2-T7 变异补强测试载荷(killing tests,仅 cfg(test);不改生产代码)
+    // 目标:杀死 page / candidates 两循环出口处 8 个漏杀变异点。
+    // 全部经可观测 outcome(contents / shortfall / 捕获请求数)断言,不触私有状态。
+    //   page 循环 fetch_page_posts_paginated:619(+=)/628(==)/649(RateLimited !守卫)
+    //   candidates 循环 fetch_posts_from_search_candidates:701/730/746/751
+    //   search 循环 search_posts_paginated:581(seen-cursor !守卫,见既有 cursor_loop_*)
+    // helper 全部复用 M2-T2/T3 既有样板(page_response / unique_posts /
+    // rate_limited_responses / fast_adapter / spawn_mock_http_server_with_capture)。
+    // ──────────────────────────────────────────────────────────────────
+
+    /// PAGE 模式选项(数字 query 直通 resolve_page_id → 不发 /search/pages,
+    /// 全部请求落在 /page/posts,隔离 fetch_page_posts_paginated 循环)。
+    fn page_mode_options(count: u32) -> SearchOptions {
+        SearchOptions::new("123456")
+            .with_platform("facebook")
+            .with_count(count)
+            .with_extra_value(extra_keys::MODE, json!(mode::PAGE))
+    }
+
+    /// search_type=pages 候选模式选项(走 fetch_posts_from_search_candidates:
+    /// 先 /search/pages 抓候选,再对每个候选 /page/posts)。
+    fn candidates_mode_options(count: u32) -> SearchOptions {
+        SearchOptions::new("museum")
+            .with_platform("facebook")
+            .with_count(count)
+            .with_extra_value(extra_keys::MODE, json!(mode::KEYWORD))
+            .with_extra_value(extra_keys::SEARCH_TYPE, json!("pages"))
+    }
+
+    fn candidates_keyword() -> KeywordType {
+        KeywordType::Search("museum".to_string())
+    }
+
+    // ── page 循环 ──────────────────────────────────────────────────────
+
+    /// M2-T7 (kills :619 `newly_added += 1`→`*=`, 同时锁 :628 `newly_added == 0`→`!=`)。
+    /// PAGE 模式 4 连「各含 1 条新帖」页(cursor c2/c3/c4/null)。
+    /// 正确 `+=`:每页 newly_added=1 → empty_hops 复位 0 → 走完 4 页(null cursor 终止),
+    /// 收集 4 条,requests==4。
+    /// 变异 `*=`:newly_added 从 0 起 `0 *= 1` 恒 0 → 每页判定为空 → empty_hops 在第 3 页
+    /// 达 MAX_EMPTY_CURSOR_HOPS(3)提前 EmptyPageLimit 停 → requests==3、contents<4。
+    /// 变异 `!=`(:628):空页判定取反 → 有新增页反而累加 empty_hops → 同样第 3 页误停。
+    /// 故 requests==4 && contents==4 一并杀 :619 与 :628。
+    #[tokio::test]
+    async fn page_mode_productive_pages_do_not_trip_empty_limit() {
+        let (base_url, requests) = spawn_mock_http_server_with_capture(vec![
+            page_response(unique_posts("pg1", 1), Some("c2")),
+            page_response(unique_posts("pg2", 1), Some("c3")),
+            page_response(unique_posts("pg3", 1), Some("c4")),
+            page_response(unique_posts("pg4", 1), None),
+        ])
+        .await;
+
+        let adapter = fast_adapter(base_url);
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&search_keyword(), &page_mode_options(50))
+            .await
+            .unwrap();
+
+        // 4 个有进展页全部翻完(null cursor 终止),不在第 3 页误停于 EmptyPageLimit。
+        // 注意:先把请求数读入局部再断言——`assert_eq!` 失败时会再次求值消息参数,
+        // 若在同一语句内二次 `requests.lock()` 会与左操作数的锁守卫自死锁(挂起)。
+        let req_count = requests.lock().unwrap().len();
+        assert_eq!(
+            req_count, 4,
+            "page productive: must paginate all 4 productive pages, got {req_count}"
+        );
+        assert_eq!(
+            outcome.contents.len(),
+            4,
+            "page productive: must collect 1 new post per page (4 total), got {}",
+            outcome.contents.len()
+        );
+        // null cursor 终止 → Exhausted。
+        assert_eq!(
+            outcome.shortfall,
+            Some(FetchShortfall::Exhausted),
+            "page productive: cursor-null exit → Exhausted, got {:?}",
+            outcome.shortfall
+        );
+    }
+
+    /// M2-T7 (kills :628 `newly_added == 0`→`!=` from the空页方向,并加固 :619)。
+    /// PAGE 模式:首页 1 条新帖(cursor c2),随后 3 连重复内容页(同 1 条 post id,各异 cursor)。
+    /// 正确:首页 newly_added=1(复位);后续每页去重后 newly_added=0 → empty_hops 累加,
+    /// 第 3 个重复页达上限 → EmptyPageLimit 停。请求 = 首页 + 3 重复页 = 4,收集 1 条。
+    /// 变异 `!=`(:628):空页判定取反 → 重复页(newly_added==0)不再累加 empty_hops,
+    /// 反而首页(newly_added!=0)累加;3 重复页不触发上限 → 第 4 重复页 cursor=null 才 Upstream 停,
+    /// requests==5。故 requests==4 杀 :628。
+    /// 变异 `*=`(:619):首页 `0 *= 1`=0 → 首页即被判空,empty_hops 提前累加 → 第 3 页即停,
+    /// requests==3。故 requests==4 同样杀 :619。
+    #[tokio::test]
+    async fn page_mode_repeated_content_pages_stop_via_empty_limit() {
+        let dup = test_post("dup-post", "same-content");
+        let (base_url, requests) = spawn_mock_http_server_with_capture(vec![
+            page_response(vec![dup.clone()], Some("c2")),
+            page_response(vec![dup.clone()], Some("c3")),
+            page_response(vec![dup.clone()], Some("c4")),
+            page_response(vec![dup.clone()], Some("c5")),
+            page_response(vec![dup.clone()], None),
+        ])
+        .await;
+
+        let adapter = fast_adapter(base_url);
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&search_keyword(), &page_mode_options(50))
+            .await
+            .unwrap();
+
+        // 首页(新增) + 3 重复页(空进展)= 4 请求,第 3 重复页触发 EmptyPageLimit。
+        let req_count = requests.lock().unwrap().len();
+        assert_eq!(
+            req_count, 4,
+            "page repeated: first page + 3 dup pages then stop, got {req_count}"
+        );
+        // 仅首页的去重帖进入交付集。
+        assert_eq!(
+            outcome.contents.len(),
+            1,
+            "page repeated: only the single deduped post is delivered, got {}",
+            outcome.contents.len()
+        );
+        assert_eq!(
+            outcome.shortfall,
+            Some(FetchShortfall::Exhausted),
+            "page repeated: EmptyPageLimit exit → Exhausted, got {:?}",
+            outcome.shortfall
+        );
+    }
+
+    /// M2-T7 (kills :649 delete `!` in fetch_page_posts_paginated RateLimited 部分进展守卫)。
+    /// PAGE 模式:首页 3 条(cursor c2,有进展)+ 第 2 页 4×429(重试耗尽)。
+    /// 正确 `!posts.is_empty()`:有进展 → Partial,交付首页 3 条,shortfall=PartialFailure,
+    /// requests = 1 + 4 = 5。
+    /// 变异(删 `!`):守卫变 `posts.is_empty()`,posts 非空 → 守卫不命中 → 落到
+    /// `Err(err) => return Err(err)` → 整体返回 Err(RateLimited),contents 不可得 → 本测试红。
+    #[tokio::test]
+    async fn page_mode_rate_limited_after_progress_is_partial() {
+        let mut responses = vec![page_response(unique_posts("pg", 3), Some("c2"))];
+        responses.extend(rate_limited_responses(4));
+        let (base_url, requests) = spawn_mock_http_server_with_capture(responses).await;
+
+        let adapter = fast_adapter(base_url);
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&search_keyword(), &page_mode_options(50))
+            .await
+            .unwrap();
+
+        let req_count = requests.lock().unwrap().len();
+        assert_eq!(
+            req_count, 5,
+            "page partial: 1 success + 4 rate-limit retries = 5 requests, got {req_count}"
+        );
+        assert_eq!(
+            outcome.contents.len(),
+            3,
+            "page partial: first page's 3 posts must be delivered, got {}",
+            outcome.contents.len()
+        );
+        match &outcome.shortfall {
+            Some(FetchShortfall::PartialFailure { message }) => {
+                assert!(
+                    message.to_lowercase().contains("rate"),
+                    "page partial: PartialFailure should mention rate, got {message:?}"
+                );
+            }
+            other => panic!("page partial: expected Some(PartialFailure {{ .. }}), got {other:?}"),
+        }
+    }
+
+    /// M2-T7 (kills :644 delete `!` in fetch_page_posts_paginated seen-cursor 防环)。
+    /// PAGE 模式:页 1(1 新帖,cursor "pg-loop")+ 页 2(另 1 新帖,同 cursor "pg-loop")。
+    /// 正确 `!seen_cursors.insert`:页 1 插入 "pg-loop";页 2 的 next_cursor "pg-loop" 已见 →
+    /// CursorLoop 停,requests==2、contents==2。
+    /// 变异(删 `!`):`if seen_cursors.insert("pg-loop")`,页 1 该 cursor 为新 → insert 返回
+    /// true → `if true` 立即 CursorLoop break 于页 1 → requests==1、contents==1。
+    /// 故 requests==2 && contents==2 杀 :644。
+    /// (页含新帖 → newly_added=1,empty_hops 恒 0,不与空页上限纠缠。)
+    #[tokio::test]
+    async fn page_mode_cursor_loop_stops_after_repeated_cursor() {
+        let (base_url, requests) = spawn_mock_http_server_with_capture(vec![
+            page_response(unique_posts("pgl1", 1), Some("pg-loop")),
+            page_response(unique_posts("pgl2", 1), Some("pg-loop")),
+        ])
+        .await;
+
+        let adapter = fast_adapter(base_url);
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&search_keyword(), &page_mode_options(50))
+            .await
+            .unwrap();
+
+        // 正确:页 1 forward "pg-loop",页 2 同 cursor 命中 seen → 停于第 2 请求。
+        let req_count = requests.lock().unwrap().len();
+        assert_eq!(
+            req_count, 2,
+            "page cursor-loop: seen-cursor must stop after 2nd request, got {req_count}"
+        );
+        // 两页各 1 新帖均交付(变异在页 1 即停 → 仅 1 条)。
+        assert_eq!(
+            outcome.contents.len(),
+            2,
+            "page cursor-loop: both pages' posts must be collected, got {}",
+            outcome.contents.len()
+        );
+        assert_eq!(
+            outcome.shortfall,
+            Some(FetchShortfall::Exhausted),
+            "page cursor-loop: CursorLoop exit → Exhausted, got {:?}",
+            outcome.shortfall
+        );
+    }
+
+    // ── candidates 循环 ────────────────────────────────────────────────
+
+    /// M2-T7 (kills :730 candidate 层 `posts.len() == posts_before`→`!=`)。
+    /// 候选模式:4 连「零候选」搜索页(cursor c2/c3/c4/null),无候选 → 无 /page/posts,
+    /// posts 始终为空 == posts_before。
+    /// 正确 `==`:每页空进展 → empty_hops 累加,第 3 页(cursor c4)达上限 → EmptyPageLimit 停,
+    /// requests==3(仅 /search/pages)。
+    /// 变异 `!=`:空进展页判定取反 → empty_hops 永不累加 → 一路跟 cursor 到第 4 页(null)才 Upstream 停,
+    /// requests==4。故 requests==3 杀 :730(mock 备 4 响应,变异不挂起)。
+    #[tokio::test]
+    async fn candidates_empty_search_pages_stop_via_empty_limit() {
+        let empty_candidates = |cursor: Option<&str>| {
+            MockHttpResponse::json(200, json!({ "results": [], "cursor": cursor }))
+        };
+        let (base_url, requests) = spawn_mock_http_server_with_capture(vec![
+            empty_candidates(Some("c2")),
+            empty_candidates(Some("c3")),
+            empty_candidates(Some("c4")),
+            empty_candidates(None),
+        ])
+        .await;
+
+        let adapter = fast_adapter(base_url);
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&candidates_keyword(), &candidates_mode_options(50))
+            .await
+            .unwrap();
+
+        // 3 连零候选页后 EmptyPageLimit 停;不发第 4 个搜索请求。
+        let req_count = requests.lock().unwrap().len();
+        assert_eq!(
+            req_count, 3,
+            "candidates empty: must stop after 3rd empty candidate page, got {req_count}"
+        );
+        assert_eq!(
+            outcome.contents.len(),
+            0,
+            "candidates empty: no posts collected, got {}",
+            outcome.contents.len()
+        );
+        assert_eq!(
+            outcome.shortfall,
+            Some(FetchShortfall::Exhausted),
+            "candidates empty: EmptyPageLimit exit → Exhausted, got {:?}",
+            outcome.shortfall
+        );
+    }
+
+    /// M2-T7 (kills :746 delete `!` in candidate 层 seen-cursor 防环)。
+    /// 候选模式:第 1 页零候选 + cursor "cand-loop",第 2 页零候选 + 同一 cursor "cand-loop"。
+    /// 正确 `!insert`:第 2 页 next_cursor 已见 → CursorLoop 停,requests==2。
+    /// 变异(删 `!`):`if insert(...)`(返回 false,已存在)→ 不 break → 用同 cursor 续抓第 3 页 →
+    /// requests==3。故 requests==2 杀 :746(mock 备 3 响应,变异不挂起)。
+    /// (零候选 → empty_hops 在第 2 页仅为 2 < 3,防环先于空页上限触发。)
+    #[tokio::test]
+    async fn candidates_cursor_loop_stops_and_does_not_refetch() {
+        let loop_cursor = |_: ()| {
+            MockHttpResponse::json(200, json!({ "results": [], "cursor": "cand-loop" }))
+        };
+        let (base_url, requests) = spawn_mock_http_server_with_capture(vec![
+            loop_cursor(()),
+            loop_cursor(()),
+            loop_cursor(()),
+        ])
+        .await;
+
+        let adapter = fast_adapter(base_url);
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&candidates_keyword(), &candidates_mode_options(50))
+            .await
+            .unwrap();
+
+        let req_count = requests.lock().unwrap().len();
+        assert_eq!(
+            req_count, 2,
+            "candidates cursor-loop: seen-cursor must stop after 2nd request, got {req_count}"
+        );
+        assert_eq!(
+            outcome.shortfall,
+            Some(FetchShortfall::Exhausted),
+            "candidates cursor-loop: CursorLoop exit → Exhausted, got {:?}",
+            outcome.shortfall
+        );
+    }
+
+    /// M2-T7 (kills :751 delete `!` in candidate 层外搜索 RateLimited 部分进展守卫)。
+    /// 候选模式:搜索页 1 → 1 候选 A(cursor c2);A 的 /page/posts → 3 条(有进展);
+    /// 搜索页 2(cursor c2)→ 4×429。
+    /// 正确 `!posts.is_empty()`:posts 已有 A 的 3 条 → 外层 RateLimited 守卫命中 → Partial,
+    /// 交付 3 条,requests = 搜索1 + pagePostsA(1) + 搜索2 4×429 = 6。
+    /// 变异(删 `!`):posts 非空 → 守卫不命中 → `Err(err) => return Err(err)` → 整体 Err → 红。
+    #[tokio::test]
+    async fn candidates_outer_rate_limit_after_progress_is_partial() {
+        let mut responses = vec![
+            MockHttpResponse::json(
+                200,
+                json!({
+                    "results": [{"facebook_id": "cand-A", "name": "Candidate A"}],
+                    "cursor": "c2"
+                }),
+            ),
+            page_response(unique_posts("a", 3), None),
+        ];
+        responses.extend(rate_limited_responses(4));
+        let (base_url, requests) = spawn_mock_http_server_with_capture(responses).await;
+
+        let adapter = fast_adapter(base_url);
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&candidates_keyword(), &candidates_mode_options(50))
+            .await
+            .unwrap();
+
+        let req_count = requests.lock().unwrap().len();
+        assert_eq!(
+            req_count, 6,
+            "candidates outer partial: search1 + pageA + 4×429 = 6 requests, got {req_count}"
+        );
+        assert_eq!(
+            outcome.contents.len(),
+            3,
+            "candidates outer partial: candidate A's 3 posts must be delivered, got {}",
+            outcome.contents.len()
+        );
+        match &outcome.shortfall {
+            Some(FetchShortfall::PartialFailure { message }) => {
+                assert!(
+                    message.to_lowercase().contains("rate"),
+                    "candidates outer partial: PartialFailure should mention rate, got {message:?}"
+                );
+            }
+            other => panic!(
+                "candidates outer partial: expected Some(PartialFailure {{ .. }}), got {other:?}"
+            ),
+        }
+    }
+
+    /// M2-T7 (kills :701 delete `!` in candidate 内层页 RateLimited 部分进展守卫)。
+    /// 候选模式:搜索页 1 → 2 候选 A、B(cursor null);A 的 /page/posts → 3 条(有进展);
+    /// B 的 /page/posts → 4×429。
+    /// 正确 `!posts.is_empty()`:B 内层枯竭抛 RateLimited,此时 posts 已含 A 的 3 条 →
+    /// 内层守卫(:701)命中 → 截断保留 Partial,交付 3 条,
+    /// requests = 搜索1 + pageA(1) + pageB 4×429 = 6。
+    /// 变异(删 `!`):posts 非空 → 守卫不命中 → `Err(err) => return Err(err)` → 整体 Err → 红。
+    #[tokio::test]
+    async fn candidates_inner_rate_limit_after_progress_is_partial() {
+        let mut responses = vec![
+            MockHttpResponse::json(
+                200,
+                json!({
+                    "results": [
+                        {"facebook_id": "cand-A", "name": "Candidate A"},
+                        {"facebook_id": "cand-B", "name": "Candidate B"}
+                    ],
+                    "cursor": null
+                }),
+            ),
+            page_response(unique_posts("a", 3), None),
+        ];
+        responses.extend(rate_limited_responses(4));
+        let (base_url, requests) = spawn_mock_http_server_with_capture(responses).await;
+
+        let adapter = fast_adapter(base_url);
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&candidates_keyword(), &candidates_mode_options(50))
+            .await
+            .unwrap();
+
+        let req_count = requests.lock().unwrap().len();
+        assert_eq!(
+            req_count, 6,
+            "candidates inner partial: search1 + pageA + pageB 4×429 = 6 requests, got {req_count}"
+        );
+        assert_eq!(
+            outcome.contents.len(),
+            3,
+            "candidates inner partial: candidate A's 3 posts must be delivered, got {}",
+            outcome.contents.len()
+        );
+        match &outcome.shortfall {
+            Some(FetchShortfall::PartialFailure { message }) => {
+                assert!(
+                    message.to_lowercase().contains("rate"),
+                    "candidates inner partial: PartialFailure should mention rate, got {message:?}"
+                );
+            }
+            other => panic!(
+                "candidates inner partial: expected Some(PartialFailure {{ .. }}), got {other:?}"
             ),
         }
     }
