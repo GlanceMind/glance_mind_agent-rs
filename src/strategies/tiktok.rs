@@ -2,9 +2,12 @@
 //!
 //! Handles TikTok-specific keyword parsing, search options, and prompt formatting.
 
+use serde_json::json;
+
 use crate::config::platform::get_platform_id;
 use crate::domain::{Comment, Content, KeywordType, SearchOptions, TaskConfig};
-use crate::strategies::PlatformStrategy;
+use crate::pagination::platform_page_cap;
+use crate::strategies::{extra_keys, PlatformStrategy};
 
 /// TikTok platform strategy implementation
 pub struct TikTokStrategy {
@@ -106,6 +109,14 @@ impl PlatformStrategy for TikTokStrategy {
         // Set publish time filter if specified (0=all, 1=day, 7=week, 30=month, 90=3months, 180=6months)
         if let Some(publish_time) = config.publish_time {
             options.publish_time = Some(publish_time);
+        }
+
+        // Write per-page size hint into extra (clamped to platform cap).
+        // options.count carries total-quantity semantics (PR #5); page_size_hint is
+        // a separate adapter hint for how many items to fetch per TikHub API call.
+        if let Some(hint) = config.page_size_hint {
+            let clamped = hint.min(platform_page_cap("tiktok"));
+            options.extra.insert(extra_keys::PAGE_SIZE.into(), json!(clamped));
         }
 
         options
