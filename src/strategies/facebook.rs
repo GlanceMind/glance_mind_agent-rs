@@ -350,4 +350,97 @@ mod tests {
             Some("pfbid02MmmxmHinoAbb2Aidf7TZHH1fSR4w8UmPYUXKT86HgHFAHryrD54bW5113ZPQ2gzYl")
         );
     }
+
+    // M2-T1 tests: strategy 解除 min(20) 总量截断 + 消费 page_size_hint
+    // AG-001: RED→GREEN 取证见 /tmp/m2t1_red.log
+    // AG-004: 本上下文只写测试,不动 L131 cap 行(实现者任务)
+
+    /// T-001 fb 主断言: max_videos=50 时 options.count 应为 50,不被截断到 20。
+    /// 预期 RED(现状 v.min(20)): assertion 'left == right' failed: left: 20, right: 50
+    #[test]
+    fn search_count_is_total_not_capped_at_20() {
+        let strategy = FacebookStrategy::new();
+        let config = TaskConfig::new(1, "facebook")
+            .with_keywords(vec!["travel".to_string()])
+            .with_max_videos(50)
+            .with_region("US");
+
+        let keyword = strategy.parse_keyword("travel");
+        let options = strategy.build_search_options(&config, &keyword);
+
+        assert_eq!(options.count, 50, "options.count must equal max_videos (50), not be capped at 20");
+    }
+
+    /// 钉死「count = 总量」语义,防实现者把 20 换成另一个硬上限。
+    /// max_videos ∈ {25, 50, 137} → options.count 分别相等。
+    /// 预期 RED(现状 v.min(20)): left: 20, right: 137 (for 137 case)
+    #[test]
+    fn search_count_equals_max_videos_for_various_totals() {
+        let strategy = FacebookStrategy::new();
+
+        for max_videos in [25i32, 50, 137] {
+            let config = TaskConfig::new(1, "facebook")
+                .with_keywords(vec!["travel".to_string()])
+                .with_max_videos(max_videos)
+                .with_region("US");
+
+            let keyword = strategy.parse_keyword("travel");
+            let options = strategy.build_search_options(&config, &keyword);
+
+            assert_eq!(
+                options.count,
+                max_videos as u32,
+                "options.count must equal max_videos ({}) without any cap",
+                max_videos
+            );
+        }
+    }
+
+    /// hint 是单页提示,不截总量。page_size_hint=Some(20) + max_videos=50 → count==50。
+    /// 预期 RED(现状 v.min(20)): assertion 'left == right' failed: left: 20, right: 50
+    #[test]
+    fn page_size_hint_does_not_cap_total_count() {
+        let strategy = FacebookStrategy::new();
+        let mut config = TaskConfig::new(1, "facebook")
+            .with_keywords(vec!["travel".to_string()])
+            .with_max_videos(50)
+            .with_region("US");
+        // page_size_hint 是单页大小提示(clamp 到 platform_page_cap=20 by M1/redis.rs)
+        // 它不应截断 options.count(总量目标)
+        config.page_size_hint = Some(20);
+
+        let keyword = strategy.parse_keyword("travel");
+        let options = strategy.build_search_options(&config, &keyword);
+
+        assert_eq!(
+            options.count,
+            50,
+            "page_size_hint (single-page hint) must not cap options.count (total target); \
+             expected count==50 (max_videos), got {}",
+            options.count
+        );
+    }
+
+    /// 现状默认值回归保护: max_videos=None → options.count == 10。
+    /// 允许先绿 + AG-006: AG-012 变异覆盖,cap 行在 diff 内。
+    /// (facebook.rs:131 末 unwrap_or(10) 不变)
+    #[test]
+    fn missing_max_videos_defaults_unchanged() {
+        let strategy = FacebookStrategy::new();
+        // max_videos 不设,使用 None
+        let config = TaskConfig::new(1, "facebook")
+            .with_keywords(vec!["travel".to_string()])
+            .with_region("US");
+
+        let keyword = strategy.parse_keyword("travel");
+        let options = strategy.build_search_options(&config, &keyword);
+
+        // ASSERTION-CHANGE-JUSTIFIED: N/A — this is the original default (unwrap_or(10)),
+        // remains unchanged; test verifies regression protection only.
+        assert_eq!(
+            options.count,
+            10,
+            "missing max_videos should default to count=10 (unwrap_or(10) preserved)"
+        );
+    }
 }
