@@ -1042,6 +1042,34 @@ impl CursorExt for FetchCommentsOptions {
     }
 }
 
+/// Test-only helpers on FacebookAdapter.
+/// Adds a constructor that bypasses system proxy (required when http_proxy is set
+/// on the dev machine so that 127.0.0.1 mock servers are not proxied through it).
+#[cfg(test)]
+impl FacebookAdapter {
+    /// Build a test adapter with a no-proxy reqwest client and custom governor quota.
+    /// Use this instead of `new_with_quota` inside all `#[cfg(test)]` contexts.
+    fn new_no_proxy_with_quota(
+        api_key: impl Into<String>,
+        api_host: impl Into<String>,
+        base_url: impl Into<String>,
+        quota: Quota,
+    ) -> Result<Self, GatewayError> {
+        let client = Client::builder()
+            .timeout(Duration::from_secs(30))
+            .no_proxy()
+            .build()
+            .map_err(|err| GatewayError::Network(err.to_string()))?;
+        Ok(Self {
+            client,
+            api_key: api_key.into(),
+            api_host: api_host.into(),
+            base_url: base_url.into(),
+            rate_limiter: Arc::new(GovernorRateLimiter::direct(quota)),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1235,7 +1263,7 @@ mod tests {
         ])
         .await;
 
-        let adapter = FacebookAdapter::new("test-key", DEFAULT_HOST, base_url).unwrap();
+        let adapter = FacebookAdapter::new_no_proxy_with_quota("test-key", DEFAULT_HOST, base_url, FacebookAdapter::quota_from_interval_ms(5)).unwrap();
         let options = SearchOptions::new("museum")
             .with_platform("facebook")
             .with_count(1)
@@ -1267,7 +1295,7 @@ mod tests {
         ])
         .await;
 
-        let adapter = FacebookAdapter::new("test-key", DEFAULT_HOST, base_url).unwrap();
+        let adapter = FacebookAdapter::new_no_proxy_with_quota("test-key", DEFAULT_HOST, base_url, FacebookAdapter::quota_from_interval_ms(5)).unwrap();
         let options = SearchOptions::new("travel")
             .with_platform("facebook")
             .with_count(2)
@@ -1303,7 +1331,7 @@ mod tests {
         ])
         .await;
 
-        let adapter = FacebookAdapter::new("test-key", DEFAULT_HOST, base_url).unwrap();
+        let adapter = FacebookAdapter::new_no_proxy_with_quota("test-key", DEFAULT_HOST, base_url, FacebookAdapter::quota_from_interval_ms(5)).unwrap();
         let options = SearchOptions::new("travel")
             .with_platform("facebook")
             .with_count(1)
@@ -1335,7 +1363,7 @@ mod tests {
         ])
         .await;
 
-        let adapter = FacebookAdapter::new("test-key", DEFAULT_HOST, base_url).unwrap();
+        let adapter = FacebookAdapter::new_no_proxy_with_quota("test-key", DEFAULT_HOST, base_url, FacebookAdapter::quota_from_interval_ms(5)).unwrap();
         let options = SearchOptions::new("123456")
             .with_platform("facebook")
             .with_count(2)
@@ -1374,7 +1402,7 @@ mod tests {
         ])
         .await;
 
-        let adapter = FacebookAdapter::new("test-key", DEFAULT_HOST, base_url).unwrap();
+        let adapter = FacebookAdapter::new_no_proxy_with_quota("test-key", DEFAULT_HOST, base_url, FacebookAdapter::quota_from_interval_ms(5)).unwrap();
         let options = SearchOptions::new("NatGeoMuseum")
             .with_platform("facebook")
             .with_count(1)
@@ -1412,7 +1440,7 @@ mod tests {
         ])
         .await;
 
-        let adapter = FacebookAdapter::new("test-key", DEFAULT_HOST, base_url).unwrap();
+        let adapter = FacebookAdapter::new_no_proxy_with_quota("test-key", DEFAULT_HOST, base_url, FacebookAdapter::quota_from_interval_ms(5)).unwrap();
         let comments = adapter.fetch_all_comments("post-1", 2).await.unwrap();
         assert_eq!(comments.len(), 2);
 
@@ -1443,7 +1471,7 @@ mod tests {
         ])
         .await;
 
-        let adapter = FacebookAdapter::new("test-key", DEFAULT_HOST, base_url).unwrap();
+        let adapter = FacebookAdapter::new_no_proxy_with_quota("test-key", DEFAULT_HOST, base_url, FacebookAdapter::quota_from_interval_ms(5)).unwrap();
         let comments = adapter.fetch_all_comments("post-1", 1).await.unwrap();
         assert_eq!(comments.len(), 1);
         assert_eq!(comments[0].comment_id, "comment-2");
@@ -1475,7 +1503,7 @@ mod tests {
         ])
         .await;
 
-        let adapter = FacebookAdapter::new("test-key", DEFAULT_HOST, base_url).unwrap();
+        let adapter = FacebookAdapter::new_no_proxy_with_quota("test-key", DEFAULT_HOST, base_url, FacebookAdapter::quota_from_interval_ms(5)).unwrap();
         let comments = adapter.fetch_all_comments("post-1", 10).await.unwrap();
         let ids = comments
             .iter()
@@ -1497,7 +1525,7 @@ mod tests {
         )
         .await;
 
-        let adapter = FacebookAdapter::new_with_quota(
+        let adapter = FacebookAdapter::new_no_proxy_with_quota(
             "test-key",
             DEFAULT_HOST,
             base_url,
@@ -1536,7 +1564,7 @@ mod tests {
         }));
 
         let base_url = spawn_mock_http_server(responses).await;
-        let adapter = FacebookAdapter::new("test-key", DEFAULT_HOST, base_url).unwrap();
+        let adapter = FacebookAdapter::new_no_proxy_with_quota("test-key", DEFAULT_HOST, base_url, FacebookAdapter::quota_from_interval_ms(5)).unwrap();
 
         let comments = adapter.fetch_all_comments("post-1", 5).await.unwrap();
         assert_eq!(comments.len(), 2);
@@ -1583,8 +1611,9 @@ mod tests {
     }
 
     /// 测试用快速 governor 装配(沿 new_with_quota 既有样板,避免默认 500ms 间隔拖慢测试)。
+    /// 使用 no_proxy 客户端,避免系统代理(如 http_proxy=127.0.0.1:7890)干扰 mock HTTP 服务器。
     fn fast_adapter(base_url: impl Into<String>) -> FacebookAdapter {
-        FacebookAdapter::new_with_quota(
+        FacebookAdapter::new_no_proxy_with_quota(
             "test-key",
             DEFAULT_HOST,
             base_url,
@@ -2054,5 +2083,194 @@ mod tests {
         assert_eq!(requests.len(), 3);
         assert!(requests[1].contains("page_id=fb-page-1"));
         assert!(requests[2].contains("page_id=fb-page-2"));
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // M2-T3 测试载荷(m2-facebook-p0.md §4 M2-T3,测试 1~4)
+    // 专注「请求级行为」——请求次数、cursor 转发停止、空页计数复位。
+    // 允许先绿(AG-006);AG-012 预检 = 手工金丝雀(DR-12,见计划 §4 M2-T3)。
+    // ──────────────────────────────────────────────────────────────────
+
+    /// M2-T3 测试 1 (F-004 请求级):第 2 页返回与第 1 页相同 cursor → 适配器不发
+    /// 第 3 个相同 cursor 请求(requests.len() == 2);收集首两页内容。
+    ///
+    /// 允许先绿 + AG-006 金丝雀标注(DR-12):
+    ///   T3.1 金丝雀 = 临时注释 seen-cursor break(facebook.rs 581-583)→ 须红;
+    ///   还原复绿,输出留存(归实现/收尾上下文执行)。
+    #[tokio::test]
+    async fn cursor_loop_stops_and_does_not_refetch() {
+        // 第 1 页:20 条 + cursor "cursor-loop"
+        // 第 2 页:10 条 + 同一 cursor "cursor-loop"(触发 seen-cursor 防环)
+        // 若防环失效,适配器将无限发送第 3 个请求;mock 仅准备 2 个响应。
+        let (base_url, requests) = spawn_mock_http_server_with_capture(vec![
+            page_response(unique_posts("p1", 20), Some("cursor-loop")),
+            page_response(unique_posts("p2", 10), Some("cursor-loop")),
+        ])
+        .await;
+
+        let adapter = fast_adapter(base_url);
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&search_keyword(), &keyword_search_options(50))
+            .await
+            .unwrap();
+
+        // 请求级断言:seen-cursor 出口在第 2 页后终止,不发第 3 个请求。
+        assert_eq!(
+            requests.lock().unwrap().len(),
+            2,
+            "cursor_loop: seen-cursor must stop after 2nd request, got {}",
+            requests.lock().unwrap().len()
+        );
+        // 语义断言:cursor 环 → Exhausted shortfall(与 M2-T2 测试 3 同语义,从请求计数角度验证)。
+        assert_eq!(
+            outcome.shortfall,
+            Some(FetchShortfall::Exhausted),
+            "cursor_loop: shortfall must be Exhausted, got {:?}",
+            outcome.shortfall
+        );
+    }
+
+    /// M2-T3 测试 2 (F-005 请求级):连续 3 空页(cursor 各异 c2/c3/c4)→ 适配器在第 3
+    /// 空页后停止(requests.len() == 3,不发第 4 请求);总收集 0 条;shortfall == Exhausted。
+    ///
+    /// 允许先绿 + AG-006 金丝雀标注(DR-12):
+    ///   T3.2/3.3 金丝雀 = 临时改 MAX_EMPTY_CURSOR_HOPS 判定(3→999)→ 须红;
+    ///   还原复绿,输出留存(归实现/收尾上下文执行)。
+    #[tokio::test]
+    async fn empty_page_streak_stops_at_three() {
+        // 3 连空页,cursor 各异(c2/c3/c4)。mock 只注册 3 个响应,若发第 4 请求即超出。
+        let (base_url, requests) = spawn_mock_http_server_with_capture(vec![
+            page_response(Vec::new(), Some("c2")),
+            page_response(Vec::new(), Some("c3")),
+            page_response(Vec::new(), Some("c4")),
+        ])
+        .await;
+
+        let adapter = fast_adapter(base_url);
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&search_keyword(), &keyword_search_options(50))
+            .await
+            .unwrap();
+
+        // 请求级断言:MAX_EMPTY_CURSOR_HOPS=3 → 恰好发 3 个请求后停止。
+        assert_eq!(
+            requests.lock().unwrap().len(),
+            3,
+            "empty streak: must stop after 3rd empty-page request (MAX_EMPTY_CURSOR_HOPS=3)"
+        );
+        // 收集断言:3 连空页,无帖子交付。
+        assert_eq!(
+            outcome.contents.len(),
+            0,
+            "empty streak: 0 posts collected from 3 empty pages"
+        );
+        // 语义断言:空页上限出口 → Exhausted。
+        assert_eq!(
+            outcome.shortfall,
+            Some(FetchShortfall::Exhausted),
+            "empty streak: shortfall must be Exhausted, got {:?}",
+            outcome.shortfall
+        );
+    }
+
+    /// M2-T3 测试 3 (F-005 复位,D-15):空页 → 有新增页(20 条)→ 空页 序列;count=50。
+    /// 计数在本页有新增(去重后)时复位(D-15 语义),不在第 2 空页(共经历 1+1=2 次空跳)误停。
+    ///
+    /// 序列(3 个请求):
+    ///   req 1: empty(cursor c2) → empty_hops=1
+    ///   req 2: 20 posts(cursor c3) → empty_hops=0(复位)
+    ///   req 3: empty(cursor=None) → empty_hops=1,cursor=None → UpstreamExhausted(终止)
+    ///
+    /// 允许先绿 + AG-006 金丝雀标注(DR-12):
+    ///   T3.3 金丝雀:D-15 reset 语义已由 M2-T2 测试 11(`repeated_content_pages_stop_via_empty_limit`)
+    ///   独立证明并留存金丝雀证据(任何修改 empty_hops 复位行的变异均使该测试红)。
+    ///   本 T3.3 专注于「空页→有新增页→空页不误停」的请求级断言(requests==3 且收集到 20 条),
+    ///   引用 T2-11 的金丝雀证据而不重复相同对象的金丝雀程序(参见 DR-12 约定:
+    ///   若某金丝雀与 T2 已留存证据完全同对象,引用之并注明,不重复)。
+    #[tokio::test]
+    async fn empty_streak_resets_on_nonempty_page() {
+        // 序列:空页 c2 → 有新增页 20 条 c3 → 空页(cursor=None 终止)
+        // 空页计数在 req 2(有新增)后复位为 0;req 3(第 2 空页)时 empty_hops=1,不触发 EmptyPageLimit。
+        // 3 个请求全部处理,收集 20 条。
+        let (base_url, requests) = spawn_mock_http_server_with_capture(vec![
+            page_response(Vec::new(), Some("c2")),              // req 1:空页,empty_hops → 1
+            page_response(unique_posts("mid", 20), Some("c3")), // req 2:有新增,empty_hops → 0(复位)
+            page_response(Vec::new(), None),                    // req 3:空页,empty_hops → 1,cursor=None → 终止
+        ])
+        .await;
+
+        let adapter = fast_adapter(base_url);
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&search_keyword(), &keyword_search_options(50))
+            .await
+            .unwrap();
+
+        // 请求级断言:3 个请求全发(复位有效,不在 req 3 的第 2 空页误停于 EmptyPageLimit)。
+        assert_eq!(
+            requests.lock().unwrap().len(),
+            3,
+            "empty_streak_reset: must make 3 requests (empty→nonempty→empty+null-cursor), got {}",
+            requests.lock().unwrap().len()
+        );
+        // 收集断言:req 2 的 20 条进入交付集。
+        assert_eq!(
+            outcome.contents.len(),
+            20,
+            "empty_streak_reset: should collect 20 posts from the nonempty middle page"
+        );
+        // 语义断言:cursor 链断 → Exhausted。
+        assert_eq!(
+            outcome.shortfall,
+            Some(FetchShortfall::Exhausted),
+            "empty_streak_reset: shortfall should be Exhausted (cursor null), got {:?}",
+            outcome.shortfall
+        );
+    }
+
+    /// M2-T3 测试 4 (F-006 请求级):第 1 页 20 条 + 第 2 页 4×429(retry-after: 0)
+    /// → requests.len() == 1 + 4 == 5;返回首页 20 条(重试耗尽后进 partial,不无限重试)。
+    ///
+    /// 允许先绿 + AG-006 金丝雀标注(DR-12):
+    ///   T3.4 金丝雀 = 临时移除 RateLimited-partial 分支(facebook.rs 586-593)→ 须红;
+    ///   还原复绿,输出留存(归实现/收尾上下文执行)。
+    #[tokio::test]
+    async fn rate_limited_after_progress_stops_with_collected() {
+        // 第 1 页:20 条 + cursor "cursor-2"(有进展)
+        // 第 2~5 请求:4×429(retry-after: 0;适配器对 429 自动重试 ×3 后第 4 次仍 429 → Partial)
+        let mut responses = vec![page_response(unique_posts("p1", 20), Some("cursor-2"))];
+        responses.extend(rate_limited_responses(4));
+        let (base_url, requests) = spawn_mock_http_server_with_capture(responses).await;
+
+        let adapter = fast_adapter(base_url);
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&search_keyword(), &keyword_search_options(50))
+            .await
+            .unwrap();
+
+        // 请求级断言:1 次正常请求 + 4 次 429 重试 = 5 次请求。
+        assert_eq!(
+            requests.lock().unwrap().len(),
+            5,
+            "rate_limited_after_progress: expected 1+4=5 requests (1 success + 4 rate-limit retries), got {}",
+            requests.lock().unwrap().len()
+        );
+        // 收集断言:首页 20 条进入 partial 交付。
+        assert_eq!(
+            outcome.contents.len(),
+            20,
+            "rate_limited_after_progress: should deliver first page's 20 posts"
+        );
+        // shortfall 断言:有进展的 429 → PartialFailure。
+        match &outcome.shortfall {
+            Some(FetchShortfall::PartialFailure { message }) => {
+                assert!(
+                    message.to_lowercase().contains("rate"),
+                    "rate_limited_after_progress: PartialFailure message should mention rate, got {message:?}"
+                );
+            }
+            other => panic!(
+                "rate_limited_after_progress: expected Some(PartialFailure {{ .. }}), got {other:?}"
+            ),
+        }
     }
 }
