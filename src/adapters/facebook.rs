@@ -15,8 +15,10 @@ use tracing::{debug, info, warn};
 
 use crate::domain::errors::{GatewayError, GatewayResult};
 use crate::domain::{Comment, Content, Engagement, KeywordType, SearchOptions};
+use crate::pagination::StopReason;
 use crate::ports::{
     comment_gateway::{FetchCommentsOptions, FetchCommentsResult},
+    content_gateway::{FetchOutcome, FetchShortfall},
     CommentGateway, ContentGateway,
 };
 use crate::strategies::facebook::{extra_keys, mode};
@@ -31,6 +33,16 @@ struct ResponsePayload {
     status: StatusCode,
     body: Value,
     retry_after_secs: Option<u64>,
+}
+
+/// 翻页循环终止信息(M2-T2,适配器私有):
+/// - `Stop(reason)`:循环以 M1 D2 的 `StopReason` 语义终止;
+/// - `Partial(err)`:`RateLimited` 且原始进展非空的先例分支,保留原错误
+///   (零交付时由 `fetch_by_keyword_with_outcome` 原样 `Err`,DR-01)。
+#[derive(Debug)]
+enum FbFetchEnd {
+    Stop(StopReason),
+    Partial(GatewayError),
 }
 
 /// Facebook adapter implementing ContentGateway and CommentGateway.
@@ -519,32 +531,37 @@ impl FacebookAdapter {
         Self::filter_posts(posts.to_vec(), options).len() >= options.count as usize
     }
 
-    async fn search_posts_paginated(&self, options: &SearchOptions) -> GatewayResult<Vec<Content>> {
+    async fn search_posts_paginated(
+        &self,
+        options: &SearchOptions,
+    ) -> GatewayResult<(Vec<Content>, FbFetchEnd)> {
         let mut posts = Vec::new();
         let mut seen_post_ids = HashSet::new();
         let mut cursor = None;
         let mut seen_cursors = HashSet::new();
         let mut empty_hops = 0;
 
-        loop {
+        let end = loop {
             match self
                 .search_posts_page(&options.query, cursor.as_deref())
                 .await
             {
                 Ok((page_posts, next_cursor)) => {
-                    let page_count = page_posts.len();
-
+                    let mut newly_added = 0_usize;
                     for post in page_posts {
                         if seen_post_ids.insert(post.content_id.clone()) {
                             posts.push(post);
+                            newly_added += 1;
                         }
                     }
 
                     if Self::reached_post_limit(&posts, options) {
-                        break;
+                        break FbFetchEnd::Stop(StopReason::ReachedMaxCount);
                     }
 
-                    if page_count == 0 {
+                    // D-15:空页计数按「本页新增(去重后)数 == 0」递增
+                    // (对齐 M1 D2 empty_streak 冻结语义,重复内容页与字面空页同等计入)。
+                    if newly_added == 0 {
                         empty_hops += 1;
                         if empty_hops >= MAX_EMPTY_CURSOR_HOPS {
                             warn!(
@@ -552,95 +569,96 @@ impl FacebookAdapter {
                                 empty_hops,
                                 "Facebook post search exhausted empty cursor hops"
                             );
-                            break;
+                            break FbFetchEnd::Stop(StopReason::EmptyPageLimit);
                         }
                     } else {
                         empty_hops = 0;
                     }
 
                     let Some(next_cursor) = next_cursor else {
-                        break;
+                        break FbFetchEnd::Stop(StopReason::UpstreamExhausted);
                     };
                     if !seen_cursors.insert(next_cursor.clone()) {
-                        break;
+                        break FbFetchEnd::Stop(StopReason::CursorLoop);
                     }
                     cursor = Some(next_cursor);
                 }
-                Err(GatewayError::RateLimited { .. }) if !posts.is_empty() => {
+                Err(err @ GatewayError::RateLimited { .. }) if !posts.is_empty() => {
                     warn!(
                         query = %options.query,
                         collected = posts.len(),
                         "Facebook post search hit rate limit after partial progress"
                     );
-                    break;
+                    break FbFetchEnd::Partial(err);
                 }
                 Err(err) => return Err(err),
             }
-        }
+        };
 
-        Ok(Self::filter_posts(posts, options))
+        Ok((Self::filter_posts(posts, options), end))
     }
 
     async fn fetch_page_posts_paginated(
         &self,
         page_id: &str,
         options: &SearchOptions,
-    ) -> GatewayResult<Vec<Content>> {
+    ) -> GatewayResult<(Vec<Content>, FbFetchEnd)> {
         let mut posts = Vec::new();
         let mut seen_post_ids = HashSet::new();
         let mut cursor = None;
         let mut seen_cursors = HashSet::new();
         let mut empty_hops = 0;
 
-        loop {
+        let end = loop {
             match self.fetch_page_posts_page(page_id, cursor.as_deref()).await {
                 Ok((page_posts, next_cursor)) => {
-                    let page_count = page_posts.len();
-
+                    let mut newly_added = 0_usize;
                     for post in page_posts {
                         if seen_post_ids.insert(post.content_id.clone()) {
                             posts.push(post);
+                            newly_added += 1;
                         }
                     }
 
                     if Self::reached_post_limit(&posts, options) {
-                        break;
+                        break FbFetchEnd::Stop(StopReason::ReachedMaxCount);
                     }
 
-                    if page_count == 0 {
+                    // D-15:空页计数按「本页新增(去重后)数 == 0」递增(对齐 M1 D2)。
+                    if newly_added == 0 {
                         empty_hops += 1;
                         if empty_hops >= MAX_EMPTY_CURSOR_HOPS {
                             warn!(
                                 page_id,
                                 empty_hops, "Facebook page/posts exhausted empty cursor hops"
                             );
-                            break;
+                            break FbFetchEnd::Stop(StopReason::EmptyPageLimit);
                         }
                     } else {
                         empty_hops = 0;
                     }
 
                     let Some(next_cursor) = next_cursor else {
-                        break;
+                        break FbFetchEnd::Stop(StopReason::UpstreamExhausted);
                     };
                     if !seen_cursors.insert(next_cursor.clone()) {
-                        break;
+                        break FbFetchEnd::Stop(StopReason::CursorLoop);
                     }
                     cursor = Some(next_cursor);
                 }
-                Err(GatewayError::RateLimited { .. }) if !posts.is_empty() => {
+                Err(err @ GatewayError::RateLimited { .. }) if !posts.is_empty() => {
                     warn!(
                         page_id,
                         collected = posts.len(),
                         "Facebook page/posts hit rate limit after partial progress"
                     );
-                    break;
+                    break FbFetchEnd::Partial(err);
                 }
                 Err(err) => return Err(err),
             }
-        }
+        };
 
-        Ok(Self::filter_posts(posts, options))
+        Ok((Self::filter_posts(posts, options), end))
     }
 
     async fn fetch_posts_from_search_candidates(
@@ -648,20 +666,20 @@ impl FacebookAdapter {
         query: &str,
         path: &str,
         options: &SearchOptions,
-    ) -> GatewayResult<Vec<Content>> {
+    ) -> GatewayResult<(Vec<Content>, FbFetchEnd)> {
         let mut posts = Vec::new();
         let mut seen_post_ids = HashSet::new();
         let mut candidate_cursor = None;
         let mut seen_candidate_cursors = HashSet::new();
         let mut empty_hops = 0;
 
-        loop {
+        let end = loop {
             match self
                 .search_pages_page(query, path, candidate_cursor.as_deref())
                 .await
             {
                 Ok((candidates, next_cursor)) => {
-                    let candidate_count = candidates.len();
+                    let posts_before = posts.len();
 
                     for candidate in candidates {
                         let Some(page_id) = Self::get_string(&candidate, "facebook_id") else {
@@ -673,18 +691,23 @@ impl FacebookAdapter {
                             .saturating_sub(Self::filter_posts(posts.clone(), options).len() as u32)
                             .max(1);
                         let page_options = options.clone().with_count(remaining);
-                        let page_posts = match self
+                        // DR-17c:内层 fetch_page_posts_paginated 的终止信息(枯竭/环/空页)
+                        // 不外泄为整体 shortfall;shortfall 只由最外层最终出口决定。
+                        let (page_posts, _inner_end) = match self
                             .fetch_page_posts_paginated(&page_id, &page_options)
                             .await
                         {
-                            Ok(page_posts) => page_posts,
-                            Err(GatewayError::RateLimited { .. }) if !posts.is_empty() => {
+                            Ok(inner) => inner,
+                            Err(err @ GatewayError::RateLimited { .. }) if !posts.is_empty() => {
                                 warn!(
                                     page_id,
                                     collected = posts.len(),
                                     "Facebook candidate page crawl hit rate limit after partial progress"
                                 );
-                                return Ok(Self::filter_posts(posts, options));
+                                return Ok((
+                                    Self::filter_posts(posts, options),
+                                    FbFetchEnd::Partial(err),
+                                ));
                             }
                             Err(err) => return Err(err),
                         };
@@ -696,80 +719,87 @@ impl FacebookAdapter {
                         }
 
                         if Self::reached_post_limit(&posts, options) {
-                            return Ok(Self::filter_posts(posts, options));
+                            return Ok((
+                                Self::filter_posts(posts, options),
+                                FbFetchEnd::Stop(StopReason::ReachedMaxCount),
+                            ));
                         }
                     }
 
-                    if candidate_count == 0 {
+                    // D-15:空页计数按「本候选页新增(去重后)帖子数 == 0」递增(对齐 M1 D2)。
+                    if posts.len() == posts_before {
                         empty_hops += 1;
                         if empty_hops >= MAX_EMPTY_CURSOR_HOPS {
                             warn!(
                                 query,
                                 empty_hops, "Facebook candidate search exhausted empty cursor hops"
                             );
-                            break;
+                            break FbFetchEnd::Stop(StopReason::EmptyPageLimit);
                         }
                     } else {
                         empty_hops = 0;
                     }
 
                     let Some(next_cursor) = next_cursor else {
-                        break;
+                        break FbFetchEnd::Stop(StopReason::UpstreamExhausted);
                     };
                     if !seen_candidate_cursors.insert(next_cursor.clone()) {
-                        break;
+                        break FbFetchEnd::Stop(StopReason::CursorLoop);
                     }
                     candidate_cursor = Some(next_cursor);
                 }
-                Err(GatewayError::RateLimited { .. }) if !posts.is_empty() => {
+                Err(err @ GatewayError::RateLimited { .. }) if !posts.is_empty() => {
                     warn!(
                         query,
                         collected = posts.len(),
                         "Facebook candidate search hit rate limit after partial progress"
                     );
-                    break;
+                    break FbFetchEnd::Partial(err);
                 }
                 Err(err) => return Err(err),
             }
-        }
+        };
 
-        Ok(Self::filter_posts(posts, options))
+        Ok((Self::filter_posts(posts, options), end))
     }
 
-    async fn search_keyword_mode(&self, options: &SearchOptions) -> GatewayResult<Vec<Content>> {
+    async fn search_keyword_mode(
+        &self,
+        options: &SearchOptions,
+    ) -> GatewayResult<(Vec<Content>, FbFetchEnd)> {
         let search_type = Self::extra_string(options, extra_keys::SEARCH_TYPE)
             .unwrap_or_else(|| "posts".to_string());
         let location = Self::extra_string(options, extra_keys::LOCATION);
         let discovery_query = Self::discovery_query(&options.query, location);
 
-        let posts = match search_type.as_str() {
+        match search_type.as_str() {
             "posts" => {
                 self.search_posts_paginated(&options.with_query(discovery_query))
-                    .await?
+                    .await
             }
             "pages" => {
                 self.fetch_posts_from_search_candidates(&discovery_query, "/search/pages", options)
-                    .await?
+                    .await
             }
             "places" => {
                 self.fetch_posts_from_search_candidates(&discovery_query, "/search/places", options)
-                    .await?
+                    .await
             }
-            other => {
-                return Err(GatewayError::InvalidParams(format!(
-                    "unsupported facebook search_type: {other}"
-                )));
-            }
-        };
-
-        Ok(posts)
+            other => Err(GatewayError::InvalidParams(format!(
+                "unsupported facebook search_type: {other}"
+            ))),
+        }
     }
 
-    async fn search_page_mode(&self, options: &SearchOptions) -> GatewayResult<Vec<Content>> {
+    async fn search_page_mode(
+        &self,
+        options: &SearchOptions,
+    ) -> GatewayResult<(Vec<Content>, Option<FbFetchEnd>)> {
         let Some(page_id) = self.resolve_page_id(&options.query).await? else {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), None));
         };
-        self.fetch_page_posts_paginated(&page_id, options).await
+        let (posts, end) = self.fetch_page_posts_paginated(&page_id, options).await?;
+        Ok((posts, Some(end)))
     }
 
     async fn search_post_mode(&self, options: &SearchOptions) -> GatewayResult<Vec<Content>> {
@@ -777,11 +807,13 @@ impl FacebookAdapter {
             .unwrap_or_else(|| options.query.clone());
         Ok(self.fetch_post(&lookup_id).await?.into_iter().collect())
     }
-}
 
-#[async_trait]
-impl ContentGateway for FacebookAdapter {
-    async fn search(&self, options: &SearchOptions) -> GatewayResult<Vec<Content>> {
+    /// `search()` 的带终止信息形态(M2-T2):`end == None` 表示该路径无翻页终止信息
+    /// (post 模式 / page 解析失败的空结果),沿 D1 滚动兼容语义映射 `shortfall = None`。
+    async fn search_with_end(
+        &self,
+        options: &SearchOptions,
+    ) -> GatewayResult<(Vec<Content>, Option<FbFetchEnd>)> {
         let mode = Self::extra_string(options, extra_keys::MODE)
             .unwrap_or_else(|| mode::KEYWORD.to_string());
 
@@ -793,13 +825,24 @@ impl ContentGateway for FacebookAdapter {
         );
 
         match mode.as_str() {
-            mode::KEYWORD => self.search_keyword_mode(options).await,
+            mode::KEYWORD => {
+                let (posts, end) = self.search_keyword_mode(options).await?;
+                Ok((posts, Some(end)))
+            }
             mode::PAGE => self.search_page_mode(options).await,
-            mode::POST_URL => self.search_post_mode(options).await,
+            mode::POST_URL => Ok((self.search_post_mode(options).await?, None)),
             other => Err(GatewayError::InvalidParams(format!(
                 "unsupported facebook search mode: {other}"
             ))),
         }
+    }
+}
+
+#[async_trait]
+impl ContentGateway for FacebookAdapter {
+    async fn search(&self, options: &SearchOptions) -> GatewayResult<Vec<Content>> {
+        let (posts, _end) = self.search_with_end(options).await?;
+        Ok(posts)
     }
 
     async fn fetch_by_keyword(
@@ -809,6 +852,45 @@ impl ContentGateway for FacebookAdapter {
     ) -> GatewayResult<Vec<Content>> {
         debug!(keyword = ?keyword, query = %options.query, "Facebook fetch_by_keyword");
         self.search(options).await
+    }
+
+    /// M2-T2:override D1 默认方法,把翻页循环的终止/失败原因翻译为 `shortfall`
+    /// (映射语义与 `PaginationLoop::shortfall_for` 一致;DR-09:`delivered` = 过滤后交付集)。
+    async fn fetch_by_keyword_with_outcome(
+        &self,
+        keyword: &KeywordType,
+        options: &SearchOptions,
+    ) -> GatewayResult<FetchOutcome> {
+        debug!(keyword = ?keyword, query = %options.query, "Facebook fetch_by_keyword_with_outcome");
+        let (contents, end) = self.search_with_end(options).await?;
+        let delivered = contents.len();
+        let target = options.count as usize;
+
+        let shortfall = match end {
+            // 无翻页终止信息的路径(post 模式等):滚动兼容语义,shortfall = None。
+            None => None,
+            Some(FbFetchEnd::Stop(_)) if delivered >= target => None,
+            Some(FbFetchEnd::Stop(StopReason::ReachedMaxCount)) => None,
+            Some(FbFetchEnd::Stop(
+                StopReason::UpstreamExhausted
+                | StopReason::CursorLoop
+                | StopReason::EmptyPageLimit,
+            )) => Some(FetchShortfall::Exhausted),
+            Some(FbFetchEnd::Partial(err)) => {
+                if contents.is_empty() {
+                    // DR-01:零可交付进展(含 raw 有进展但全被 date-filter 滤除)→ 原样 Err。
+                    return Err(err);
+                }
+                Some(FetchShortfall::PartialFailure {
+                    message: err.to_string(),
+                })
+            }
+        };
+
+        Ok(FetchOutcome {
+            contents,
+            shortfall,
+        })
     }
 
     async fn fetch_user_content(&self, user_id: &str, count: u32) -> GatewayResult<Vec<Content>> {
