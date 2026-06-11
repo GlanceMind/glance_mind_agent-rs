@@ -1461,4 +1461,516 @@ mod tests {
         assert_eq!(comments[0].comment_id, "comment-1");
         assert_eq!(comments[1].comment_id, "comment-2");
     }
+
+    // ──────────────────────────────────────────────────────────────────
+    // M2-T2 测试载荷(m2-facebook-p0.md §4 M2-T2,测试 1~13;断言 = 计划原文契约)
+    // 全部经 `fetch_by_keyword_with_outcome` 调用;helper 仅扩展既有 mock-HTTP 样板
+    // (FR-003,零新依赖)。
+    // ──────────────────────────────────────────────────────────────────
+
+    use crate::pagination::{PageDecision, PaginationLoop};
+    use crate::ports::content_gateway::{FetchOutcome, FetchShortfall};
+
+    /// 带可控 created_at 的 `test_post` 变体(date-filter 测试用):沿既有 fixture
+    /// 形状,仅覆写 `timestamp` 字段,不凭空捏造字段(PV-001)。
+    fn test_post_with_timestamp(post_id: &str, message: &str, timestamp: i64) -> Value {
+        let mut post = test_post(post_id, message);
+        post["timestamp"] = json!(timestamp);
+        post
+    }
+
+    fn unique_posts(prefix: &str, n: usize) -> Vec<Value> {
+        (0..n)
+            .map(|i| test_post(&format!("{prefix}-{i}"), "fixture-message"))
+            .collect()
+    }
+
+    fn page_response(posts: Vec<Value>, cursor: Option<&str>) -> MockHttpResponse {
+        MockHttpResponse::json(200, json!({ "results": posts, "cursor": cursor }))
+    }
+
+    /// n 个排队的 429 响应(各带 `retry-after: 0`,DR-05 同形;
+    /// 沿 test_governor_rate_limiter_applies_to_retries 样板)。
+    fn rate_limited_responses(n: usize) -> Vec<MockHttpResponse> {
+        (0..n)
+            .map(|_| {
+                MockHttpResponse::json(429, json!({"message": "rate limited"}))
+                    .with_header("retry-after", "0")
+            })
+            .collect()
+    }
+
+    /// 测试用快速 governor 装配(沿 new_with_quota 既有样板,避免默认 500ms 间隔拖慢测试)。
+    fn fast_adapter(base_url: impl Into<String>) -> FacebookAdapter {
+        FacebookAdapter::new_with_quota(
+            "test-key",
+            DEFAULT_HOST,
+            base_url,
+            FacebookAdapter::quota_from_interval_ms(5),
+        )
+        .unwrap()
+    }
+
+    fn search_keyword() -> KeywordType {
+        KeywordType::Search("travel".to_string())
+    }
+
+    fn keyword_search_options(count: u32) -> SearchOptions {
+        SearchOptions::new("travel")
+            .with_platform("facebook")
+            .with_count(count)
+            .with_extra_value(extra_keys::MODE, json!(mode::KEYWORD))
+            .with_extra_value(extra_keys::SEARCH_TYPE, json!("posts"))
+    }
+
+    /// M2-T2 测试 1(R-002 / T-010 / PV-001 充足形状)。
+    /// 允许先绿 + AG-006 金丝雀标注(DR-12):RED 基线下默认方法包装的既有循环已具备
+    /// 达量行为;金丝雀程序 = 临时 truncate 交付集(只动生产代码)须使本测试变红,
+    /// 还原复绿,输出留存(归实现/收尾上下文执行)。
+    #[tokio::test]
+    async fn fetch_outcome_reaches_count_no_shortfall() {
+        let (base_url, requests) = spawn_mock_http_server_with_capture(vec![
+            page_response(unique_posts("p1", 20), Some("cursor-2")),
+            page_response(unique_posts("p2", 20), Some("cursor-3")),
+            page_response(unique_posts("p3", 10), None),
+        ])
+        .await;
+
+        let adapter = fast_adapter(base_url);
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&search_keyword(), &keyword_search_options(50))
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.contents.len(), 50);
+        assert!(outcome.shortfall.is_none());
+
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 3);
+        assert!(requests[1].contains("GET /search/posts?query=travel&cursor=cursor-2 HTTP/1.1"));
+        assert!(requests[2].contains("GET /search/posts?query=travel&cursor=cursor-3 HTTP/1.1"));
+    }
+
+    /// M2-T2 测试 2(F-003):cursor 在达 count 前断链 → Exhausted。
+    #[tokio::test]
+    async fn fetch_outcome_exhausted_when_cursor_null_before_count() {
+        let base_url = spawn_mock_http_server(vec![
+            page_response(unique_posts("p1", 20), Some("cursor-2")),
+            page_response(unique_posts("p2", 10), None),
+        ])
+        .await;
+
+        let adapter = fast_adapter(base_url);
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&search_keyword(), &keyword_search_options(50))
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.contents.len(), 30);
+        assert_eq!(outcome.shortfall, Some(FetchShortfall::Exhausted));
+    }
+
+    /// M2-T2 测试 3(F-004):第 2 页返回与第 1 页相同 cursor、未达 count
+    /// → seen-cursor 终止按枯竭语义接 shortfall。
+    #[tokio::test]
+    async fn fetch_outcome_cursor_loop_maps_exhausted() {
+        let base_url = spawn_mock_http_server(vec![
+            page_response(unique_posts("p1", 20), Some("cursor-loop")),
+            page_response(unique_posts("p2", 10), Some("cursor-loop")),
+        ])
+        .await;
+
+        let adapter = fast_adapter(base_url);
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&search_keyword(), &keyword_search_options(50))
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.shortfall, Some(FetchShortfall::Exhausted));
+    }
+
+    /// M2-T2 测试 4(F-005):连续 3 空页(cursor 各异)、未达 count
+    /// → MAX_EMPTY_CURSOR_HOPS 出口接 shortfall。
+    #[tokio::test]
+    async fn fetch_outcome_empty_page_limit_maps_exhausted() {
+        let base_url = spawn_mock_http_server(vec![
+            page_response(Vec::new(), Some("empty-1")),
+            page_response(Vec::new(), Some("empty-2")),
+            page_response(Vec::new(), Some("empty-3")),
+        ])
+        .await;
+
+        let adapter = fast_adapter(base_url);
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&search_keyword(), &keyword_search_options(50))
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.shortfall, Some(FetchShortfall::Exhausted));
+    }
+
+    /// M2-T2 测试 5(F-002 / F-006 / DR-05):第 1 页 20 条 + 第 2 页 4×429
+    /// (重试耗尽)→ 有进展走 PartialFailure;请求数 = 1 + 4 == 5。
+    #[tokio::test]
+    async fn fetch_outcome_partial_failure_with_progress() {
+        let mut responses = vec![page_response(unique_posts("p1", 20), Some("cursor-2"))];
+        responses.extend(rate_limited_responses(4));
+        let (base_url, requests) = spawn_mock_http_server_with_capture(responses).await;
+
+        let adapter = fast_adapter(base_url);
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&search_keyword(), &keyword_search_options(50))
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.contents.len(), 20);
+        match &outcome.shortfall {
+            Some(FetchShortfall::PartialFailure { message }) => {
+                assert!(
+                    message.to_lowercase().contains("rate"),
+                    "PartialFailure message should mention rate limiting, got {message:?}"
+                );
+            }
+            other => panic!("expected Some(PartialFailure {{ .. }}) shortfall, got {other:?}"),
+        }
+        assert_eq!(requests.lock().unwrap().len(), 5);
+    }
+
+    /// M2-T2 测试 6(F-001 语义边界):第 1 页即 4×429(零进展)
+    /// → Err(RateLimited),不包装成 PartialFailure;请求数 4。
+    #[tokio::test]
+    async fn fetch_zero_progress_rate_limit_is_err() {
+        let (base_url, requests) =
+            spawn_mock_http_server_with_capture(rate_limited_responses(4)).await;
+
+        let adapter = fast_adapter(base_url);
+        let result = adapter
+            .fetch_by_keyword_with_outcome(&search_keyword(), &keyword_search_options(50))
+            .await;
+
+        assert!(
+            matches!(result, Err(GatewayError::RateLimited { .. })),
+            "zero-progress rate limit must be Err(RateLimited), got {result:?}"
+        );
+        assert_eq!(requests.lock().unwrap().len(), 4);
+    }
+
+    /// M2-T2 测试 7(回归):既有 `fetch_by_keyword`(无 outcome)对同 mock 3 页
+    /// (20+20+10)仍返回 50 条 Vec(override 不破坏既有方法)。
+    /// 允许先绿 + AG-006 手工金丝雀程序标注(DR-12):临时让 `fetch_by_keyword`
+    /// 返回截断 Vec(如 truncate(10))→ 本测试须红;只动生产代码、RED 输出留存后还原
+    /// (归实现/收尾上下文执行)。
+    #[tokio::test]
+    async fn default_fetch_by_keyword_still_returns_contents() {
+        let base_url = spawn_mock_http_server(vec![
+            page_response(unique_posts("p1", 20), Some("cursor-2")),
+            page_response(unique_posts("p2", 20), Some("cursor-3")),
+            page_response(unique_posts("p3", 10), None),
+        ])
+        .await;
+
+        let adapter = fast_adapter(base_url);
+        let posts = adapter
+            .fetch_by_keyword(&search_keyword(), &keyword_search_options(50))
+            .await
+            .unwrap();
+
+        assert_eq!(posts.len(), 50);
+    }
+
+    /// 形状载体:每页 = (条目 id 列表, next_cursor);facebook mock 与 PaginationLoop
+    /// 喂入完全相同的形状(M2-T2 测试 8 对齐契约用)。
+    fn pagination_loop_shortfall(
+        pages: &[(Vec<String>, Option<String>)],
+        max_count: usize,
+    ) -> Option<FetchShortfall> {
+        let mut lp = PaginationLoop::new(max_count);
+        for (item_ids, next_cursor) in pages {
+            let out = lp.accept_page(item_ids, next_cursor.clone());
+            if let PageDecision::Stop(reason) = out.decision {
+                return lp.shortfall_for(&reason);
+            }
+        }
+        panic!("shape did not terminate PaginationLoop (test shape must terminate)");
+    }
+
+    fn id_list(prefix: &str, n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("{prefix}-{i}")).collect()
+    }
+
+    async fn facebook_outcome_for_shape(
+        shape: &[(Vec<String>, Option<String>)],
+        count: u32,
+    ) -> GatewayResult<FetchOutcome> {
+        let responses = shape
+            .iter()
+            .map(|(ids, cursor)| {
+                page_response(
+                    ids.iter().map(|id| test_post(id, "shape-fixture")).collect(),
+                    cursor.as_deref(),
+                )
+            })
+            .collect();
+        let base_url = spawn_mock_http_server(responses).await;
+        let adapter = fast_adapter(base_url);
+        adapter
+            .fetch_by_keyword_with_outcome(&search_keyword(), &keyword_search_options(count))
+            .await
+    }
+
+    /// M2-T2 测试 8(对齐契约,D-01 强制项;对齐域声明 DR-17a:覆盖无 date-filter
+    /// 子空间的五形状——达量 / cursor 缺失 / cursor 环 / 空页上限 / 重复内容页)。
+    /// facebook 实跑 outcome.shortfall 与同形状喂 PaginationLoop 的 shortfall_for
+    /// 逐一相等;date-filter 子空间的对齐覆盖由测试 9/12 承担。
+    #[tokio::test]
+    async fn shortfall_matches_pagination_loop_semantics() {
+        let shapes: Vec<(&str, Vec<(Vec<String>, Option<String>)>)> = vec![
+            (
+                "reached-max",
+                vec![
+                    (id_list("a", 20), Some("c1".to_string())),
+                    (id_list("b", 20), Some("c2".to_string())),
+                    (id_list("c", 10), Some("c3".to_string())),
+                ],
+            ),
+            (
+                "cursor-missing",
+                vec![
+                    (id_list("d", 20), Some("c1".to_string())),
+                    (id_list("e", 10), None),
+                ],
+            ),
+            (
+                "cursor-loop",
+                vec![
+                    (id_list("f", 20), Some("c-loop".to_string())),
+                    (id_list("g", 10), Some("c-loop".to_string())),
+                ],
+            ),
+            (
+                "empty-page-limit",
+                vec![
+                    (Vec::new(), Some("e1".to_string())),
+                    (Vec::new(), Some("e2".to_string())),
+                    (Vec::new(), Some("e3".to_string())),
+                ],
+            ),
+            (
+                "repeated-content-pages",
+                vec![
+                    (id_list("h", 20), Some("r1".to_string())),
+                    (id_list("h", 20), Some("r2".to_string())),
+                    (id_list("h", 20), Some("r3".to_string())),
+                    (id_list("h", 20), Some("r4".to_string())),
+                ],
+            ),
+        ];
+
+        for (label, shape) in shapes {
+            let expected = pagination_loop_shortfall(&shape, 50);
+            let outcome = facebook_outcome_for_shape(&shape, 50)
+                .await
+                .unwrap_or_else(|err| {
+                    panic!("facebook outcome for shape {label} should be Ok, got Err({err:?})")
+                });
+            assert_eq!(
+                outcome.shortfall, expected,
+                "shape {label}: facebook shortfall must match PaginationLoop::shortfall_for"
+            );
+        }
+    }
+
+    /// M2-T2 测试 9(DR-01 M2 侧 / D1 构造不变量):date-filter 滤空第 1 页全部 20 条
+    /// + 第 2 页 4×429 → 零可交付进展(过滤后为空)的失败一律走 Err,不得包成 PartialFailure。
+    #[tokio::test]
+    async fn date_filter_empty_delivery_with_429_is_err() {
+        let out_of_range = FacebookAdapter::parse_date("2026-01-20", false).unwrap();
+        let mut responses = vec![page_response(
+            (0..20)
+                .map(|i| {
+                    test_post_with_timestamp(&format!("dated-{i}"), "out-of-range", out_of_range)
+                })
+                .collect(),
+            Some("cursor-2"),
+        )];
+        responses.extend(rate_limited_responses(4));
+        let (base_url, requests) = spawn_mock_http_server_with_capture(responses).await;
+
+        let adapter = fast_adapter(base_url);
+        let options = keyword_search_options(50)
+            .with_extra_value(extra_keys::START_DATE, json!("2026-01-10"))
+            .with_extra_value(extra_keys::END_DATE, json!("2026-01-12"));
+        let result = adapter
+            .fetch_by_keyword_with_outcome(&search_keyword(), &options)
+            .await;
+
+        assert!(
+            matches!(result, Err(GatewayError::RateLimited { .. })),
+            "zero filtered delivery + 429 must be Err(RateLimited), got {result:?}"
+        );
+        assert_eq!(requests.lock().unwrap().len(), 5);
+    }
+
+    /// M2-T2 测试 10(DR-10 M2 侧):第 1 页 20 条 + 第 2 页 HTTP 500 → 整体 Err
+    /// (PartialFailure 触发集冻结 = 仅 GatewayError::RateLimited;其余错误即使有进展也整体 Err)。
+    /// 允许先绿 + AG-006 金丝雀标注:RED 基线下默认方法包装的既有循环已具备该行为;
+    /// 金丝雀 = 临时把硬错误收敛为 PartialFailure,须使本测试红,还原复绿,输出留存
+    /// (归实现/收尾上下文执行)。
+    #[tokio::test]
+    async fn hard_error_with_progress_is_err() {
+        let base_url = spawn_mock_http_server(vec![
+            page_response(unique_posts("p1", 20), Some("cursor-2")),
+            MockHttpResponse::json(500, json!({"message": "internal error"})),
+        ])
+        .await;
+
+        let adapter = fast_adapter(base_url);
+        let result = adapter
+            .fetch_by_keyword_with_outcome(&search_keyword(), &keyword_search_options(50))
+            .await;
+
+        assert!(
+            result.is_err(),
+            "hard error (HTTP 500) with progress must be overall Err, got {result:?}"
+        );
+    }
+
+    /// M2-T2 测试 11(D-15 / DR-03 fb 对齐):第 1 页 20 条,随后 3 连页返回与第 1 页
+    /// 相同内容(cursor 各异)→ 终止、Some(Exhausted)、不发第 5 请求(requests.len() == 4;
+    /// 空页计数按「本页新增(去重后)数 == 0」递增,D-15 生产行改动的 killing 测试)。
+    #[tokio::test]
+    async fn repeated_content_pages_stop_via_empty_limit() {
+        let (base_url, requests) = spawn_mock_http_server_with_capture(vec![
+            page_response(unique_posts("rep", 20), Some("cursor-2")),
+            page_response(unique_posts("rep", 20), Some("cursor-3")),
+            page_response(unique_posts("rep", 20), Some("cursor-4")),
+            page_response(unique_posts("rep", 20), Some("cursor-5")),
+        ])
+        .await;
+
+        let adapter = fast_adapter(base_url);
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&search_keyword(), &keyword_search_options(50))
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.contents.len(), 20);
+        assert_eq!(outcome.shortfall, Some(FetchShortfall::Exhausted));
+        assert_eq!(
+            requests.lock().unwrap().len(),
+            4,
+            "must stop after 3rd repeated-content page; no 5th request"
+        );
+    }
+
+    /// M2-T2 测试 12(DR-17b):达量/枯竭判定按过滤后交付计数。
+    /// 形状 A:raw 50 / 过滤后 30 / cursor 链尽 / count=50 → 30 条 + Some(Exhausted);
+    /// 形状 B:过滤后达 count → None。
+    #[tokio::test]
+    async fn date_filter_shortfall_uses_filtered_count() {
+        let in_range = FacebookAdapter::parse_date("2026-01-11", false).unwrap();
+        let out_of_range = FacebookAdapter::parse_date("2026-01-20", false).unwrap();
+        let dated_posts = |prefix: &str, n_in: usize, n_out: usize| -> Vec<Value> {
+            let mut posts: Vec<Value> = (0..n_in)
+                .map(|i| {
+                    test_post_with_timestamp(&format!("{prefix}-in-{i}"), "in-range", in_range)
+                })
+                .collect();
+            posts.extend((0..n_out).map(|i| {
+                test_post_with_timestamp(&format!("{prefix}-out-{i}"), "out-of-range", out_of_range)
+            }));
+            posts
+        };
+
+        // 形状 A:raw 50(3 页 20+20+10,各页含 10/10/10 条在范围内)、过滤后 30、cursor 链尽。
+        let base_url = spawn_mock_http_server(vec![
+            page_response(dated_posts("a1", 10, 10), Some("cursor-2")),
+            page_response(dated_posts("a2", 10, 10), Some("cursor-3")),
+            page_response(dated_posts("a3", 10, 0), None),
+        ])
+        .await;
+        let adapter = fast_adapter(base_url);
+        let options = keyword_search_options(50)
+            .with_extra_value(extra_keys::START_DATE, json!("2026-01-10"))
+            .with_extra_value(extra_keys::END_DATE, json!("2026-01-12"));
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&search_keyword(), &options)
+            .await
+            .unwrap();
+        assert_eq!(outcome.contents.len(), 30, "shape A: delivery = filtered count");
+        assert_eq!(
+            outcome.shortfall,
+            Some(FetchShortfall::Exhausted),
+            "shape A: filtered 30 < count=50 with exhausted cursor chain"
+        );
+
+        // 形状 B:单页 raw 30(20 条在范围内)、count=20 → 过滤后达 count → None。
+        let base_url = spawn_mock_http_server(vec![page_response(
+            dated_posts("b1", 20, 10),
+            Some("cursor-b2"),
+        )])
+        .await;
+        let adapter = fast_adapter(base_url);
+        let options = keyword_search_options(20)
+            .with_extra_value(extra_keys::START_DATE, json!("2026-01-10"))
+            .with_extra_value(extra_keys::END_DATE, json!("2026-01-12"));
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&search_keyword(), &options)
+            .await
+            .unwrap();
+        assert_eq!(outcome.contents.len(), 20, "shape B: filtered delivery reaches count");
+        assert!(
+            outcome.shortfall.is_none(),
+            "shape B: filtered delivery reached count, got {:?}",
+            outcome.shortfall
+        );
+    }
+
+    /// M2-T2 测试 13(DR-17c):search_type=pages(两级 candidates 循环),
+    /// candidate1 内页枯竭(仅 10 条)、candidate2 补足达 count → shortfall == None
+    /// (内层 fetch_page_posts_paginated 的枯竭不得外泄为整体 shortfall)。
+    /// 允许先绿 + AG-006 金丝雀标注:RED 基线下默认方法包装的既有循环已具备该行为;
+    /// 金丝雀 = 临时让内层枯竭外泄为 Some(Exhausted),须使本测试红,还原复绿,输出留存
+    /// (归实现/收尾上下文执行)。
+    #[tokio::test]
+    async fn candidates_inner_exhaustion_not_leaked() {
+        let (base_url, requests) = spawn_mock_http_server_with_capture(vec![
+            MockHttpResponse::json(
+                200,
+                json!({
+                    "results": [
+                        {"facebook_id": "fb-page-1", "name": "Candidate One"},
+                        {"facebook_id": "fb-page-2", "name": "Candidate Two"}
+                    ],
+                    "cursor": null
+                }),
+            ),
+            page_response(unique_posts("cand1", 10), None),
+            page_response(unique_posts("cand2", 20), None),
+        ])
+        .await;
+
+        let adapter = fast_adapter(base_url);
+        let options = SearchOptions::new("museum")
+            .with_platform("facebook")
+            .with_count(30)
+            .with_extra_value(extra_keys::MODE, json!(mode::KEYWORD))
+            .with_extra_value(extra_keys::SEARCH_TYPE, json!("pages"));
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&KeywordType::Search("museum".to_string()), &options)
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.contents.len(), 30);
+        assert!(
+            outcome.shortfall.is_none(),
+            "candidate1 inner exhaustion must not leak into overall shortfall, got {:?}",
+            outcome.shortfall
+        );
+
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 3);
+        assert!(requests[1].contains("page_id=fb-page-1"));
+        assert!(requests[2].contains("page_id=fb-page-2"));
+    }
 }
