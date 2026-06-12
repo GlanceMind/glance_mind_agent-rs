@@ -7,14 +7,26 @@ use async_trait::async_trait;
 
 use crate::domain::errors::{GatewayError, GatewayResult};
 use crate::domain::{Comment, Content, Engagement, KeywordType, SearchOptions};
+use crate::pagination::{PageDecision, PaginationLoop, StopReason};
 use crate::ports::{
     comment_gateway::{FetchCommentsOptions, FetchCommentsResult},
+    content_gateway::{FetchOutcome, FetchShortfall},
     CommentGateway, ContentGateway,
 };
 use crate::tikhub::{
     extract_comments_from_trees, extract_posts_from_search, RedditComment, RedditCommentParams,
     RedditPost, RedditSearchParams, RedditUserPostsParams, TikHubClient, TikHubError,
 };
+
+/// 翻页循环终止信息(M4-T2,适配器私有,镜像 facebook `FbFetchEnd`):
+/// - `Stop(reason)`:循环以 M1 D2 的 `StopReason` 语义终止;
+/// - `Partial(err)`:`RateLimited` 且原始进展非空的先例分支,保留原错误
+///   (零交付时由 `fetch_by_keyword_with_outcome` 原样 `Err`,DR-01)。
+#[derive(Debug)]
+enum RedditFetchEnd {
+    Stop(StopReason),
+    Partial(GatewayError),
+}
 
 /// Reddit adapter implementing ContentGateway and CommentGateway
 pub struct RedditAdapter {
@@ -152,30 +164,117 @@ impl RedditAdapter {
             raw_data: serde_json::to_value(post).ok(),
         }
     }
+
+    /// content 搜索翻页(M4-T2;M1 `PaginationLoop` + after-cursor 翻页,镜像评论侧
+    /// `with_after`/`has_next_page`/`end_cursor` 既有 cursor 模式)。
+    ///
+    /// 每页:`RedditSearchParams.with_after(cursor?)` → 提取 posts(去前缀 content_id)
+    /// → `accept_page(&ids, next)`;`next` = `has_next_page==true` 时 `Some(end_cursor)`
+    /// 否则 `None`。`Continue { cursor }` 转发 after;`Stop(reason)` 终止。
+    ///
+    /// DR-10:仅 `RateLimited` 且已有进展 → `Partial`;硬错误/零进展 → 原样 `Err`。
+    async fn search_content_paginated(
+        &self,
+        query: &str,
+        count: u32,
+    ) -> GatewayResult<(Vec<Content>, RedditFetchEnd)> {
+        let mut loop_state = PaginationLoop::new(count as usize);
+        let mut contents: Vec<Content> = Vec::new();
+        let mut cursor: Option<String> = None;
+
+        let end = loop {
+            let mut params = RedditSearchParams::new(query);
+            if let Some(ref after) = cursor {
+                params = params.with_after(after);
+            }
+
+            let response = match self.client.search_reddit_posts_with_retry(&params).await {
+                Ok(response) => response,
+                Err(err) => {
+                    let mapped = Self::convert_error(err);
+                    // DR-10:仅 RateLimited 且已有进展 → Partial;其它(硬错误)/零进展 → Err。
+                    if matches!(mapped, GatewayError::RateLimited { .. }) && !contents.is_empty() {
+                        break RedditFetchEnd::Partial(mapped);
+                    }
+                    return Err(mapped);
+                }
+            };
+
+            let main = response
+                .data
+                .as_ref()
+                .and_then(|d| d.search.as_ref())
+                .and_then(|s| s.dynamic.as_ref())
+                .and_then(|d| d.components.as_ref())
+                .and_then(|c| c.main.as_ref());
+
+            let page_posts = response
+                .data
+                .as_ref()
+                .map(extract_posts_from_search)
+                .unwrap_or_default();
+
+            let page_info = main.and_then(|m| m.page_info.as_ref());
+            let has_next = page_info.and_then(|p| p.has_next_page).unwrap_or(false);
+            let next_cursor = if has_next {
+                page_info.and_then(|p| p.end_cursor.clone())
+            } else {
+                None
+            };
+
+            // posts 与其 content_id 一一对应(按接受顺序裁剪到 newly_accepted)。
+            let page_contents: Vec<Content> = page_posts.iter().map(|p| Self::convert_content(p)).collect();
+            let page_ids: Vec<String> = page_contents.iter().map(|c| c.content_id.clone()).collect();
+
+            let outcome = loop_state.accept_page(&page_ids, next_cursor);
+
+            // 仅追加本页「新接受」的 content(去重 + 页内截断由 PaginationLoop 保证)。
+            for accepted_id in &outcome.newly_accepted {
+                if let Some(content) = page_contents.iter().find(|c| &c.content_id == accepted_id) {
+                    contents.push(content.clone());
+                }
+            }
+
+            match outcome.decision {
+                PageDecision::Continue { cursor: next } => {
+                    cursor = Some(next);
+                }
+                PageDecision::Stop(reason) => break RedditFetchEnd::Stop(reason),
+            }
+        };
+
+        // GREEN 规格补 F-02:循环终止时记结构化日志(platform、accepted_count、终止原因)。
+        match &end {
+            RedditFetchEnd::Stop(reason) => {
+                tracing::info!(
+                    platform = "reddit",
+                    accepted_count = contents.len(),
+                    stop_reason = ?reason,
+                    "reddit content pagination loop terminated"
+                );
+            }
+            RedditFetchEnd::Partial(err) => {
+                tracing::warn!(
+                    platform = "reddit",
+                    accepted_count = contents.len(),
+                    error = %err,
+                    "reddit content pagination loop ended with partial failure"
+                );
+            }
+        }
+
+        Ok((contents, end))
+    }
 }
 
 #[async_trait]
 impl ContentGateway for RedditAdapter {
     async fn search(&self, options: &SearchOptions) -> GatewayResult<Vec<Content>> {
-        let params = RedditSearchParams::new(&options.query);
-
-        let response = self
-            .client
-            .search_reddit_posts_with_retry(&params)
-            .await
-            .map_err(Self::convert_error)?;
-
-        let posts = response
-            .data
-            .as_ref()
-            .map(|d| extract_posts_from_search(d))
-            .unwrap_or_default();
-
-        Ok(posts
-            .iter()
-            .take(options.count as usize)
-            .map(|p| Self::convert_content(p))
-            .collect())
+        // content 路径走新 PaginationLoop 循环;`search()` 丢弃 shortfall(签名行为不变)。
+        let (contents, _end) = self
+            .search_content_paginated(&options.query, options.count)
+            .await?;
+        Ok(contents)
     }
 
     async fn fetch_by_keyword(
@@ -185,24 +284,10 @@ impl ContentGateway for RedditAdapter {
     ) -> GatewayResult<Vec<Content>> {
         match keyword {
             KeywordType::Search(query) | KeywordType::Hashtag(query) => {
-                let params = RedditSearchParams::new(query);
-                let response = self
-                    .client
-                    .search_reddit_posts_with_retry(&params)
-                    .await
-                    .map_err(Self::convert_error)?;
-
-                let posts = response
-                    .data
-                    .as_ref()
-                    .map(|d| extract_posts_from_search(d))
-                    .unwrap_or_default();
-
-                Ok(posts
-                    .iter()
-                    .take(options.count as usize)
-                    .map(|p| Self::convert_content(p))
-                    .collect())
+                // content 路径走新 PaginationLoop 循环;此签名丢弃 shortfall。
+                let (contents, _end) =
+                    self.search_content_paginated(query, options.count).await?;
+                Ok(contents)
             }
             KeywordType::UserId(username) => self.fetch_user_content(username, options.count).await,
             KeywordType::ContentId(post_id) | KeywordType::SecUserId(post_id) => {
@@ -214,6 +299,59 @@ impl ContentGateway for RedditAdapter {
                 Ok(vec![])
             }
         }
+    }
+
+    /// M4-T2:override D1 默认方法。content 搜索路径走带 shortfall 的新翻页循环;
+    /// 其它路径(UserId / ContentId 等)退回默认语义(`fetch_by_keyword` 包装,shortfall=None)。
+    ///
+    /// 映射(语义与 `PaginationLoop::shortfall_for` 一致;镜像 facebook 适配器 override):
+    /// - `Stop(ReachedMaxCount)` 或 已达量 → `None`;
+    /// - `Stop(UpstreamExhausted | CursorLoop | EmptyPageLimit)` → `Some(Exhausted)`;
+    /// - `Partial(err)`(仅 RateLimited 且有进展)→ `Some(PartialFailure { .. })`;
+    ///   零交付时原样 `Err`(DR-01 / DR-10)。
+    async fn fetch_by_keyword_with_outcome(
+        &self,
+        keyword: &KeywordType,
+        options: &SearchOptions,
+    ) -> GatewayResult<FetchOutcome> {
+        let query = match keyword {
+            KeywordType::Search(query) | KeywordType::Hashtag(query) => query,
+            // 非 content 搜索路径:退回默认语义(滚动兼容,shortfall=None)。
+            _ => {
+                return Ok(FetchOutcome {
+                    contents: self.fetch_by_keyword(keyword, options).await?,
+                    shortfall: None,
+                });
+            }
+        };
+
+        let (contents, end) = self.search_content_paginated(query, options.count).await?;
+        let delivered = contents.len();
+        let target = options.count as usize;
+
+        let shortfall = match end {
+            RedditFetchEnd::Stop(_) if delivered >= target => None,
+            RedditFetchEnd::Stop(StopReason::ReachedMaxCount) => None,
+            RedditFetchEnd::Stop(
+                StopReason::UpstreamExhausted
+                | StopReason::CursorLoop
+                | StopReason::EmptyPageLimit,
+            ) => Some(FetchShortfall::Exhausted),
+            RedditFetchEnd::Partial(err) => {
+                if contents.is_empty() {
+                    // DR-01/DR-10:零可交付进展 → 原样 Err。
+                    return Err(err);
+                }
+                Some(FetchShortfall::PartialFailure {
+                    message: err.to_string(),
+                })
+            }
+        };
+
+        Ok(FetchOutcome {
+            contents,
+            shortfall,
+        })
     }
 
     async fn fetch_user_content(&self, user_id: &str, count: u32) -> GatewayResult<Vec<Content>> {
