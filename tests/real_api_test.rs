@@ -1418,3 +1418,94 @@ async fn test_all_apis_comprehensive() {
     println!("  Comment APIs: {}/4 succeeded", comment_success);
     println!("{}", "=".repeat(70));
 }
+
+// ============================================================
+// M5-T1 V1 probe: Instagram general_search pagination-token capability
+// (m5-instagram-p2.md §3 M5-T1; covers V1 / N-001 / T-053 / P-004 / C-005 / PV-005)
+// ============================================================
+
+/// V1 探测(gated):TikHub Instagram `general_search` V3 是否接受分页 token(`next_max_id`/
+/// `rank_token`)。**判定标准(§2.1,原文采纳)**:带首页 token 重发——非错误且内容异于首页
+/// → 支持翻页(分支 A);4xx 或返回相同首页 → 单页能力(分支 B)。
+///
+/// **AG-008 + 判定写回义务**:本探测产出**判定事实**(非回归断言)。控制器已据混合代码证据
+/// (V2 有 pagination_token;V3 请求端无 token)+ 本机无 TIKHUB_API_KEY,由**用户裁决取保守
+/// 分支 B**(2026-06-11),并已把 assumptions=分支 B 写回 `ledgers/assumptions.md` V1 行 /
+/// `ledgers/cross-service-contracts.md` C-005。**若日后实跑确认支持翻页,可经 root 升级分支 A**
+/// (届时 T3-A 解除 NOT-TAKEN,本探测的原始两页 JSON 回灌 `tests/fixtures/instagram/`)。
+///
+/// **预算(P-004 / DR-19)**:≤4 HTTP 请求上界;探测用**零重试**调用(`search_instagram_general`,
+/// 非 `_with_retry`),确保「调用数 = 请求数」。本机无凭据 → 自动 skip。
+/// **探测型,无 RED→GREEN 语义(允许先绿)**:断言仅「调用成功 + 判定逻辑可复算」,
+/// 如实记录两种合法结局。
+/// **反作弊**:判定不得「按希望的分支」倾向解读;模糊结果(token 接受但内容相同)按标准判为
+/// 分支 B(保守),并记录原始证据。
+#[tokio::test]
+async fn real_instagram_general_search_pagination_probe() {
+    if !live_api_tests_enabled() {
+        eprintln!(
+            "Skipping real_instagram_general_search_pagination_probe - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent"
+        );
+        return;
+    }
+    let Some(client) = create_client() else {
+        return;
+    };
+
+    println!("\n🔬 M5-T1 V1 probe: Instagram general_search pagination-token capability...");
+
+    // Call #1 (zero-retry): V3 first page. Record next_max_id / rank_token / has_more.
+    let first = match client.search_instagram_general("#fitness").await {
+        Ok(resp) => resp,
+        Err(e) => {
+            // First-page failure is itself evidence the V3 path is not usable for pagination
+            // probing; record and stop (still within budget). Does NOT auto-flip the verdict.
+            println!("⚠️  V3 first-page call errored: {:?} (verdict stays branch B, conservative)", e);
+            return;
+        }
+    };
+
+    let grid = first
+        .data
+        .as_ref()
+        .and_then(|d| d.media_grid.as_ref());
+    let next_max_id = grid.and_then(|g| g.next_max_id.clone());
+    let rank_token = grid
+        .and_then(|g| g.rank_token.clone())
+        .or_else(|| first.data.as_ref().and_then(|d| d.rank_token.clone()));
+    let has_more = grid.and_then(|g| g.has_more);
+    let first_posts = TikHubClient::extract_instagram_general_posts(&first);
+    let first_codes: Vec<String> = first_posts
+        .iter()
+        .map(|p| p.code.clone().unwrap_or_default())
+        .collect();
+
+    println!(
+        "   first page: posts={}, next_max_id={:?}, rank_token={:?}, has_more={:?}",
+        first_codes.len(),
+        next_max_id,
+        rank_token,
+        has_more
+    );
+
+    // Assertion (probe-type): the first call succeeded and the verdict logic is recomputable.
+    assert_eq!(first.code, 200, "probe requires a successful first-page call");
+
+    // Re-send with first-page token (§2.1). NOTE: the current TikHubClient V3 general_search
+    // exposes NO request-side pagination parameter (request端无 token,控制器实证);there is no
+    // client method to forward `next_max_id`/`rank_token`. Per the §2.1 conservative standard,
+    // "no token-acceptance path observable" → 单页能力(branch B). When a token-forwarding
+    // client method is added (升级分支 A 时), this probe should re-send and compare page-2 codes
+    // against `first_codes`: different & non-error ⇒ branch A; 4xx or identical ⇒ branch B.
+    let verdict = if next_max_id.is_some() && has_more == Some(true) {
+        // Token surfaced on the response side, but request side cannot forward it today.
+        "INCONCLUSIVE-token-present-but-no-request-param → conservative branch B (per §2.1)"
+    } else {
+        "branch B (single-page: no next_max_id / has_more!=true)"
+    };
+    println!("   📌 verdict: {verdict}");
+    println!(
+        "   (ledger writeback already recorded branch B by controller decision 2026-06-11; \
+         raw first-page codes captured: {first_codes:?})"
+    );
+}
