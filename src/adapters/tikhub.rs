@@ -10,10 +10,13 @@ use async_trait::async_trait;
 
 use crate::domain::errors::{GatewayError, GatewayResult};
 use crate::domain::{Comment, Content, Engagement, KeywordType, SearchOptions};
+use crate::pagination::{platform_page_cap, PageDecision, PaginationLoop, StopReason};
 use crate::ports::{
     comment_gateway::{FetchCommentsOptions, FetchCommentsResult},
+    content_gateway::{FetchOutcome, FetchShortfall},
     CommentGateway, ContentGateway,
 };
+use crate::strategies::extra_keys;
 use crate::tikhub::{
     AwemeInfo, CommentParams, SearchParams, TikHubClient, TikHubError, TikHubRetryConfig,
     UserVideoParams,
@@ -116,6 +119,111 @@ async fn paginate_videos(
 
     collected.truncate(target);
     Ok(collected)
+}
+
+/// How the search-path pagination loop terminated (M3-T2; D-01/D2).
+///
+/// - `Stop(reason)`: the `PaginationLoop` state machine reached a frozen
+///   `StopReason` (达量 / 枯竭族);
+/// - `Partial(message)`: a `RateLimited` error surfaced *after* progress
+///   (DR-10 触发集仅 RateLimited);零进展时改由调用方原样 `Err`(DR-01)。
+enum SearchEnd {
+    Stop(StopReason),
+    Partial(String),
+}
+
+/// Search-path pagination loop driven by `PaginationLoop` (D-01 红线:终止
+/// 逻辑全部由状态机承担,不在此手写 seen-set / 空页计数 / max_pages 守卫)。
+///
+/// `target` = 总量(`options.count`);`page_size` = 单页请求 count(来自
+/// `extra["page_size"]`,缺省 `platform_page_cap("tiktok")`)。offset 从 0 起,
+/// 每页以响应 `cursor` 为下一 offset(T-051 语义)。
+///
+/// next_cursor 归一化(DR-18 tiktok 适配):`has_more==Some(1)` 且 `cursor`
+/// 存在时 `Some(cursor.to_string())`,否则 `None`(→ UpstreamExhausted)。
+/// 错误(DR-10):`RateLimited` 且已有进展 → `Partial`;其余错误 / 零进展 → `Err`。
+async fn search_paginated(
+    target: usize,
+    page_size: u32,
+    fetcher: &SearchPageFetcher<'_>,
+) -> Result<(Vec<AwemeInfo>, SearchEnd), TikHubError> {
+    let mut pl = PaginationLoop::new(target);
+    // aweme_id -> AwemeInfo, so newly-accepted ids map back to owned content.
+    let mut by_id: std::collections::HashMap<String, AwemeInfo> = std::collections::HashMap::new();
+    let mut collected: Vec<AwemeInfo> = Vec::new();
+    let mut offset: i64 = 0;
+    let mut first_page = true;
+
+    let end = loop {
+        if !first_page {
+            tokio::time::sleep(PAGE_FETCH_DELAY).await;
+        }
+        first_page = false;
+
+        let page = match fetcher.fetch(offset, page_size).await {
+            Ok(page) => page,
+            // DR-10:RateLimited 且已有进展 → Partial;否则原样 Err(零进展 / 硬错误)。
+            Err(err @ TikHubError::RateLimited { .. }) if !collected.is_empty() => {
+                break SearchEnd::Partial(err.to_string());
+            }
+            Err(err) => return Err(err),
+        };
+
+        let ids: Vec<String> = page.videos.iter().map(|v| v.aweme_id.clone()).collect();
+        for video in page.videos {
+            by_id.entry(video.aweme_id.clone()).or_insert(video);
+        }
+
+        // next_cursor 归一化:has_more=1 且 cursor 存在 → Some;否则 None(枯竭)。
+        let next_cursor = if page.has_more {
+            page.next_cursor.map(|c| c.to_string())
+        } else {
+            None
+        };
+
+        let outcome = pl.accept_page(&ids, next_cursor);
+        for id in outcome.newly_accepted {
+            if let Some(video) = by_id.remove(&id) {
+                collected.push(video);
+            }
+        }
+
+        match outcome.decision {
+            PageDecision::Continue { cursor } => {
+                // tiktok cursor 为 i64;parse 失败(理论不可达)归一化为枯竭。
+                match cursor.parse::<i64>() {
+                    Ok(next) => offset = next,
+                    Err(_) => break SearchEnd::Stop(StopReason::UpstreamExhausted),
+                }
+            }
+            PageDecision::Stop(reason) => break SearchEnd::Stop(reason),
+        }
+    };
+
+    let stop_reason = match &end {
+        SearchEnd::Stop(reason) => Some(reason.clone()),
+        SearchEnd::Partial(_) => None,
+    };
+    tracing::info!(
+        platform = "tiktok",
+        accepted_count = collected.len(),
+        stop = ?stop_reason,
+        partial = matches!(end, SearchEnd::Partial(_)),
+        "TikHub: search pagination loop terminated"
+    );
+
+    Ok((collected, end))
+}
+
+/// Per-page request count for the search path: `extra["page_size"]` if present,
+/// else the tiktok platform cap (D4 载体;`SearchParams::with_count` 再 clamp 20)。
+fn search_page_size(options: &SearchOptions) -> u32 {
+    options
+        .extra
+        .get(extra_keys::PAGE_SIZE)
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32)
+        .unwrap_or_else(|| platform_page_cap("tiktok"))
 }
 
 /// `VideoPageFetcher` backed by the TikHub search endpoint.
@@ -320,6 +428,54 @@ impl TikHubAdapter {
         err.is_skippable()
     }
 
+    /// Run the search-path `PaginationLoop` and map its termination to a
+    /// `(contents, shortfall)` pair (M3-T2; D1 shortfall semantics mirror
+    /// `PaginationLoop::shortfall_for`). Shared by the public `search` wrapper
+    /// (discards shortfall) and the `fetch_by_keyword_with_outcome` override.
+    ///
+    /// DR-01:零进展的可恢复失败已在 `search_paginated` 原样 `Err`;到这里的
+    /// `Partial` 必有非空 `collected`。
+    async fn search_with_outcome(
+        &self,
+        options: &SearchOptions,
+    ) -> GatewayResult<(Vec<Content>, Option<FetchShortfall>)> {
+        let fetcher = SearchPageFetcher {
+            client: &self.client,
+            keyword: options.query.clone(),
+            region: options.region.clone(),
+            sort_type: options.sort_type,
+            publish_time: options.publish_time,
+        };
+
+        let target = options.count as usize;
+        let page_size = search_page_size(options);
+
+        let (videos, end) = search_paginated(target, page_size, &fetcher)
+            .await
+            .map_err(Self::convert_error)?;
+
+        let contents: Vec<Content> = videos.iter().map(Self::convert_content).collect();
+        // shortfall 映射与 `PaginationLoop::shortfall_for` 一致:
+        // 达量 → None;枯竭族 且 delivered<target → Exhausted;Partial → PartialFailure。
+        let shortfall = match end {
+            SearchEnd::Stop(StopReason::ReachedMaxCount) => None,
+            SearchEnd::Stop(
+                StopReason::UpstreamExhausted
+                | StopReason::CursorLoop
+                | StopReason::EmptyPageLimit,
+            ) => {
+                if contents.len() >= target {
+                    None
+                } else {
+                    Some(FetchShortfall::Exhausted)
+                }
+            }
+            SearchEnd::Partial(message) => Some(FetchShortfall::PartialFailure { message }),
+        };
+
+        Ok((contents, shortfall))
+    }
+
     /// Convert TikHub AwemeInfo to domain Content
     fn convert_content(aweme: &crate::tikhub::AwemeInfo) -> Content {
         Content {
@@ -374,20 +530,11 @@ impl ContentGateway for TikHubAdapter {
         );
 
         // TikHub's search endpoint returns at most 20 items per request, so we
-        // paginate (offset/cursor loop) to reach the requested total.
-        let fetcher = SearchPageFetcher {
-            client: &self.client,
-            keyword: options.query.clone(),
-            region: options.region.clone(),
-            sort_type: options.sort_type,
-            publish_time: options.publish_time,
-        };
-
-        let videos = paginate_videos(options.count as usize, 20, &fetcher)
-            .await
-            .map_err(Self::convert_error)?;
-
-        Ok(videos.iter().map(Self::convert_content).collect())
+        // paginate (offset/cursor loop) to reach the requested total. The search
+        // path is driven by the shared `PaginationLoop` (M3-T2, D-01); the public
+        // `search` wrapper discards the shortfall and returns just the contents.
+        let (contents, _shortfall) = self.search_with_outcome(options).await?;
+        Ok(contents)
     }
 
     async fn fetch_by_keyword(
@@ -415,6 +562,31 @@ impl ContentGateway for TikHubAdapter {
                 Some(content) => Ok(vec![content]),
                 None => Ok(vec![]),
             },
+        }
+    }
+
+    /// D1 override (M3-T2):search 路径(Search/Hashtag keyword)走带 shortfall
+    /// 的 `PaginationLoop` 路径并上报欠交付原因;user-videos / content 路径仍走
+    /// 默认包装(`fetch_by_keyword`,shortfall=None,滚动兼容)。
+    async fn fetch_by_keyword_with_outcome(
+        &self,
+        keyword: &KeywordType,
+        options: &SearchOptions,
+    ) -> GatewayResult<FetchOutcome> {
+        match keyword {
+            KeywordType::Search(query) | KeywordType::Hashtag(query) => {
+                let (contents, shortfall) =
+                    self.search_with_outcome(&options.with_query(query)).await?;
+                Ok(FetchOutcome {
+                    contents,
+                    shortfall,
+                })
+            }
+            // user-videos / content 路径不在 M3 范围:默认滚动兼容语义(shortfall=None)。
+            _ => Ok(FetchOutcome {
+                contents: self.fetch_by_keyword(keyword, options).await?,
+                shortfall: None,
+            }),
         }
     }
 
