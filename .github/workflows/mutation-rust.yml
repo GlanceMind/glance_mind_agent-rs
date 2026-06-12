@@ -45,12 +45,15 @@ jobs:
         run: cargo install cargo-mutants --locked --version 24.11.0
 
       - name: Create .env for tests
+        # RT-4 (plan root §5): no live API keys here. Under mutation testing every
+        # mutant re-runs the suite, so injecting TIKHUB/FACEBOOK keys would fire paid
+        # live calls per mutant. M1-T0 env-guards make the live suites self-skip when
+        # the keys are absent, so the baseline no longer panics without them.
+        # DATABASE_URL stays (real-DB tests are gated by RUN_REAL_DB_TESTS).
         run: |
           cat > .env << EOF
           DATABASE_URL=${{ secrets.DATABASE_URL }}
-          TIKHUB_API_KEY=${{ secrets.TIKHUB_API_KEY }}
           TIKHUB_BASE_URL=${{ vars.TIKHUB_BASE_URL || 'https://api.tikhub.io' }}
-          FACEBOOK_RAPIDAPI_KEY=${{ secrets.FACEBOOK_RAPIDAPI_KEY }}
           FACEBOOK_RAPIDAPI_HOST=${{ vars.FACEBOOK_RAPIDAPI_HOST || 'facebook-scraper3.p.rapidapi.com' }}
           FACEBOOK_RAPIDAPI_BASE_URL=${{ vars.FACEBOOK_RAPIDAPI_BASE_URL || 'https://facebook-scraper3.p.rapidapi.com' }}
           EOF
@@ -71,10 +74,7 @@ jobs:
           cargo mutants \
             --in-diff /tmp/pr.diff \
             --timeout 300 \
-            --annotations=github \
             -- --all-features --test-threads=1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload mutation report
         if: always()
@@ -103,12 +103,15 @@ jobs:
         run: cargo install cargo-mutants --locked --version 24.11.0
 
       - name: Create .env for tests
+        # RT-4 (plan root §5): no live API keys here. Under mutation testing every
+        # mutant re-runs the suite, so injecting TIKHUB/FACEBOOK keys would fire paid
+        # live calls per mutant. M1-T0 env-guards make the live suites self-skip when
+        # the keys are absent, so the baseline no longer panics without them.
+        # DATABASE_URL stays (real-DB tests are gated by RUN_REAL_DB_TESTS).
         run: |
           cat > .env << EOF
           DATABASE_URL=${{ secrets.DATABASE_URL }}
-          TIKHUB_API_KEY=${{ secrets.TIKHUB_API_KEY }}
           TIKHUB_BASE_URL=${{ vars.TIKHUB_BASE_URL || 'https://api.tikhub.io' }}
-          FACEBOOK_RAPIDAPI_KEY=${{ secrets.FACEBOOK_RAPIDAPI_KEY }}
           FACEBOOK_RAPIDAPI_HOST=${{ vars.FACEBOOK_RAPIDAPI_HOST || 'facebook-scraper3.p.rapidapi.com' }}
           FACEBOOK_RAPIDAPI_BASE_URL=${{ vars.FACEBOOK_RAPIDAPI_BASE_URL || 'https://facebook-scraper3.p.rapidapi.com' }}
           EOF
