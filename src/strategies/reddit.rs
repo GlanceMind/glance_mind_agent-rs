@@ -97,7 +97,8 @@ impl PlatformStrategy for RedditStrategy {
         options = options.with_region(self.default_sort.clone());
 
         // Set count from config
-        let count = config.max_videos.map(|v| v.min(100) as u32).unwrap_or(25);
+        // R-001/D-02:options.count = 总量目标(max_videos),不被单页上限截断;reddit/twitter 上游搜索端点无单页大小参数,page_size_hint 本平台不消费(文档化豁免)。
+        let count = config.max_videos.map(|v| v as u32).unwrap_or(25);
         options = options.with_count(count);
 
         // Set sort type if specified
@@ -219,6 +220,53 @@ pub mod time_filter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // M4-T1: total-count tests (RED batch: tests 1+2 RED until cap removed; tests 3+4 allowed-green)
+    // DR-15: assertion text matches plan verbatim; cap line reddit.rs:100 untouched by this agent.
+
+    /// T1-R-1: max_videos=150 → options.count==150
+    /// Selects 150 > legacy cap 100 to expose truncation. Expected RED: left: 100, right: 150.
+    #[test]
+    fn count_carries_total_max_videos() {
+        let strategy = RedditStrategy::new();
+        let config = TaskConfig::new(1, "reddit").with_max_videos(150);
+        let keyword = KeywordType::Search("rust".to_string());
+        let options = strategy.build_search_options(&config, &keyword);
+        assert_eq!(options.count, 150);
+    }
+
+    /// T1-R-2: max_videos=237 → options.count==237
+    /// Expected RED: left: 100, right: 237.
+    #[test]
+    fn count_arbitrary_total_not_capped() {
+        let strategy = RedditStrategy::new();
+        let config = TaskConfig::new(1, "reddit").with_max_videos(237);
+        let keyword = KeywordType::Search("rust".to_string());
+        let options = strategy.build_search_options(&config, &keyword);
+        assert_eq!(options.count, 237);
+    }
+
+    /// T1-R-3: max_videos=50 → options.count==50
+    /// Regression; allowed-green (AG-006, AG-012 覆盖, cap 行在 diff 内).
+    #[test]
+    fn count_below_legacy_cap_unchanged() {
+        let strategy = RedditStrategy::new();
+        let config = TaskConfig::new(1, "reddit").with_max_videos(50);
+        let keyword = KeywordType::Search("rust".to_string());
+        let options = strategy.build_search_options(&config, &keyword);
+        assert_eq!(options.count, 50);
+    }
+
+    /// T1-R-4: max_videos=None → options.count==25 (reddit default)
+    /// Allowed-green (AG-006).
+    #[test]
+    fn missing_max_videos_default_unchanged() {
+        let strategy = RedditStrategy::new();
+        let config = TaskConfig::new(1, "reddit");
+        let keyword = KeywordType::Search("rust".to_string());
+        let options = strategy.build_search_options(&config, &keyword);
+        assert_eq!(options.count, 25);
+    }
 
     #[test]
     fn test_parse_regular_search() {

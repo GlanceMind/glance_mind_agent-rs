@@ -965,6 +965,329 @@ async fn test_twitter_comments_real() {
 }
 
 // ============================================================
+// M4-T4 Real Gate Probes: Reddit/Twitter Second-Page Pagination
+// AG-008 criteria:
+//   (1) TIKHUB_API_KEY gate — skip without credentials (DR-19 zero-retry budget)
+//   (2) DR-16 branch-assert (twitter): cursor equality branch is a plan contract,
+//       not a runtime guard bypass — both paths are explicitly specified.
+//   (3) DR-20 fixture rehydration obligation: after live run, compare each field
+//       in the dumped JSON against M4-T2/T3 mock fixture shapes (reddit_types.rs /
+//       twitter_types.rs serde definitions). Divergence → stop, report, mock
+//       revision requires ASSERTION-CHANGE-JUSTIFIED + root notification.
+// ============================================================
+
+/// T-052 · AG-008 · Reddit second-page real-API probe
+///
+/// Gate: TIKHUB_API_KEY (skip when absent — no credentials on this machine).
+///
+/// DR-19 zero-retry: uses `search_reddit_posts` (no retry wrapper) to keep
+/// HTTP request count ≤ 3 (page-1 + page-2 = 2 requests, budget = 3).
+///
+/// Flow:
+///   1. Fetch page 1 → extract end_cursor from pageInfo.
+///   2. Fetch page 2 with `after=<end_cursor>`.
+///   3. Assert page-2 response is not an error.
+///   4. Assert id-sets are not identical (content advanced).
+///
+/// DR-20 fixture rehydration obligation:
+///   Raw responses are serialised to tests/fixtures/reddit/ on live run.
+///   After rehydration, compare every field against the mock shapes used in
+///   M4-T2 (reddit_types.rs · RedditSearchData / RedditMainComponent /
+///   RedditPageInfo). Divergence must be reported; mock revision requires
+///   ASSERTION-CHANGE-JUSTIFIED + root notification.
+#[tokio::test]
+async fn real_reddit_search_second_page_after() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping real_reddit_search_second_page_after - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
+    let Some(client) = create_client() else {
+        return;
+    };
+
+    eprintln!("\n[T-052/reddit] Fetching page 1 (no retry, DR-19)...");
+
+    // --- Page 1: DR-19 no retry wrapper, request count = 1 ---
+    let p1_params = RedditSearchParams::new("rust programming");
+    let page1_resp = client
+        .search_reddit_posts(&p1_params)
+        .await
+        .expect("page-1 reddit search must succeed");
+
+    assert_eq!(page1_resp.code, 200, "page-1 code must be 200");
+
+    // Collect page-1 post IDs.
+    let p1_posts = page1_resp
+        .data
+        .as_ref()
+        .map(|d| extract_posts_from_search(d))
+        .unwrap_or_default();
+    assert!(
+        !p1_posts.is_empty(),
+        "page-1 must return at least one post to obtain end_cursor"
+    );
+    let p1_ids: std::collections::HashSet<String> = p1_posts
+        .iter()
+        .filter_map(|p| p.post_id())
+        .collect();
+
+    eprintln!("[T-052/reddit] page-1 posts={}", p1_posts.len());
+
+    // Extract end_cursor from pageInfo (RedditMainComponent).
+    let end_cursor: Option<String> = page1_resp
+        .data
+        .as_ref()
+        .and_then(|d| d.search.as_ref())
+        .and_then(|s| s.dynamic.as_ref())
+        .and_then(|dy| dy.components.as_ref())
+        .and_then(|c| c.main.as_ref())
+        .and_then(|m| m.page_info.as_ref())
+        .and_then(|pi| pi.end_cursor.clone());
+
+    // DR-20: serialise page-1 fixture for rehydration audit.
+    {
+        let fixture_dir = std::path::Path::new("tests/fixtures/reddit");
+        if fixture_dir.exists() {
+            if let Ok(json) = serde_json::to_string_pretty(&page1_resp) {
+                let path = fixture_dir.join("search_rust_programming_page1.json");
+                if let Err(e) = std::fs::write(&path, &json) {
+                    eprintln!("[DR-20/reddit] could not write page-1 fixture: {e}");
+                } else {
+                    eprintln!("[DR-20/reddit] page-1 fixture written: {}", path.display());
+                }
+            }
+        }
+    }
+
+    let Some(cursor) = end_cursor else {
+        // No cursor → single-page result set; cannot test pagination advance.
+        // Document and pass: the adapter exhausted the result on page 1.
+        eprintln!(
+            "[T-052/reddit] end_cursor absent after page-1 — single-page result; \
+             second-page advance cannot be verified. PASS (exhausted)"
+        );
+        return;
+    };
+
+    eprintln!("[T-052/reddit] end_cursor={cursor:.40}...; fetching page 2...");
+
+    // --- Page 2: DR-19 request count = 2 ≤ budget of 3 ---
+    let p2_params = RedditSearchParams::new("rust programming").with_after(&cursor);
+    let page2_resp = client
+        .search_reddit_posts(&p2_params)
+        .await
+        .expect("page-2 reddit search must succeed (non-error)");
+
+    assert_eq!(page2_resp.code, 200, "page-2 code must be 200");
+
+    // DR-20: serialise page-2 fixture.
+    {
+        let fixture_dir = std::path::Path::new("tests/fixtures/reddit");
+        if fixture_dir.exists() {
+            if let Ok(json) = serde_json::to_string_pretty(&page2_resp) {
+                let path = fixture_dir.join("search_rust_programming_page2.json");
+                if let Err(e) = std::fs::write(&path, &json) {
+                    eprintln!("[DR-20/reddit] could not write page-2 fixture: {e}");
+                } else {
+                    eprintln!("[DR-20/reddit] page-2 fixture written: {}", path.display());
+                }
+            }
+        }
+    }
+
+    // Collect page-2 post IDs.
+    let p2_posts = page2_resp
+        .data
+        .as_ref()
+        .map(|d| extract_posts_from_search(d))
+        .unwrap_or_default();
+    let p2_ids: std::collections::HashSet<String> = p2_posts
+        .iter()
+        .filter_map(|p| p.post_id())
+        .collect();
+
+    eprintln!("[T-052/reddit] page-2 posts={}; asserting content advance...", p2_posts.len());
+
+    // Assert content advanced: id-sets must not be identical.
+    assert_ne!(
+        p1_ids, p2_ids,
+        "page-2 id-set must differ from page-1 (content advanced via after={cursor:.20})"
+    );
+
+    eprintln!("[T-052/reddit] PASS — second-page content advance confirmed.");
+}
+
+/// T-052 · AG-008 · DR-16 · Twitter second-page real-API probe (branch-assert)
+///
+/// Gate: TIKHUB_API_KEY (skip when absent — no credentials on this machine).
+///
+/// DR-19 zero-retry: uses `search_twitter_tweets` (no retry wrapper) for
+/// HTTP request count ≤ 3 (page-1 + page-2 = 2 requests, budget = 3).
+///
+/// DR-16 branch-assert (execution-time zero assertion change):
+///   Both branches are pre-written plan contracts; which branch executes
+///   depends on live API behaviour — neither branch is altered at runtime.
+///
+///   if second_cursor == first_cursor {
+///       // F-004: Twitter known to return identical cursor on some searches.
+///       // Record evidence (first/second cursor values) for DR-16 audit.
+///       // Assert only that the response is non-error. PASS.
+///   } else {
+///       // Cursor advanced → assert id-sets not identical.
+///   }
+///
+/// DR-20 fixture rehydration obligation:
+///   Raw responses serialised to tests/fixtures/twitter/ on live run.
+///   After rehydration, compare fields against M4-T3 mock shapes
+///   (twitter_types.rs · TwitterTimelineData / TwitterTweet / next_cursor).
+///   Divergence → stop, report; mock revision requires
+///   ASSERTION-CHANGE-JUSTIFIED + root notification.
+#[tokio::test]
+async fn real_twitter_search_second_page_cursor() {
+    if !live_api_tests_enabled() {
+        eprintln!("Skipping real_twitter_search_second_page_cursor - credentials unset or CI opt-in (RUN_REAL_API_TESTS) absent");
+        return;
+    }
+    let Some(client) = create_client() else {
+        return;
+    };
+
+    eprintln!("\n[T-052/twitter] Fetching page 1 (no retry, DR-19)...");
+
+    // --- Page 1: DR-19 no retry wrapper, request count = 1 ---
+    let p1_params = TwitterSearchParams::new("rustlang").with_search_type("Latest");
+    let page1_resp = client
+        .search_twitter_tweets(&p1_params)
+        .await
+        .expect("page-1 twitter search must succeed");
+
+    assert_eq!(page1_resp.code, 200, "page-1 code must be 200");
+
+    let p1_data = page1_resp
+        .data
+        .as_ref()
+        .expect("page-1 data must be present");
+
+    let p1_tweets = p1_data.timeline.as_deref().unwrap_or_default();
+    assert!(
+        !p1_tweets.is_empty(),
+        "page-1 must return at least one tweet to obtain next_cursor"
+    );
+
+    let p1_ids: std::collections::HashSet<String> = p1_tweets
+        .iter()
+        .filter_map(|t| t.get_tweet_id().map(|s| s.to_string()))
+        .collect();
+
+    let first_cursor: Option<String> = p1_data.next_cursor.clone();
+
+    eprintln!(
+        "[T-052/twitter] page-1 tweets={}; next_cursor={:?}",
+        p1_tweets.len(),
+        first_cursor.as_deref().map(|c| &c[..c.len().min(40)])
+    );
+
+    // DR-20: serialise page-1 fixture.
+    {
+        let fixture_dir = std::path::Path::new("tests/fixtures/twitter");
+        if fixture_dir.exists() {
+            if let Ok(json) = serde_json::to_string_pretty(&page1_resp) {
+                let path = fixture_dir.join("search_rustlang_page1.json");
+                if let Err(e) = std::fs::write(&path, &json) {
+                    eprintln!("[DR-20/twitter] could not write page-1 fixture: {e}");
+                } else {
+                    eprintln!("[DR-20/twitter] page-1 fixture written: {}", path.display());
+                }
+            }
+        }
+    }
+
+    let Some(ref cursor) = first_cursor else {
+        eprintln!(
+            "[T-052/twitter] next_cursor absent after page-1 — single-page result; \
+             second-page advance cannot be verified. PASS (exhausted)"
+        );
+        return;
+    };
+
+    eprintln!("[T-052/twitter] first_cursor={cursor:.40}...; fetching page 2...");
+
+    // --- Page 2: DR-19 request count = 2 ≤ budget of 3 ---
+    let p2_params = TwitterSearchParams::new("rustlang")
+        .with_search_type("Latest")
+        .with_cursor(cursor);
+    let page2_resp = client
+        .search_twitter_tweets(&p2_params)
+        .await
+        .expect("page-2 twitter search must succeed (non-error)");
+
+    assert_eq!(page2_resp.code, 200, "page-2 code must be 200");
+
+    // DR-20: serialise page-2 fixture.
+    {
+        let fixture_dir = std::path::Path::new("tests/fixtures/twitter");
+        if fixture_dir.exists() {
+            if let Ok(json) = serde_json::to_string_pretty(&page2_resp) {
+                let path = fixture_dir.join("search_rustlang_page2.json");
+                if let Err(e) = std::fs::write(&path, &json) {
+                    eprintln!("[DR-20/twitter] could not write page-2 fixture: {e}");
+                } else {
+                    eprintln!("[DR-20/twitter] page-2 fixture written: {}", path.display());
+                }
+            }
+        }
+    }
+
+    let second_cursor = page2_resp
+        .data
+        .as_ref()
+        .and_then(|d| d.next_cursor.clone());
+
+    let p2_tweets = page2_resp
+        .data
+        .as_ref()
+        .and_then(|d| d.timeline.as_ref())
+        .map(|t| t.as_slice())
+        .unwrap_or_default();
+
+    // DR-16 branch-assert: both branches are pre-written plan contracts.
+    // Execution picks the branch based on live API behaviour — zero assertion
+    // changes are allowed at runtime.
+    if second_cursor.as_deref() == Some(cursor.as_str()) {
+        // F-004 evidence: Twitter returned the same cursor for page 2.
+        // This is known behaviour documented in DR-16.
+        // Branch contract: assert only that the response is non-error. PASS.
+        eprintln!(
+            "[T-052/twitter][DR-16/F-004] second_cursor == first_cursor ({:.40}…); \
+             Twitter returned identical cursor — known behaviour. \
+             Asserting response non-error only. PASS.",
+            cursor
+        );
+        // Response non-error already asserted above (code == 200). Explicit:
+        assert_eq!(
+            page2_resp.code, 200,
+            "page-2 must be non-error even when cursor does not advance (DR-16 branch)"
+        );
+    } else {
+        // Cursor advanced → assert content also advanced.
+        eprintln!(
+            "[T-052/twitter] cursor advanced: {:?} → {:?}; asserting id-set divergence...",
+            first_cursor.as_deref().map(|c| &c[..c.len().min(20)]),
+            second_cursor.as_deref().map(|c| &c[..c.len().min(20)])
+        );
+        let p2_ids: std::collections::HashSet<String> = p2_tweets
+            .iter()
+            .filter_map(|t| t.get_tweet_id().map(|s| s.to_string()))
+            .collect();
+        assert_ne!(
+            p1_ids, p2_ids,
+            "page-2 id-set must differ from page-1 when cursor advanced"
+        );
+        eprintln!("[T-052/twitter] PASS — second-page content advance confirmed.");
+    }
+}
+
+// ============================================================
 // M3-T3 · T-051 · AG-008: TikTok second-page offset probe
 // ============================================================
 
