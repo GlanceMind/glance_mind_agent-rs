@@ -113,9 +113,14 @@ After merge, the integrated `main` carries all five platforms + the scheduler gu
 
 ## 6. Residual follow-ups (root §5, non-blocking)
 
-- **RT-4** — remove live keys (`TIKHUB_API_KEY`/`FACEBOOK_RAPIDAPI_KEY`) from
-  `agent .github/workflows/mutation-rust.yml` (M1-T0 env-guards landed, so unblocked).
-- **N-006** — set the scheduler mutation workflow as a protected-branch required check
-  (GitHub repo setting, one-time manual).
-- **RT-2** — backlog: promote the mock-HTTP helper to `src/testing` (3rd copy); retry-limit
+Detail + exact commands in `compile/post-merge-followups.md`.
+
+- **RT-4 — ✅ DONE.** Live keys (`TIKHUB_API_KEY`/`FACEBOOK_RAPIDAPI_KEY`) removed from both
+  jobs of agent `.github/workflows/mutation-rust.yml`; also dropped the same
+  `--annotations=github` hollow-gate bug. Landed in PR #4 (`chore/ci-front-runner`,
+  `cb70473`) — the PR that introduces the file to `main`.
+- **N-006 — ⏳ user/admin.** `main` on both repos currently has **no branch protection at
+  all** (verified: HTTP 404). Establishing it is a governance decision; can only require the
+  mutation context after PR #70 / PR #4 merge. Exact `gh api` commands in the follow-up doc.
+- **RT-2 — backlog:** promote mock-HTTP helper to `src/testing` (3rd copy); retry-limit
   observation item.
