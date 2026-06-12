@@ -96,7 +96,9 @@ impl PlatformStrategy for InstagramStrategy {
         options = options.with_region(self.default_feed_type.clone());
 
         // Set count from config
-        let count = config.max_videos.map(|v| v.min(50) as u32).unwrap_or(20);
+        // R-001/D-02:options.count = 总量;instagram general_search V3 单页能力(V1 裁决分支 B),
+        // page_size_hint 不消费。故不施加任何单页上限截断(原 `.min(50)` 已删)。
+        let count = config.max_videos.map(|v| v as u32).unwrap_or(20);
         options = options.with_count(count);
 
         options

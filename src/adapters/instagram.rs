@@ -9,6 +9,7 @@ use crate::domain::errors::{GatewayError, GatewayResult};
 use crate::domain::{Comment, Content, Engagement, KeywordType, SearchOptions};
 use crate::ports::{
     comment_gateway::{FetchCommentsOptions, FetchCommentsResult},
+    content_gateway::{FetchOutcome, FetchShortfall},
     CommentGateway, ContentGateway,
 };
 use crate::tikhub::{
@@ -334,6 +335,47 @@ impl ContentGateway for InstagramAdapter {
                     .collect())
             }
         }
+    }
+
+    /// M5-T3-B(分支 B,单页语义):override D1 默认方法,如实上报欠交付原因。
+    ///
+    /// V1 裁决 = 分支 B(2026-06-11,保守解读):instagram general_search V3 单页能力,
+    /// 不做翻页循环。单次走既有 content 路径(`fetch_keyword_posts_with_fallback`),
+    /// 截取 `options.count` 条:
+    /// - `delivered < count` → `Some(FetchShortfall::Exhausted)`
+    ///   (R-006 红线:上游单页即枯竭,欠量如实上报,绝不静默 None/COMPLETED);
+    /// - `delivered >= count` → `None`(足量);
+    /// - 零进展错误由 `fetch_keyword_posts_with_fallback` 原样 `Err`(既有错误路径,F-001)。
+    async fn fetch_by_keyword_with_outcome(
+        &self,
+        keyword: &KeywordType,
+        options: &SearchOptions,
+    ) -> GatewayResult<FetchOutcome> {
+        let target = options.count as usize;
+
+        let posts = match keyword {
+            KeywordType::Search(query) | KeywordType::Hashtag(query) => {
+                self.fetch_keyword_posts_with_fallback(query).await?
+            }
+            _ => self.fetch_keyword_posts_with_fallback(&options.query).await?,
+        };
+
+        let contents: Vec<Content> = posts
+            .iter()
+            .take(target)
+            .map(Self::convert_content)
+            .collect();
+
+        let shortfall = if contents.len() < target {
+            Some(FetchShortfall::Exhausted)
+        } else {
+            None
+        };
+
+        Ok(FetchOutcome {
+            contents,
+            shortfall,
+        })
     }
 
     async fn fetch_user_content(&self, user_id: &str, count: u32) -> GatewayResult<Vec<Content>> {
