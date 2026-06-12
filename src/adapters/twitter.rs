@@ -5,10 +5,14 @@
 
 use async_trait::async_trait;
 
+use tracing::{debug, info, warn};
+
 use crate::domain::errors::{GatewayError, GatewayResult};
 use crate::domain::{Comment, Content, Engagement, KeywordType, SearchOptions};
+use crate::pagination::{PageDecision, PaginationLoop, StopReason};
 use crate::ports::{
     comment_gateway::{FetchCommentsOptions, FetchCommentsResult},
+    content_gateway::{FetchOutcome, FetchShortfall},
     CommentGateway, ContentGateway,
 };
 use crate::strategies::twitter::{extra_keys, search_type};
@@ -20,6 +24,16 @@ use crate::tikhub::{
 /// Twitter adapter implementing ContentGateway and CommentGateway
 pub struct TwitterAdapter {
     client: TikHubClient,
+}
+
+/// content 翻页循环终止信息(M4-T3,适配器私有;镜像 facebook.rs `FbFetchEnd`):
+/// - `Stop(reason)`:循环以 M1 D2 的 `StopReason` 语义终止(达量 / 枯竭族);
+/// - `Partial(err)`:`RateLimited` 且已有进展(过滤后交付集非空)的部分失败分支
+///   (零交付时由 `fetch_by_keyword_with_outcome` 原样 `Err`,DR-01;DR-10:仅 RateLimited)。
+#[derive(Debug)]
+enum TwitterFetchEnd {
+    Stop(StopReason),
+    Partial(GatewayError),
 }
 
 impl TwitterAdapter {
@@ -179,6 +193,90 @@ impl TwitterAdapter {
             .take(limit)
             .collect()
     }
+
+    /// M4-T3:content 搜索 cursor 翻页(M1 `PaginationLoop` + D1 override 落点)。
+    ///
+    /// 镜像评论侧既有 cursor 模式(`with_cursor`/`data.next_cursor`),每页:
+    /// 1. `TwitterSearchParams.with_cursor(cursor?)` 调用搜索;
+    /// 2. 提取 timeline tweets,**过滤 `is_search_result_tweet`**(喂入状态机的 ids =
+    ///    过滤后条目;达量计数以可用条目为准,噪声不充数 — 反作弊);
+    /// 3. `accept_page(&filtered_ids, next)`,`next = data.next_cursor`(缺失→None;
+    ///    重复值由 `PaginationLoop` 的 CursorLoop 兜底,F-004 twitter 已知重复)。
+    ///
+    /// 错误路径(DR-10,冻结):仅 `RateLimited` 且已有进展 → `Partial`(下游降为
+    /// `PartialFailure`);硬错误 / 零进展 → 原样 `Err`(由调用方处理)。
+    async fn search_content_paginated(
+        &self,
+        query: &str,
+        options: &SearchOptions,
+    ) -> GatewayResult<(Vec<Content>, TwitterFetchEnd)> {
+        let mut loop_state = PaginationLoop::new(options.count as usize);
+        let mut accepted: Vec<Content> = Vec::new();
+        let mut cursor: Option<String> = None;
+
+        let end = loop {
+            let mut params = Self::search_params(query, options);
+            if let Some(ref c) = cursor {
+                params = params.with_cursor(c.clone());
+            }
+
+            match self.client.search_twitter_tweets_with_retry(&params).await {
+                Ok(response) => {
+                    let next = response.data.as_ref().and_then(|d| d.next_cursor.clone());
+
+                    // 过滤计数:仅 `is_search_result_tweet` 的条目喂入状态机(噪声不充数)。
+                    let filtered: Vec<Content> = response
+                        .data
+                        .as_ref()
+                        .and_then(|d| d.timeline.as_ref())
+                        .map(|list| {
+                            list.iter()
+                                .filter(|tweet| Self::is_search_result_tweet(tweet))
+                                .map(Self::convert_content)
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    let ids: Vec<String> = filtered
+                        .iter()
+                        .map(|content| content.content_id.clone())
+                        .collect();
+                    let by_id: std::collections::HashMap<String, Content> = filtered
+                        .into_iter()
+                        .map(|content| (content.content_id.clone(), content))
+                        .collect();
+
+                    let outcome = loop_state.accept_page(&ids, next);
+                    let mut by_id = by_id;
+                    for id in &outcome.newly_accepted {
+                        if let Some(content) = by_id.remove(id) {
+                            accepted.push(content);
+                        }
+                    }
+
+                    match outcome.decision {
+                        PageDecision::Stop(reason) => break TwitterFetchEnd::Stop(reason),
+                        PageDecision::Continue { cursor: next_cursor } => {
+                            cursor = Some(next_cursor);
+                        }
+                    }
+                }
+                // DR-10:仅 RateLimited + 已有进展 → Partial;其余(硬错误)/零进展 → Err。
+                Err(err @ TikHubError::RateLimited { .. }) if !accepted.is_empty() => {
+                    warn!(
+                        platform = "twitter",
+                        query = %query,
+                        collected = accepted.len(),
+                        "Twitter content search hit rate limit after partial progress"
+                    );
+                    break TwitterFetchEnd::Partial(Self::convert_error(err));
+                }
+                Err(err) => return Err(Self::convert_error(err)),
+            }
+        };
+
+        Ok((accepted, end))
+    }
 }
 
 #[async_trait]
@@ -266,6 +364,76 @@ impl ContentGateway for TwitterAdapter {
                 .await
                 .map(|content| content.into_iter().collect()),
         }
+    }
+
+    /// M4-T3:override D1 默认方法,content 路径走 `PaginationLoop` 翻页 + shortfall。
+    ///
+    /// 仅 content 搜索(`Search`/`Hashtag`)走新循环;其余 keyword 类型仍委派
+    /// `fetch_by_keyword`(滚动兼容,`shortfall = None`)。公开 `search()`/`fetch_by_keyword`
+    /// 行为不变(content 走新循环但丢弃 shortfall)。
+    ///
+    /// shortfall 映射(语义与 `PaginationLoop::shortfall_for` 一致):
+    /// - 达量 / 已交付 ≥ count → `None`;
+    /// - 枯竭族(`UpstreamExhausted`/`CursorLoop`/`EmptyPageLimit`)且欠量 → `Exhausted`;
+    /// - `Partial`(仅 RateLimited + 进展)→ `PartialFailure`(零进展已在循环内归一为 Err)。
+    async fn fetch_by_keyword_with_outcome(
+        &self,
+        keyword: &KeywordType,
+        options: &SearchOptions,
+    ) -> GatewayResult<FetchOutcome> {
+        debug!(
+            platform = "twitter",
+            keyword = ?keyword,
+            query = %options.query,
+            "Twitter fetch_by_keyword_with_outcome"
+        );
+
+        let query = match keyword {
+            KeywordType::Search(query) | KeywordType::Hashtag(query) => query.clone(),
+            // 非 content 搜索路径:滚动兼容默认包装(shortfall = None)。
+            _ => {
+                return Ok(FetchOutcome {
+                    contents: self.fetch_by_keyword(keyword, options).await?,
+                    shortfall: None,
+                });
+            }
+        };
+
+        let (contents, end) = self.search_content_paginated(&query, options).await?;
+        let delivered = contents.len();
+        let target = options.count as usize;
+
+        let shortfall = match end {
+            TwitterFetchEnd::Stop(_) if delivered >= target => None,
+            TwitterFetchEnd::Stop(StopReason::ReachedMaxCount) => None,
+            TwitterFetchEnd::Stop(
+                StopReason::UpstreamExhausted
+                | StopReason::CursorLoop
+                | StopReason::EmptyPageLimit,
+            ) => Some(FetchShortfall::Exhausted),
+            TwitterFetchEnd::Partial(err) => {
+                if contents.is_empty() {
+                    // DR-01:零可交付进展 → 原样 Err(F-001 语义)。
+                    return Err(err);
+                }
+                Some(FetchShortfall::PartialFailure {
+                    message: err.to_string(),
+                })
+            }
+        };
+
+        // F-02 (GREEN):循环终止结构化日志(platform / accepted_count / 终止态)。
+        info!(
+            platform = "twitter",
+            accepted_count = delivered,
+            shortfall = ?shortfall,
+            "Twitter content pagination loop terminated"
+        );
+
+        Ok(FetchOutcome {
+            contents,
+            shortfall,
+        })
     }
 
     async fn fetch_user_content(&self, user_id: &str, count: u32) -> GatewayResult<Vec<Content>> {
