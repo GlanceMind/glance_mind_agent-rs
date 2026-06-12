@@ -12,6 +12,11 @@ pub mod mock_ai;
 pub mod mock_gateway;
 pub mod mock_repository;
 
+/// Shared mock HTTP server for adapter unit tests (RT-2). Test-only: the five
+/// adapter test modules used to each carry a private copy of this helper.
+#[cfg(test)]
+pub(crate) mod mock_http;
+
 pub use fixtures::TestFixtures;
 pub use mock_ai::MockAiAnalyzer;
 pub use mock_gateway::{MockCommentGateway, MockContentGateway};

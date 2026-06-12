@@ -1073,94 +1073,9 @@ impl FacebookAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::VecDeque;
-    use std::sync::{Arc, Mutex};
-
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-
-    struct MockHttpResponse {
-        status: u16,
-        body: Value,
-        extra_headers: Vec<(String, String)>,
-    }
-
-    impl MockHttpResponse {
-        fn json(status: u16, body: Value) -> Self {
-            Self {
-                status,
-                body,
-                extra_headers: Vec::new(),
-            }
-        }
-
-        fn with_header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-            self.extra_headers.push((key.into(), value.into()));
-            self
-        }
-    }
-
-    async fn spawn_mock_http_server_with_capture(
-        responses: Vec<MockHttpResponse>,
-    ) -> (String, Arc<Mutex<Vec<String>>>) {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let responses = Arc::new(Mutex::new(VecDeque::from(responses)));
-        let requests = Arc::new(Mutex::new(Vec::new()));
-        let expected_requests = responses.lock().unwrap().len();
-        let captured_requests = requests.clone();
-
-        tokio::spawn(async move {
-            for _ in 0..expected_requests {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let responses = responses.clone();
-                let requests = captured_requests.clone();
-
-                tokio::spawn(async move {
-                    let mut buffer = vec![0_u8; 4096];
-                    let size = socket.read(&mut buffer).await.unwrap();
-                    let request_text = String::from_utf8_lossy(&buffer[..size]).to_string();
-                    if let Some(request_line) = request_text.lines().next() {
-                        requests.lock().unwrap().push(request_line.to_string());
-                    }
-
-                    let response = responses.lock().unwrap().pop_front().unwrap_or_else(|| {
-                        MockHttpResponse::json(500, json!({"message": "missing mock response"}))
-                    });
-
-                    let reason = match response.status {
-                        200 => "OK",
-                        429 => "Too Many Requests",
-                        503 => "Service Unavailable",
-                        404 => "Not Found",
-                        _ => "Mock Response",
-                    };
-                    let body = serde_json::to_string(&response.body).unwrap();
-                    let mut raw = format!(
-                        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
-                        response.status,
-                        reason,
-                        body.len()
-                    );
-                    for (key, value) in response.extra_headers {
-                        raw.push_str(&format!("{key}: {value}\r\n"));
-                    }
-                    raw.push_str("\r\n");
-                    raw.push_str(&body);
-
-                    socket.write_all(raw.as_bytes()).await.unwrap();
-                    let _ = socket.shutdown().await;
-                });
-            }
-        });
-
-        (format!("http://{}", addr), requests)
-    }
-
-    async fn spawn_mock_http_server(responses: Vec<MockHttpResponse>) -> String {
-        let (base_url, _) = spawn_mock_http_server_with_capture(responses).await;
-        base_url
-    }
+    use crate::testing::mock_http::{
+        spawn_mock_http_server, spawn_mock_http_server_with_capture, MockHttpResponse,
+    };
 
     fn test_post(post_id: &str, message: &str) -> Value {
         json!({
