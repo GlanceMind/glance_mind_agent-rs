@@ -435,6 +435,7 @@ impl CommentGateway for TwitterAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ports::content_gateway::FetchShortfall;
     use serde_json::json;
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
@@ -523,6 +524,59 @@ mod tests {
                 "followers_count": 55
             }
         })
+    }
+
+    // ================================================================
+    // M4-T3 content cursor-pagination helpers (mock-HTTP)
+    //
+    // DR-20: mock 形状取自 `src/tikhub/twitter_types.rs` serde 定义
+    // (`TwitterTimelineData { timeline, next_cursor, .. }`)+ 评论侧既有样板
+    // (fetch_all_comments mock 的 `data.next_cursor` 字段)。
+    // **待 M4-T4 回灌确认**:仓内无 twitter 搜索响应真实样本(Step 06 实证),
+    // M4-T4 回灌后逐字段对账。
+    // ================================================================
+
+    /// 搜索 timeline 一页:`data.timeline = tweets`,`data.next_cursor = cursor`。
+    fn search_page(tweets: Vec<serde_json::Value>, next_cursor: Option<&str>) -> serde_json::Value {
+        json!({
+            "code": 200,
+            "message": "success",
+            "data": {
+                "timeline": tweets,
+                "next_cursor": next_cursor,
+            }
+        })
+    }
+
+    /// 429 限流响应,带 `Retry-After: 0`(DR-19:防止 RateLimited 默认 60s 实睡)。
+    fn rate_limited_page() -> MockHttpResponse {
+        MockHttpResponse {
+            status: 429,
+            body: json!({"message": "Too Many Requests"}),
+        }
+    }
+
+    /// 构造 twitter 适配器,retry_config `max_delay_ms = 0`(DR-19)。
+    /// RateLimited 默认 base delay = 60_000ms × backoff,`min(max_delay_ms=0)` ⇒ 实睡 0,
+    /// 撞不上 mutants 300s 预算;同一页 429 = max_retries(3)+1 = 4 次 HTTP 请求。
+    fn fast_retry_adapter(base_url: String) -> TwitterAdapter {
+        let retry_config = crate::tikhub::TikHubRetryConfig {
+            max_retries: 3,
+            initial_delay_ms: 0,
+            max_delay_ms: 0,
+            backoff_multiplier: 2.0,
+        };
+        let client =
+            crate::tikhub::TikHubClient::with_retry_config("test-key", base_url, retry_config)
+                .unwrap();
+        TwitterAdapter::new(client)
+    }
+
+    /// content 搜索路径选项:keyword search + count。
+    fn search_options(query: &str, count: u32) -> SearchOptions {
+        SearchOptions::new(query)
+            .with_platform("twitter")
+            .with_count(count)
     }
 
     #[test]
@@ -1060,5 +1114,405 @@ mod tests {
             ..Default::default()
         };
         assert!(!TwitterAdapter::is_search_result_tweet(&tweet));
+    }
+
+    // ================================================================
+    // M4-T3: twitter content 路径 cursor 翻页测试(经 fetch_by_keyword_with_outcome)
+    //
+    // 现状(RED 依据):content 搜索路径 `search_params`(twitter.rs:161-163)从不设
+    // cursor,`fetch_by_keyword_with_outcome` 未 override → 默认包装 `fetch_by_keyword`,
+    // 单次调用 + take(count),shortfall 恒 None。迁移后镜像评论侧 cursor 模式
+    // (`with_cursor`/`next_cursor`)接 PaginationLoop。
+    //
+    // 断言形态镜像 M4-T2(reddit after 翻页),差异点:cursor/next_cursor。
+    // mock 形状 DR-20 待 M4-T4 回灌对账(见 search_page helper 注释)。
+    // ================================================================
+
+    /// 测试 1(T-013 主断言):cursor 跨页转发。
+    /// 3 页(next_cursor = c2 / c3 / None),断言第 2/3 请求转发 `cursor=c2` / `cursor=c3`。
+    /// 现状从不转发 cursor(search_params 不设 cursor)→ 单次调用,RED。
+    #[tokio::test]
+    async fn paginates_cursor_until_count() {
+        let (base_url, requests) = spawn_mock_http_server_with_capture(vec![
+            MockHttpResponse::json(
+                200,
+                search_page(
+                    vec![
+                        test_tweet("tw-a1", "u1", "a1"),
+                        test_tweet("tw-a2", "u2", "a2"),
+                    ],
+                    Some("c2"),
+                ),
+            ),
+            MockHttpResponse::json(
+                200,
+                search_page(
+                    vec![
+                        test_tweet("tw-b1", "u3", "b1"),
+                        test_tweet("tw-b2", "u4", "b2"),
+                    ],
+                    Some("c3"),
+                ),
+            ),
+            MockHttpResponse::json(
+                200,
+                search_page(
+                    vec![
+                        test_tweet("tw-c1", "u5", "c1"),
+                        test_tweet("tw-c2", "u6", "c2"),
+                    ],
+                    None,
+                ),
+            ),
+        ])
+        .await;
+        let adapter = fast_retry_adapter(base_url);
+        let keyword = KeywordType::Search("rust".to_string());
+        let options = search_options("rust", 6);
+
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&keyword, &options)
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.contents.len(), 6, "all 3 pages collected to count");
+
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 3, "should issue one request per page");
+        assert!(
+            requests[1].contains("cursor=c2"),
+            "2nd request must forward cursor=c2, got: {}",
+            requests[1]
+        );
+        assert!(
+            requests[2].contains("cursor=c3"),
+            "3rd request must forward cursor=c3, got: {}",
+            requests[2]
+        );
+    }
+
+    /// 测试 2(F-003):next_cursor 缺失 → Some(Exhausted)。
+    /// 2 页后 next_cursor=None 且未达 count → 上游枯竭。
+    #[tokio::test]
+    async fn exhausted_when_next_cursor_missing() {
+        let (base_url, _) = spawn_mock_http_server_with_capture(vec![
+            MockHttpResponse::json(
+                200,
+                search_page(vec![test_tweet("tw-a1", "u1", "a1")], Some("c2")),
+            ),
+            MockHttpResponse::json(
+                200,
+                search_page(vec![test_tweet("tw-b1", "u2", "b1")], None),
+            ),
+        ])
+        .await;
+        let adapter = fast_retry_adapter(base_url);
+        let keyword = KeywordType::Search("rust".to_string());
+        let options = search_options("rust", 50);
+
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&keyword, &options)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outcome.shortfall,
+            Some(FetchShortfall::Exhausted),
+            "missing next_cursor before reaching count must surface Exhausted"
+        );
+        assert_eq!(outcome.contents.len(), 2, "both pages' items retained");
+    }
+
+    /// 测试 3(F-004):重复 next_cursor → CursorLoop → Some(Exhausted),不发额外请求。
+    /// **twitter 已知会返回重复 cursor**;状态机 CursorLoop 兜底。
+    #[tokio::test]
+    async fn repeated_next_cursor_stops() {
+        let (base_url, requests) = spawn_mock_http_server_with_capture(vec![
+            MockHttpResponse::json(
+                200,
+                search_page(vec![test_tweet("tw-a1", "u1", "a1")], Some("c1")),
+            ),
+            // 第 2 页回吐与第 1 页相同的 cursor(twitter 已知行为)。
+            MockHttpResponse::json(
+                200,
+                search_page(vec![test_tweet("tw-b1", "u2", "b1")], Some("c1")),
+            ),
+        ])
+        .await;
+        let adapter = fast_retry_adapter(base_url);
+        let keyword = KeywordType::Search("rust".to_string());
+        let options = search_options("rust", 50);
+
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&keyword, &options)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outcome.shortfall,
+            Some(FetchShortfall::Exhausted),
+            "repeated cursor (CursorLoop) maps to Exhausted shortfall"
+        );
+
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(
+            requests.len(),
+            2,
+            "repeated cursor must stop without issuing a 3rd request"
+        );
+    }
+
+    /// 测试 4(F-005):连续空页达上限 → Some(Exhausted)。
+    /// 3 连空页(next_cursor 递进 e1/e2/e3)→ EmptyPageLimit → Exhausted。
+    #[tokio::test]
+    async fn empty_pages_stop_at_limit() {
+        let (base_url, _) = spawn_mock_http_server_with_capture(vec![
+            MockHttpResponse::json(200, search_page(vec![], Some("e1"))),
+            MockHttpResponse::json(200, search_page(vec![], Some("e2"))),
+            MockHttpResponse::json(200, search_page(vec![], Some("e3"))),
+        ])
+        .await;
+        let adapter = fast_retry_adapter(base_url);
+        let keyword = KeywordType::Search("rust".to_string());
+        let options = search_options("rust", 50);
+
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&keyword, &options)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outcome.shortfall,
+            Some(FetchShortfall::Exhausted),
+            "consecutive empty pages must stop at limit with Exhausted"
+        );
+        assert!(outcome.contents.is_empty(), "no items from empty pages");
+    }
+
+    /// 测试 5(F-002 + DR-19):第 2 页 429 → 首页条目保留 + Some(PartialFailure{含 "rate"})。
+    /// DR-19:429 带 Retry-After: 0 语义,fast_retry_adapter max_delay_ms=0;
+    /// 同一页 429 = max_retries(3)+1 = 4 次 HTTP 请求。请求数期望按 (1 首页 + 4) 计。
+    #[tokio::test]
+    async fn partial_failure_with_progress() {
+        let mut responses = vec![MockHttpResponse::json(
+            200,
+            search_page(vec![test_tweet("tw-a1", "u1", "a1")], Some("c2")),
+        )];
+        // 第 2 页:同一 cursor 4 次 429(1 + 3 retries),全部限流。
+        for _ in 0..4 {
+            responses.push(rate_limited_page());
+        }
+        let (base_url, requests) = spawn_mock_http_server_with_capture(responses).await;
+        let adapter = fast_retry_adapter(base_url);
+        let keyword = KeywordType::Search("rust".to_string());
+        let options = search_options("rust", 50);
+
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&keyword, &options)
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.contents.len(), 1, "first page item retained");
+        match outcome.shortfall {
+            Some(FetchShortfall::PartialFailure { message }) => {
+                assert!(
+                    message.to_lowercase().contains("rate"),
+                    "partial failure message should mention rate limit, got: {message}"
+                );
+            }
+            other => panic!("expected PartialFailure with progress, got {other:?}"),
+        }
+
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(
+            requests.len(),
+            5,
+            "1 first-page + 4 (429 retried) requests (DR-19)"
+        );
+    }
+
+    /// 测试 6(F-001 + DR-19):第 1 页即 429 → Err(零进展)。**允许先绿**(AG-006)。
+    /// DR-19:同测试 5,第 1 页 4 次 429 = 4 次 HTTP 请求。
+    #[tokio::test]
+    async fn zero_progress_error_is_err() {
+        let responses = (0..4)
+            .map(|_| rate_limited_page())
+            .collect();
+        let (base_url, requests) = spawn_mock_http_server_with_capture(responses).await;
+        let adapter = fast_retry_adapter(base_url);
+        let keyword = KeywordType::Search("rust".to_string());
+        let options = search_options("rust", 50);
+
+        let result = adapter
+            .fetch_by_keyword_with_outcome(&keyword, &options)
+            .await;
+
+        assert!(
+            result.is_err(),
+            "zero-progress rate-limit on first page must be Err (F-001), got {result:?}"
+        );
+
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 4, "first page 429 retried 4x total (DR-19)");
+    }
+
+    /// 测试 7:达量 → shortfall None。
+    /// 第 1 页即满足 count(next_cursor 仍存在但已达量)→ ReachedMaxCount → None。
+    #[tokio::test]
+    async fn shortfall_none_when_reached() {
+        let (base_url, _) = spawn_mock_http_server_with_capture(vec![MockHttpResponse::json(
+            200,
+            search_page(
+                vec![
+                    test_tweet("tw-a1", "u1", "a1"),
+                    test_tweet("tw-a2", "u2", "a2"),
+                ],
+                Some("c2"),
+            ),
+        )])
+        .await;
+        let adapter = fast_retry_adapter(base_url);
+        let keyword = KeywordType::Search("rust".to_string());
+        let options = search_options("rust", 2);
+
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&keyword, &options)
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.contents.len(), 2, "exactly count items");
+        assert_eq!(
+            outcome.shortfall, None,
+            "reaching count must yield shortfall None"
+        );
+    }
+
+    /// 测试 8:既有 `search()` 回归不变。**允许先绿**(AG-006)。
+    /// 单次 mock 返回与 search() 结果一致(legacy 路径未迁移,单次调用语义保持)。
+    #[tokio::test]
+    async fn legacy_search_unchanged() {
+        let (base_url, requests) =
+            spawn_mock_http_server_with_capture(vec![MockHttpResponse::json(
+                200,
+                search_page(
+                    vec![
+                        test_tweet("tw-a1", "u1", "a1"),
+                        test_tweet("tw-a2", "u2", "a2"),
+                    ],
+                    Some("c2"),
+                ),
+            )])
+            .await;
+        let adapter = fast_retry_adapter(base_url);
+        let options = search_options("rust", 5);
+
+        let contents = adapter.search(&options).await.unwrap();
+
+        assert_eq!(contents.len(), 2, "legacy search returns the single page");
+        assert_eq!(contents[0].content_id, "tw-a1");
+
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 1, "legacy search() stays single-call");
+    }
+
+    /// 测试 9(过滤计数 / is_search_result_tweet):含非 tweet 噪声条目的页。
+    /// 计数以**过滤后**条目为准:噪声条目(tweet_type != "tweet" / 无 id)不充数,
+    /// 达量判定不被噪声充数。count=4,每页 2 tweet + 1 噪声;需翻页才达量。
+    /// **反作弊**:过滤计数语义不得弱化为「按原始条目计数」。
+    #[tokio::test]
+    async fn filtered_items_drive_counting() {
+        let noise = || {
+            json!({
+                "tweet_id": "noise-x",
+                "type": "tombstone",
+                "text": "promoted/non-tweet noise"
+            })
+        };
+        let (base_url, requests) = spawn_mock_http_server_with_capture(vec![
+            MockHttpResponse::json(
+                200,
+                search_page(
+                    vec![
+                        test_tweet("tw-a1", "u1", "a1"),
+                        noise(),
+                        test_tweet("tw-a2", "u2", "a2"),
+                    ],
+                    Some("c2"),
+                ),
+            ),
+            MockHttpResponse::json(
+                200,
+                search_page(
+                    vec![
+                        test_tweet("tw-b1", "u3", "b1"),
+                        noise(),
+                        test_tweet("tw-b2", "u4", "b2"),
+                    ],
+                    Some("c3"),
+                ),
+            ),
+        ])
+        .await;
+        let adapter = fast_retry_adapter(base_url);
+        let keyword = KeywordType::Search("rust".to_string());
+        let options = search_options("rust", 4);
+
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&keyword, &options)
+            .await
+            .unwrap();
+
+        // 过滤后每页 2 条 → 需要第 2 页才达 count=4;噪声不充数。
+        assert_eq!(
+            outcome.contents.len(),
+            4,
+            "count must be measured on filtered tweets, not raw items"
+        );
+        assert!(
+            outcome
+                .contents
+                .iter()
+                .all(|c| c.content_id != "noise-x"),
+            "non-tweet noise must be filtered out"
+        );
+        assert_eq!(outcome.shortfall, None, "reached count on filtered items");
+
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(
+            requests.len(),
+            2,
+            "noise must not inflate count: must page twice to reach 4 filtered items"
+        );
+    }
+
+    /// 测试 10(DR-10):第 1 页有进展 + 第 2 页 HTTP 500(硬错误)→ 整体 Err。
+    /// **PartialFailure 触发集仅 RateLimited(M1 D2 冻结)**;硬错误不得降级为 Partial。
+    /// **预期 RED**:现状单次调用返回首页 Ok(shortfall=None)→ expected Err, got Ok(..)。
+    #[tokio::test]
+    async fn hard_error_with_progress_is_err() {
+        let mut responses = vec![MockHttpResponse::json(
+            200,
+            search_page(vec![test_tweet("tw-a1", "u1", "a1")], Some("c2")),
+        )];
+        // 第 2 页:HTTP 500 是可重试错误,4 次后耗尽 → 硬错误。
+        for _ in 0..4 {
+            responses.push(MockHttpResponse::json(
+                500,
+                json!({"message": "Internal Server Error"}),
+            ));
+        }
+        let (base_url, _) = spawn_mock_http_server_with_capture(responses).await;
+        let adapter = fast_retry_adapter(base_url);
+        let keyword = KeywordType::Search("rust".to_string());
+        let options = search_options("rust", 50);
+
+        let result = adapter
+            .fetch_by_keyword_with_outcome(&keyword, &options)
+            .await;
+
+        assert!(
+            result.is_err(),
+            "hard error (HTTP 500) after progress must be Err, not downgraded to Partial (DR-10), got {result:?}"
+        );
     }
 }
