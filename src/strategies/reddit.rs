@@ -97,7 +97,8 @@ impl PlatformStrategy for RedditStrategy {
         options = options.with_region(self.default_sort.clone());
 
         // Set count from config
-        let count = config.max_videos.map(|v| v.min(100) as u32).unwrap_or(25);
+        // R-001/D-02:options.count = 总量目标(max_videos),不被单页上限截断;reddit/twitter 上游搜索端点无单页大小参数,page_size_hint 本平台不消费(文档化豁免)。
+        let count = config.max_videos.map(|v| v as u32).unwrap_or(25);
         options = options.with_count(count);
 
         // Set sort type if specified
