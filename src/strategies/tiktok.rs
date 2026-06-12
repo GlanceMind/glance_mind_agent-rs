@@ -2,9 +2,12 @@
 //!
 //! Handles TikTok-specific keyword parsing, search options, and prompt formatting.
 
+use serde_json::json;
+
 use crate::config::platform::get_platform_id;
 use crate::domain::{Comment, Content, KeywordType, SearchOptions, TaskConfig};
-use crate::strategies::PlatformStrategy;
+use crate::pagination::platform_page_cap;
+use crate::strategies::{extra_keys, PlatformStrategy};
 
 /// TikTok platform strategy implementation
 pub struct TikTokStrategy {
@@ -106,6 +109,14 @@ impl PlatformStrategy for TikTokStrategy {
         // Set publish time filter if specified (0=all, 1=day, 7=week, 30=month, 90=3months, 180=6months)
         if let Some(publish_time) = config.publish_time {
             options.publish_time = Some(publish_time);
+        }
+
+        // Write per-page size hint into extra (clamped to platform cap).
+        // options.count carries total-quantity semantics (PR #5); page_size_hint is
+        // a separate adapter hint for how many items to fetch per TikHub API call.
+        if let Some(hint) = config.page_size_hint {
+            let clamped = hint.min(platform_page_cap("tiktok"));
+            options.extra.insert(extra_keys::PAGE_SIZE.into(), json!(clamped));
         }
 
         options
@@ -220,6 +231,127 @@ pub mod publish_time {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pagination::platform_page_cap;
+
+    // ── M3-T1 测试集 ──────────────────────────────────────────────────────────
+    //
+    // 现状核对结论(2026-06-12):
+    //   - tiktok.rs:98 已是 `v.max(0) as u32`(PR #5 删除 cap),count 为总量语义。
+    //   - strategies/mod.rs 无 `extra_keys::PAGE_SIZE`(M3 新增),extra 写入不存在。
+    //
+    // 红/绿预期:
+    //   测试 1/2 允许先绿(RED 前提被 PR #5 消解;AG-006 金丝雀:临时恢复 .min(20) 须红)。
+    //   测试 3 真红(extra 无 "page_size" 键,PAGE_SIZE 写入逻辑未实现)。
+    //   测试 4/5 允许先绿。
+
+    /// M3-T1 测试 1: max_videos=50 → options.count == 50
+    /// 允许先绿 + AG-006 金丝雀(临时恢复 .min(20) 须红);
+    /// RED 前提已被 PR #5 消解(cap 行在 main 删除)。
+    #[test]
+    fn count_carries_total_max_videos() {
+        let strategy = TikTokStrategy::new();
+        let config = TaskConfig::new(1, "tiktok").with_max_videos(50);
+        let keyword = KeywordType::Search("travel".to_string());
+
+        let options = strategy.build_search_options(&config, &keyword);
+
+        assert_eq!(
+            options.count, 50,
+            "count 应携带总量 50,不得被截断到 20(R-001/T-001 tiktok;PR #5 删 cap)"
+        );
+    }
+
+    /// M3-T1 测试 2: max_videos=137 → options.count == 137(防换任何其它硬上限)
+    /// 允许先绿 + AG-006 金丝雀;RED 前提同测试 1,已被 PR #5 消解。
+    #[test]
+    fn count_arbitrary_total_not_capped() {
+        let strategy = TikTokStrategy::new();
+        let config = TaskConfig::new(1, "tiktok").with_max_videos(137);
+        let keyword = KeywordType::Search("travel".to_string());
+
+        let options = strategy.build_search_options(&config, &keyword);
+
+        assert_eq!(
+            options.count, 137,
+            "count 应携带总量 137,禁止任何总量 cap(R-001/T-001 tiktok;PR #5 消解)"
+        );
+    }
+
+    /// M3-T1 测试 3: page_size_hint → extra["page_size"] 写入,clamp 到 platform_page_cap=20
+    ///
+    /// 真红:main 无 PAGE_SIZE extra 写入逻辑 → extra 无 "page_size" 键。
+    /// GREEN:实现者在 build_search_options 写入 extra["page_size"](clamp 到 20)。
+    #[test]
+    fn page_size_extra_from_hint_clamped() {
+        let strategy = TikTokStrategy::new();
+        let cap = platform_page_cap("tiktok"); // D4 冻结:20
+
+        // Case A: hint=7 → extra["page_size"] == 7(在 cap 之内)
+        let mut config_a = TaskConfig::new(1, "tiktok").with_max_videos(50);
+        config_a.page_size_hint = Some(7);
+        let keyword = KeywordType::Search("travel".to_string());
+        let options_a = strategy.build_search_options(&config_a, &keyword);
+
+        assert!(
+            options_a.extra.get("page_size").is_some(),
+            "page_size_hint=Some(7) 时 extra[\"page_size\"] 必须存在(M3 §2.1/D4)"
+        );
+        assert_eq!(
+            options_a.extra.get("page_size").and_then(|v| v.as_u64()),
+            Some(7u64),
+            "page_size_hint=Some(7) → extra[\"page_size\"]==7(未超 cap={cap})"
+        );
+
+        // Case B: hint=500 → extra["page_size"] == cap(20)
+        let mut config_b = TaskConfig::new(1, "tiktok").with_max_videos(100);
+        config_b.page_size_hint = Some(500);
+        let options_b = strategy.build_search_options(&config_b, &keyword);
+
+        assert!(
+            options_b.extra.get("page_size").is_some(),
+            "page_size_hint=Some(500) 时 extra[\"page_size\"] 必须存在"
+        );
+        assert_eq!(
+            options_b.extra.get("page_size").and_then(|v| v.as_u64()),
+            Some(cap as u64),
+            "page_size_hint=Some(500) → extra[\"page_size\"]==cap={cap}(clamp)"
+        );
+    }
+
+    /// M3-T1 测试 4: page_size_hint=None → extra 无 "page_size" 键
+    /// 允许先绿(None 情形下不写入 extra;适配器默认使用 cap=20)。
+    #[test]
+    fn no_hint_no_page_size_extra() {
+        let strategy = TikTokStrategy::new();
+        let config = TaskConfig::new(1, "tiktok").with_max_videos(50);
+        // page_size_hint 默认为 None
+        let keyword = KeywordType::Search("travel".to_string());
+
+        let options = strategy.build_search_options(&config, &keyword);
+
+        assert!(
+            options.extra.get("page_size").is_none(),
+            "page_size_hint=None 时 extra 不得含 \"page_size\" 键(适配器默认 cap=20)"
+        );
+    }
+
+    /// M3-T1 测试 5: max_videos=None → options.count == 10(现状缺省)
+    /// 允许先绿;AG-006 由 AG-012 覆盖。
+    #[test]
+    fn missing_max_videos_default_unchanged() {
+        let strategy = TikTokStrategy::new();
+        let config = TaskConfig::new(1, "tiktok"); // max_videos=None
+        let keyword = KeywordType::Search("travel".to_string());
+
+        let options = strategy.build_search_options(&config, &keyword);
+
+        assert_eq!(
+            options.count, 10,
+            "max_videos=None 时 count 应为现状缺省 10(不改变现有默认行为)"
+        );
+    }
+
+    // ── 原有测试 ─────────────────────────────────────────────────────────────
 
     #[test]
     fn test_parse_regular_search() {

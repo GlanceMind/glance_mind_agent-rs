@@ -20,6 +20,12 @@ pub mod twitter;
 
 use crate::domain::{Comment, Content, KeywordType, SearchOptions, TaskConfig};
 
+/// Cross-platform extra option keys shared across strategies
+pub mod extra_keys {
+    /// Per-page fetch size hint passed to adapter pagination loops
+    pub const PAGE_SIZE: &str = "page_size";
+}
+
 pub use facebook::FacebookStrategy;
 pub use instagram::InstagramStrategy;
 pub use reddit::RedditStrategy;
