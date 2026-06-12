@@ -263,6 +263,67 @@ mod tests {
         assert_eq!(options.count, 30);
     }
 
+    // ===== M5-T2 测试载荷(m5-instagram-p2.md §3 M5-T2;镜像 M4-T1/facebook 四条形状) =====
+    // 覆盖 ID:R-006(count 语义前提)、T-001(ig)、D-02 豁免注释。
+    // 断言 = 计划原文「count = 总量目标,不被任何单页上限截断」。
+
+    /// M5-T2 测试 1(R-006/T-001 主断言):max_videos=137 → options.count == 137。
+    /// 预期 RED(现状 instagram.rs:99 `v.min(50)`):assertion `left == right` failed,
+    /// left: 50, right: 137。
+    /// 反作弊:不得修改断言;不得引入新上限(把 50 换成 137 之外的任何硬 cap 仍须红)。
+    #[test]
+    fn search_count_equals_max_videos_137() {
+        let strategy = InstagramStrategy::new();
+        let config = TaskConfig::new(1, "instagram").with_max_videos(137);
+        let keyword = KeywordType::Hashtag("fitness".to_string());
+
+        let options = strategy.build_search_options(&config, &keyword);
+
+        assert_eq!(
+            options.count, 137,
+            "options.count must equal max_videos (137) without any single-page cap; \
+             got {}",
+            options.count
+        );
+    }
+
+    /// M5-T2 测试 2:max_videos=30 → options.count == 30。
+    /// 钉死「count = 总量」语义,防实现者把 50 换成另一个低硬上限(例如 20)。
+    #[test]
+    fn search_count_equals_max_videos_30() {
+        let strategy = InstagramStrategy::new();
+        let config = TaskConfig::new(1, "instagram").with_max_videos(30);
+        let keyword = KeywordType::Hashtag("fitness".to_string());
+
+        let options = strategy.build_search_options(&config, &keyword);
+
+        assert_eq!(
+            options.count, 30,
+            "options.count must equal max_videos (30) without any cap; got {}",
+            options.count
+        );
+    }
+
+    /// M5-T2 测试 3(现状默认值回归保护;允许先绿 AG-006:cap 行在 diff 内、
+    /// AG-012 变异覆盖兜底):max_videos=None → options.count == 20。
+    #[test]
+    fn missing_max_videos_defaults_unchanged() {
+        let strategy = InstagramStrategy::new();
+        // max_videos 不设,使用 None
+        let config = TaskConfig::new(1, "instagram");
+        let keyword = KeywordType::Hashtag("fitness".to_string());
+
+        let options = strategy.build_search_options(&config, &keyword);
+
+        // ASSERTION-CHANGE-JUSTIFIED: N/A — this is the original default (unwrap_or(20)),
+        // remains unchanged; test verifies regression protection only.
+        assert_eq!(
+            options.count, 20,
+            "missing max_videos should default to count=20 (unwrap_or(20) preserved); got {}",
+            options.count
+        );
+    }
+
     #[test]
     fn test_format_analysis_prompt() {
         let strategy = InstagramStrategy::new();
