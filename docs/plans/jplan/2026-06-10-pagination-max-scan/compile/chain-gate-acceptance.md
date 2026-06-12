@@ -12,7 +12,7 @@
 | M3 tiktok (PR #10) | PR green, **pending merge** | CI: Rust Test Gates / Harness / E2E all SUCCESS; R-012 clean |
 | M4 reddit/twitter (PR #11) | PR green, **pending merge** | CI all SUCCESS; R-012 clean |
 | M5 instagram (PR #12) | PR green, **pending merge** | CI all SUCCESS; R-012 clean; V1=branch-B |
-| M6 scheduler once-guard (worker PR #70) | mutation gate **fixed**, re-running | see §3 |
+| M6 scheduler once-guard (worker PR #70) | **ACCEPTED** — mutation gate fixed, CI green | see §3 |
 | Docs (PR #6) | open | plan family |
 
 **Merge is the user's decision** (no autonomous merge — orphan-merge red line). The gate
@@ -66,8 +66,11 @@ pushed to `feat/jplan-m6-once-guard`):
    mutation baseline. The once-guard unit tests live in `src/test_*.rs` (lib scope).
 3. `--exclude-re 'Scheduler::run_once'` + `'Scheduler::dispatch_task'` — db-glue exemption.
 
-**Mutation result after fix (local, baseline + diff):** `Found 9 mutants → 8 caught,
-1 unviable, 0 missed` (sentinel N=9 ≥ 1). CI re-run on PR #70 in progress (was FAILURE → pending).
+**Mutation result after fix:** local (cargo-mutants 27.1.0) `Found 9 → 8 caught, 1 unviable,
+0 missed`; **CI green** (run 27393649063, head `dafd612`, cargo-mutants 24.11.0): `Found 8 →
+7 caught, 1 unviable, 0 missed` in 5m9s, sentinel N=7 ≥ 1. (Count differs 9 vs 8 only by
+cargo-mutants version's mutation generation; both 0 missed, all once-guard predicates caught.)
+PR #70 now CLEAN — both checks SUCCESS. Criterion ③ (CI 实跑可见) satisfied.
 
 **Caught (8) — the entire once-guard decision surface:**
 `apply_once_completion -> ""/"xyzzy"`; `OnceCompletionReason::as_str -> ""/"xyzzy"`;
