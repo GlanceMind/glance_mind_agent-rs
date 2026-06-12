@@ -587,6 +587,63 @@ mod tests {
         (format!("http://{}", addr), requests)
     }
 
+    use crate::ports::content_gateway::FetchShortfall;
+
+    /// Build one V3 `general_search` media item (`media_grid.sections[].layout_content.medias[].media`).
+    /// Shape sourced from `instagram_types.rs` serde defs (DR-20):
+    /// InstagramGeneralSearchData → InstagramMediaGrid → InstagramMediaGridSection
+    /// → InstagramLayoutContent → InstagramMediaWrapper → InstagramPost.
+    fn instagram_v3_media_item(code: &str, username: &str) -> serde_json::Value {
+        json!({
+            "media": {
+                "code": code,
+                "pk": format!("pk-{code}"),
+                "product_type": "clips",
+                "media_type": 2,
+                "caption": {"text": format!("v3 post {code}")},
+                "user": {
+                    "id": format!("user-{username}"),
+                    "pk": format!("user-{username}"),
+                    "username": username,
+                    "full_name": username,
+                    "profile_pic_url": "https://example.test/avatar.jpg",
+                    "is_verified": false
+                },
+                "like_count": 5,
+                "comment_count": 1,
+                "play_count": 42,
+                "taken_at": 1778338738
+            }
+        })
+    }
+
+    /// Build a V3 `general_search` 200 response carrying `count` posts in a single page.
+    /// (Branch B context: upstream returns a single page — `has_more=false`, no next token.)
+    fn instagram_v3_single_page(count: usize) -> serde_json::Value {
+        let medias: Vec<serde_json::Value> = (0..count)
+            .map(|i| instagram_v3_media_item(&format!("V3CODE{i:03}"), &format!("creator{i}")))
+            .collect();
+        json!({
+            "code": 200,
+            "message": "ok",
+            "data": {
+                "rank_token": "rank-abc",
+                "media_grid": {
+                    "sections": [
+                        {
+                            "layout_type": "media_grid",
+                            "feed_type": "media",
+                            "layout_content": { "medias": medias }
+                        }
+                    ],
+                    "rank_token": "rank-abc",
+                    "next_max_id": null,
+                    "has_more": false
+                }
+            }
+        })
+    }
+
     fn instagram_v2_response(code: &str, username: &str, url: &str) -> serde_json::Value {
         json!({
             "code": 200,
@@ -846,5 +903,132 @@ mod tests {
 
         let requests = requests.lock().unwrap();
         assert_eq!(requests.len(), 2);
+    }
+
+    // ===== M5-T3-B 分支 B:单页 + 如实上报 override(m5-instagram-p2.md §3 M5-T3-B) =====
+    // 裁决:V1=分支 B(用户裁决 2026-06-11,保守解读)。T3-A 标 NOT-TAKEN。
+    // 全部经可观测 `fetch_by_keyword_with_outcome`(contents / shortfall / 捕获请求数)断言。
+    // mock 形状取自 instagram_types.rs serde 定义(DR-20:instagram_v3_single_page helper)。
+    // 反作弊声明:不得修改断言;欠量上报 Exhausted 是 R-006 的规格本体,
+    // 不得改为 None/COMPLETED 语义。
+
+    fn keyword_search_options(count: u32) -> SearchOptions {
+        SearchOptions::new("fitness")
+            .with_platform("instagram")
+            .with_count(count)
+    }
+
+    fn search_keyword() -> KeywordType {
+        KeywordType::Hashtag("fitness".to_string())
+    }
+
+    /// M5-T3-B 测试 1(T-014-B 主断言 / R-006 红线):
+    /// 单页 20 条、count=50 → contents.len()==20、shortfall == Some(Exhausted)。
+    /// 「上游单页即枯竭,欠量绝不静默 COMPLETED」(事故反模式的 instagram 钉子)。
+    /// 预期 RED(默认方法无 override,shortfall 默认 None):
+    ///   left: None, right: Some(Exhausted)。
+    #[tokio::test]
+    async fn single_page_underdelivery_reports_exhausted() {
+        let (base_url, _requests) = spawn_mock_http_server_with_capture(vec![
+            MockHttpResponse::json(200, instagram_v3_single_page(20)),
+        ])
+        .await;
+        let client = TikHubClient::new("test-key", base_url).unwrap();
+        let adapter = InstagramAdapter::new(client);
+
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&search_keyword(), &keyword_search_options(50))
+            .await
+            .expect("single-page underdelivery should be Ok with Exhausted shortfall, not Err");
+
+        assert_eq!(
+            outcome.contents.len(),
+            20,
+            "single page delivers exactly its 20 items; got {}",
+            outcome.contents.len()
+        );
+        assert_eq!(
+            outcome.shortfall,
+            Some(FetchShortfall::Exhausted),
+            "underdelivery (delivered 20 < count 50) MUST report Some(Exhausted), \
+             never silent None/COMPLETED (R-006 red line); got {:?}",
+            outcome.shortfall
+        );
+    }
+
+    /// M5-T3-B 测试 2:单页 ≥ count → 截取 count 条、shortfall == None。
+    /// 预期 RED(默认方法不截取/可能交付全部 + 无 None 语义保证;实现者 override 后达量 None)。
+    #[tokio::test]
+    async fn single_page_reaching_count_no_shortfall() {
+        let (base_url, _requests) = spawn_mock_http_server_with_capture(vec![
+            MockHttpResponse::json(200, instagram_v3_single_page(60)),
+        ])
+        .await;
+        let client = TikHubClient::new("test-key", base_url).unwrap();
+        let adapter = InstagramAdapter::new(client);
+
+        let outcome = adapter
+            .fetch_by_keyword_with_outcome(&search_keyword(), &keyword_search_options(50))
+            .await
+            .expect("reaching count should be Ok");
+
+        assert_eq!(
+            outcome.contents.len(),
+            50,
+            "single page with >=count items must be truncated to count (50); got {}",
+            outcome.contents.len()
+        );
+        assert!(
+            outcome.shortfall.is_none(),
+            "reaching count (delivered 50 == count 50) must report None; got {:?}",
+            outcome.shortfall
+        );
+    }
+
+    /// M5-T3-B 测试 3(F-001;允许先绿 AG-006):首调即错 → Err。
+    /// 分支 B 的 V3 路径为单次调用(非翻页),429 即 RateLimited Err,零进展。
+    /// (DR-19 的「429 = 4 次 HTTP 请求」属翻页重试语境;branch-B V3 单次调用不重试,
+    /// 故请求数 = 1;核心契约 = 零进展 → Err。)
+    #[tokio::test]
+    async fn zero_progress_error_is_err() {
+        let (base_url, _requests) = spawn_mock_http_server_with_capture(vec![
+            MockHttpResponse::json(429, json!({"message": "rate limited"})),
+        ])
+        .await;
+        let client = TikHubClient::new("test-key", base_url).unwrap();
+        let adapter = InstagramAdapter::new(client);
+
+        let result = adapter
+            .fetch_by_keyword_with_outcome(&search_keyword(), &keyword_search_options(50))
+            .await;
+
+        assert!(
+            result.is_err(),
+            "zero-progress first-call error must be Err (F-001); got {:?}",
+            result.map(|o| (o.contents.len(), o.shortfall))
+        );
+    }
+
+    /// M5-T3-B 测试 4(回归;允许先绿 AG-006):既有 `search()` 路径不受 override 影响。
+    /// (legacy `search()` 仍走 V3→V2 fallback,行为不变。)
+    #[tokio::test]
+    async fn legacy_search_unchanged() {
+        let (base_url, requests) = spawn_mock_http_server_with_capture(vec![
+            MockHttpResponse::json(200, instagram_v3_single_page(3)),
+        ])
+        .await;
+        let client = TikHubClient::new("test-key", base_url).unwrap();
+        let adapter = InstagramAdapter::new(client);
+
+        let content = adapter
+            .search(&keyword_search_options(5))
+            .await
+            .expect("legacy search should remain functional");
+
+        // single V3 page of 3, count=5 → take(5) yields all 3; search() returns Vec<Content>
+        // (no shortfall surface on legacy path).
+        assert_eq!(content.len(), 3, "legacy search returns the 3 available posts");
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 1, "legacy search makes a single V3 request");
     }
 }
